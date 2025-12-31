@@ -35,7 +35,7 @@ export const initDB = async (): Promise<IDBPDatabase<PhotoStorageDB>> => {
   if (db) return db;
 
   db = await openDB<PhotoStorageDB>(DB_NAME, DB_VERSION, {
-    upgrade(database) {
+    upgrade(database: IDBPDatabase<PhotoStorageDB>) {
       const store = database.createObjectStore(STORE_NAME, {
         keyPath: 'id',
       });
@@ -70,7 +70,7 @@ export const getStorageStatus = async (): Promise<{
   shouldWarn: boolean;
   message?: string;
 }> => {
-  const { usage, quota, percentage } = await checkStorageQuota();
+  const { quota, percentage } = await checkStorageQuota();
   const softLimitPercentage = (STORAGE_LIMIT_SOFT / quota) * 100;
   const hardLimitPercentage = (STORAGE_LIMIT_HARD / quota) * 100;
 
@@ -217,11 +217,12 @@ export const deleteExpiredPhotos = async (): Promise<number> => {
   return deletedCount;
 };
 
-export const cleanupExpiredPhotos = async (): Promise<void> => {
+export const cleanupExpiredPhotos = async (): Promise<number> => {
   const deleted = await deleteExpiredPhotos();
   if (deleted > 0) {
     console.log(`Cleaned up ${deleted} expired photos`);
   }
+  return deleted;
 };
 
 export const getExpirationInfo = (): { hours: number; message: string } => {

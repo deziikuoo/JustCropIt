@@ -46,7 +46,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, computed, onMounted, onUnmounted } from "vue";
+import { ref, computed, onMounted, onUnmounted } from "vue";
 import PhotoGrid from "./components/PhotoGrid.vue";
 import CropModal from "./components/CropModal.vue";
 import StorageAlert from "./components/StorageAlert.vue";
