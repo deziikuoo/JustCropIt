@@ -1,5 +1,5 @@
 import { ref, type Ref } from "vue";
-import { useIntersectionObserver, type MaybeElement } from "@vueuse/core";
+import { useIntersectionObserver } from "@vueuse/core";
 
 /**
  * Composable for lazy loading images using Intersection Observer
