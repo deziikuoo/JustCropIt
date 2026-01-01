@@ -1,5 +1,5 @@
 import { ref, type Ref } from "vue";
-import { useIntersectionObserver } from "@vueuse/core";
+import { useIntersectionObserver, type MaybeElement } from "@vueuse/core";
 
 /**
  * Composable for lazy loading images using Intersection Observer
@@ -8,7 +8,7 @@ import { useIntersectionObserver } from "@vueuse/core";
  * @returns Object with isVisible ref and stop function
  */
 export function useLazyImage(
-  target: Ref<Element | undefined>,
+  target: Ref<HTMLElement | null | undefined>,
   rootMargin: string = "300px"
 ): { isVisible: Ref<boolean>; stop: () => void } {
   const isVisible = ref(false);

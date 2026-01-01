@@ -341,7 +341,7 @@ const handleImageError = (index: number) => {
 
 // Track observers to clean them up
 const observerStops = ref<Map<number, () => void>>(new Map());
-const elementRefs = ref<Map<number, Ref<Element | undefined>>>(new Map());
+const elementRefs = ref<Map<number, Ref<HTMLElement | null | undefined>>>(new Map());
 
 // Setup intersection observers when photo cards are added
 watch(
@@ -351,7 +351,7 @@ watch(
       for (const [index, element] of photoCardRefs.value) {
         // Only setup observer if not already visible and no observer exists
         if (!visibleIndices.value.has(index) && !elementRefs.value.has(index)) {
-          const elementRef = ref<Element | undefined>(element);
+          const elementRef = ref<HTMLElement | null | undefined>(element);
           elementRefs.value.set(index, elementRef);
 
           const { isVisible, stop } = useLazyImage(elementRef);
