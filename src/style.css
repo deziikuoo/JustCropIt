@@ -48,6 +48,12 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 
+@media (max-width: 768px) {
+  body {
+    align-items: flex-start;
+  }
+}
+
 /* Prevent text selection during drag-to-select */
 body.drag-selecting {
   user-select: none;
@@ -132,7 +138,7 @@ input[type="file"] {
   font-size: 0.875rem;
   padding: 10px 16px;
   border-radius: var(--border-radius);
-  border: 2px dashed var(--surface-border);
+  border: 2px solid var(--surface-border);
   background: var(--surface-color);
   color: var(--text-primary);
   cursor: pointer;
@@ -152,6 +158,7 @@ input[type="file"] {
 input[type="file"]:hover {
   border-color: var(--primary-hover);
   background: rgba(255, 255, 255, 0.1);
+  color: black;
 }
 
 input[type="file"]::file-selector-button {
@@ -168,8 +175,8 @@ input[type="file"]::file-selector-button {
   transition: all var(--transition-fast);
 }
 
-input[type="file"]::file-selector-button:hover {
-  background: rgba(255, 255, 255, 0.2);
+input[type="file"]:hover::file-selector-button {
+  background: rgba(0, 0, 0, 0.2) !important;
 }
 
 /* Checkbox styles */

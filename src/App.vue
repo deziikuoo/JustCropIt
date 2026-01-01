@@ -1,5 +1,6 @@
 <template>
-  <div class="container">
+  <ShimmerBackground />
+  <div class="app-container">
     <StorageAlert
       :show="alert.show"
       :type="alert.type"
@@ -8,6 +9,16 @@
       :auto-dismiss="alert.autoDismiss"
       @dismiss="alert.show = false"
     />
+    <PhotoCounter
+      :photo-count="photos.length"
+      :new-photos-count="newPhotosCount"
+    />
+    <DeletedCounter :deleted-photos-count="deletedPhotosCount" />
+    <SelectCounter
+      :selected-count="dragSelectionCount !== null ? dragSelectionCount : selectedIndices.length"
+      :total-photos="photos.length"
+    />
+    <DeletionNotification />
     <PhotoGrid
       :photos="photos"
       :selectedIndices="selectedIndices"
@@ -33,6 +44,8 @@
       @batch-delete="handleBatchDelete"
       @clear-clipboard="handleClearClipboard"
       @select-multiple="handleSelectMultiple"
+      @deselect-multiple="handleDeselectMultiple"
+      @drag-selection-progress="handleDragSelectionProgress"
     />
     <CropModal
       v-if="showCropModal"
@@ -50,6 +63,11 @@ import { ref, computed, onMounted, onUnmounted } from "vue";
 import PhotoGrid from "./components/PhotoGrid.vue";
 import CropModal from "./components/CropModal.vue";
 import StorageAlert from "./components/StorageAlert.vue";
+import ShimmerBackground from "./components/ShimmerBackground.vue";
+import DeletionNotification from "./components/DeletionNotification.vue";
+import PhotoCounter from "./components/PhotoCounter.vue";
+import DeletedCounter from "./components/DeletedCounter.vue";
+import SelectCounter from "./components/SelectCounter.vue";
 import JSZip from "jszip";
 import {
   initDB,
@@ -60,7 +78,6 @@ import {
   cleanupExpiredPhotos,
   canStorePhoto,
   getStorageStatus,
-  getExpirationInfo,
 } from "./utils/photoStorage";
 
 interface Photo {
@@ -79,10 +96,14 @@ interface CopiedSettings {
 }
 
 const photos = ref<Photo[]>([]);
+const newPhotosCount = ref(0);
+const deletedPhotosCount = ref(0);
+const isBatchDeleting = ref(false);
 const showCropModal = ref(false);
 const cropImageSrc = ref("");
 let cropIndex = 0;
 const selectedIndices = ref<number[]>([]);
+const dragSelectionCount = ref<number | null>(null);
 const batchCropIndices = ref<number[]>([]);
 const copiedSettings = ref<CopiedSettings | null>(null);
 
@@ -133,7 +154,7 @@ const loadPhotosFromStorage = async () => {
   try {
     await initDB();
     await cleanupExpiredPhotos();
-    
+
     const storedPhotos = await loadAllPhotos();
     const loadedPhotos: Photo[] = [];
 
@@ -162,16 +183,13 @@ const loadPhotosFromStorage = async () => {
     }
 
     photos.value = loadedPhotos;
-    
-    // Show info alert on first load if photos exist
+    // Show notification if photos were loaded (triggers PhotoCounter animation)
     if (loadedPhotos.length > 0) {
-      const expirationInfo = getExpirationInfo();
-      showAlert(
-        "info",
-        "Photos Loaded",
-        `${loadedPhotos.length} photo(s) loaded. ${expirationInfo.message}`,
-        8000
-      );
+      newPhotosCount.value = loadedPhotos.length;
+      // Reset after animation completes (2 seconds) plus small buffer
+      setTimeout(() => {
+        newPhotosCount.value = 0;
+      }, 2100);
     }
   } catch (error) {
     console.error("Failed to load photos from storage:", error);
@@ -197,7 +215,12 @@ const handleUpload = async (event: Event) => {
     const uploadPromises = validFiles.map(async (file) => {
       const check = await canStorePhoto(file);
       if (!check.canStore) {
-        showAlert("error", "Storage Limit", check.reason || "Cannot store photo", 5000);
+        showAlert(
+          "error",
+          "Storage Limit",
+          check.reason || "Cannot store photo",
+          5000
+        );
         return null;
       }
       return file;
@@ -244,7 +267,15 @@ const handleUpload = async (event: Event) => {
     }
 
     photos.value.push(...newPhotos);
-    
+    // Show notification for new photos
+    if (newPhotos.length > 0) {
+      newPhotosCount.value = newPhotos.length;
+      // Reset after animation completes (2 seconds) plus small buffer
+      setTimeout(() => {
+        newPhotosCount.value = 0;
+      }, 2100);
+    }
+
     // Clear input
     input.value = "";
   }
@@ -286,7 +317,7 @@ const handleFlip = async (
       ...photo.flips,
       [direction]: !photo.flips[direction],
     };
-    
+
     photos.value[index] = {
       ...photo,
       current: newFile,
@@ -336,7 +367,7 @@ const handleCrop = async (
     cropFuture: [],
     crop,
   };
-  
+
   // Save to IndexedDB if photo has an ID
   if (photo.id) {
     try {
@@ -348,7 +379,7 @@ const handleCrop = async (
       console.error("Failed to update photo in storage:", error);
     }
   }
-  
+
   console.log("Stored crop in photo:", photos.value[cropIndex].crop);
   console.log("=== END HANDLE CROP ===");
 };
@@ -378,6 +409,26 @@ const handleSelectMultiple = (indices: number[]) => {
   const merged = new Set(selectedIndices.value);
   indices.forEach((index) => merged.add(index));
   selectedIndices.value = Array.from(merged).sort((a, b) => a - b);
+  dragSelectionCount.value = null;
+};
+
+const handleDeselectMultiple = (indices: number[]) => {
+  if (!indices.length) {
+    return;
+  }
+  const indicesSet = new Set(indices);
+  selectedIndices.value = selectedIndices.value
+    .filter((index) => !indicesSet.has(index))
+    .sort((a, b) => a - b);
+  dragSelectionCount.value = null;
+};
+
+const handleDragSelectionProgress = (count: number) => {
+  if (count === -1) {
+    dragSelectionCount.value = null;
+  } else {
+    dragSelectionCount.value = count;
+  }
 };
 
 const handleBatchFlip = async (direction: "horizontal" | "vertical") => {
@@ -403,21 +454,21 @@ const handleBatchCropNext = async (
   console.log("=== BATCH CROP NEXT ===");
   console.log("Batch crop indices:", batchCropIndices.value);
   console.log("Crop coordinates:", crop);
-  
+
   // Save the batch crop indices BEFORE any operations that might clear them
   const savedBatchCropIndices = [...batchCropIndices.value];
   console.log("Saved batch crop indices:", savedBatchCropIndices);
-  
+
   // Crop the first image (the one shown in the modal)
   await handleCrop(blob, crop);
-  
+
   // Close the modal
   showCropModal.value = false;
-  
+
   // Get the remaining indices to crop (all except the first one we just cropped)
   const remainingIndices = savedBatchCropIndices.slice(1);
   console.log("Remaining indices to crop:", remainingIndices);
-  
+
   if (remainingIndices.length > 0) {
     console.log(`Applying crop to ${remainingIndices.length} remaining images`);
     // Apply the same crop coordinates to all remaining selected images
@@ -426,7 +477,7 @@ const handleBatchCropNext = async (
       remainingIndices.map(async (index) => {
         console.log(`Batch cropping photo index ${index}`);
         const photo = photos.value[index];
-        
+
         // Use current state to preserve existing edits (flips, rotations, etc.)
         let workingPhoto = photo;
 
@@ -462,7 +513,7 @@ const handleBatchCropNext = async (
             cropFuture: [],
           };
           photos.value[index] = updatedPhoto;
-          
+
           // Save to IndexedDB if photo has an ID
           if (workingPhoto.id) {
             try {
@@ -471,13 +522,18 @@ const handleBatchCropNext = async (
                 crop: { x, y, width, height },
               });
             } catch (error) {
-              console.error(`Failed to update photo ${index} in storage:`, error);
+              console.error(
+                `Failed to update photo ${index} in storage:`,
+                error
+              );
             }
           }
-          
+
           console.log(`Successfully batch cropped photo ${index}`);
         } else {
-          console.warn(`Failed to create blob for batch crop on photo ${index}`);
+          console.warn(
+            `Failed to create blob for batch crop on photo ${index}`
+          );
         }
       })
     );
@@ -485,7 +541,7 @@ const handleBatchCropNext = async (
   } else {
     console.log("No remaining indices to crop");
   }
-  
+
   // Clear the batch crop indices
   batchCropIndices.value = [];
   console.log("=== END BATCH CROP NEXT ===");
@@ -538,7 +594,17 @@ const handleBatchRevert = async () => {
 
 const handleBatchDelete = async () => {
   const indices = [...selectedIndices.value].sort((a, b) => b - a);
+  const deleteCount = indices.length;
+  isBatchDeleting.value = true;
   await Promise.all(indices.map((index) => handleDelete(index)));
+  isBatchDeleting.value = false;
+  
+  // Track batch deletion for counter animation (set total count)
+  deletedPhotosCount.value = deleteCount;
+  setTimeout(() => {
+    deletedPhotosCount.value = 0;
+  }, 2100);
+  
   selectedIndices.value = [];
 };
 
@@ -563,7 +629,7 @@ const handleRevert = async (index: number) => {
     crop: undefined,
   };
   photos.value[index] = revertedPhoto;
-  
+
   // Save to IndexedDB if photo has an ID
   if (photo.id) {
     try {
@@ -580,7 +646,7 @@ const handleRevert = async (index: number) => {
 const handleDelete = async (index: number) => {
   if (index >= 0 && index < photos.value.length) {
     const photo = photos.value[index];
-    
+
     // Delete from IndexedDB if photo has an ID
     if (photo.id) {
       try {
@@ -589,8 +655,18 @@ const handleDelete = async (index: number) => {
         console.error("Failed to delete photo from storage:", error);
       }
     }
-    
+
     photos.value.splice(index, 1);
+    
+    // Track user deletion for counter animation (only if not part of batch delete)
+    // Batch delete will set the count after all deletions complete
+    if (!isBatchDeleting.value) {
+      deletedPhotosCount.value = 1;
+      setTimeout(() => {
+        deletedPhotosCount.value = 0;
+      }, 2100);
+    }
+    
     if (cropIndex === index && showCropModal.value) {
       showCropModal.value = false;
       cropImageSrc.value = "";
@@ -634,17 +710,23 @@ const handlePasteSettings = async (singleIndex?: number) => {
   }
   const settings = copiedSettings.value;
   console.log("Pasting settings:", settings);
-  
+
   // If singleIndex is provided, paste to just that photo; otherwise paste to all selected
-  const indicesToPaste = singleIndex !== undefined ? [singleIndex] : selectedIndices.value;
+  const indicesToPaste =
+    singleIndex !== undefined ? [singleIndex] : selectedIndices.value;
   console.log("Target indices:", indicesToPaste);
-  
+
   await Promise.all(
     indicesToPaste.map(async (index) => {
       console.log(`--- Processing photo index ${index} ---`);
       const photo = photos.value[index];
-      console.log("Current photo state - flips:", photo.flips, "crop:", photo.crop);
-      
+      console.log(
+        "Current photo state - flips:",
+        photo.flips,
+        "crop:",
+        photo.crop
+      );
+
       // Preserve existing edits - use current state
       let workingPhoto = photo;
 
@@ -671,34 +753,49 @@ const handlePasteSettings = async (singleIndex?: number) => {
 
         console.log("Target image natural dimensions:", {
           naturalWidth: img.naturalWidth,
-          naturalHeight: img.naturalHeight
+          naturalHeight: img.naturalHeight,
         });
         console.log("Target image displayed dimensions:", {
           width: img.width,
-          height: img.height
+          height: img.height,
         });
 
         const canvas = document.createElement("canvas");
         const { x, y, width, height } = settings.crop;
-        
+
         // Use natural coordinates directly (they were saved in natural px)
         const cropX = x;
         const cropY = y;
         const cropWidth = width;
         const cropHeight = height;
-        
-        console.log("Crop coordinates to apply:", { cropX, cropY, cropWidth, cropHeight });
+
+        console.log("Crop coordinates to apply:", {
+          cropX,
+          cropY,
+          cropWidth,
+          cropHeight,
+        });
         console.log("Crop bounds check:", {
           xInBounds: cropX >= 0 && cropX <= img.naturalWidth,
           yInBounds: cropY >= 0 && cropY <= img.naturalHeight,
           widthInBounds: cropX + cropWidth <= img.naturalWidth,
-          heightInBounds: cropY + cropHeight <= img.naturalHeight
+          heightInBounds: cropY + cropHeight <= img.naturalHeight,
         });
-        
+
         canvas.width = cropWidth;
         canvas.height = cropHeight;
         const ctx = canvas.getContext("2d")!;
-        ctx.drawImage(img, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+        ctx.drawImage(
+          img,
+          cropX,
+          cropY,
+          cropWidth,
+          cropHeight,
+          0,
+          0,
+          cropWidth,
+          cropHeight
+        );
 
         const blob = await new Promise<Blob | null>((resolve) =>
           canvas.toBlob(resolve, workingPhoto.current.type)
@@ -707,7 +804,12 @@ const handlePasteSettings = async (singleIndex?: number) => {
           const newFile = new File([blob], workingPhoto.current.name, {
             type: workingPhoto.current.type,
           });
-          const updatedCrop = { x: cropX, y: cropY, width: cropWidth, height: cropHeight };
+          const updatedCrop = {
+            x: cropX,
+            y: cropY,
+            width: cropWidth,
+            height: cropHeight,
+          };
           const updatedPhoto = {
             ...workingPhoto,
             current: newFile,
@@ -719,7 +821,7 @@ const handlePasteSettings = async (singleIndex?: number) => {
             cropFuture: [],
           };
           photos.value[index] = updatedPhoto;
-          
+
           // Save to IndexedDB if photo has an ID
           if (workingPhoto.id) {
             try {
@@ -728,11 +830,17 @@ const handlePasteSettings = async (singleIndex?: number) => {
                 crop: updatedCrop,
               });
             } catch (error) {
-              console.error(`Failed to update photo ${index} in storage:`, error);
+              console.error(
+                `Failed to update photo ${index} in storage:`,
+                error
+              );
             }
           }
-          
-          console.log(`Photo ${index} crop applied successfully. Final crop:`, photos.value[index].crop);
+
+          console.log(
+            `Photo ${index} crop applied successfully. Final crop:`,
+            photos.value[index].crop
+          );
         } else {
           console.warn("Failed to create blob in handlePasteSettings");
         }
@@ -753,23 +861,10 @@ const blobFromFile = async (file: File): Promise<Blob> => {
 onMounted(async () => {
   try {
     await initDB();
-    
-    // Show expiration info alert on first visit
-    const hasSeenAlert = localStorage.getItem("photo-editor-seen-expiration-alert");
-    if (!hasSeenAlert) {
-      const expirationInfo = getExpirationInfo();
-      showAlert(
-        "info",
-        "Important: Photo Storage",
-        expirationInfo.message,
-        10000
-      );
-      localStorage.setItem("photo-editor-seen-expiration-alert", "true");
-    }
-    
+
     // Load photos from storage
     await loadPhotosFromStorage();
-    
+
     // Set up cleanup interval (run every hour)
     cleanupInterval = setInterval(async () => {
       try {
@@ -788,7 +883,7 @@ onMounted(async () => {
         console.error("Cleanup error:", error);
       }
     }, 60 * 60 * 1000); // 1 hour
-    
+
     // Check storage status periodically
     setInterval(async () => {
       const status = await getStorageStatus();
@@ -816,14 +911,13 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.container {
+.app-container {
   box-sizing: border-box;
   position: relative;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   width: 100%;
   height: 100%;
   text-align: center;
-  align-items: center;
 }
 </style>
