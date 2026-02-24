@@ -68,7 +68,7 @@ const dismiss = () => {
 <style scoped>
 .storage-alert {
   position: fixed;
-  top: 80px;
+  top: calc(80px + env(safe-area-inset-top, 0px));
   left: 50%;
   transform: translateX(-50%);
   z-index: 1000;
@@ -157,7 +157,7 @@ const dismiss = () => {
   .storage-alert {
     min-width: 90vw;
     max-width: 95vw;
-    top: 70px;
+    top: calc(70px + env(safe-area-inset-top, 0px));
   }
 }
 
@@ -165,7 +165,7 @@ const dismiss = () => {
   .storage-alert {
     min-width: 95vw;
     max-width: 98vw;
-    top: 60px;
+    top: calc(60px + env(safe-area-inset-top, 0px));
   }
 
   .alert-content {

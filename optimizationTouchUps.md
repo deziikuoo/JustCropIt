@@ -1,0 +1,3 @@
+- Task parallelism: Achievable with a worker pool > you mentioned this would only work with worker pool. Have we implemeted this a worker pool? Would integrating task paralleism still benefit the project?
+- Create 4-8 workers (based on navigator.hardwareConcurrency) > what is navigator.hardwareeConcurrency? Why is the number of workers based on this? Would more workers allow for better Performance?
+- 2. Priority targets: ... 'Individual operations can be optimized later' >I want to target these indiviual operations. What operations were you referring to? How can we optimize them based on the recent updates we've implemented for performance optimization?

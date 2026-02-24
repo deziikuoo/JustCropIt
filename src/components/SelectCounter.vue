@@ -221,8 +221,8 @@ const animateShimmer = (currentTime?: number) => {
 const triggerShimmer = () => {
   if (props.selectedCount <= 0) return;
   
-  // Only show shimmer for select all mode
-  if (!isSelectAll.value) return;
+  // Don't show shimmer for select all mode (animations removed)
+  if (isSelectAll.value) return;
 
   // Stop existing shimmer animation
   if (shimmerAnimationId) {
@@ -248,30 +248,7 @@ const showSelectNotification = (count: number) => {
   showNotification.value = true;
   isAnimating.value = false;
 
-  // Immediately trigger shimmer particles
-  triggerShimmer();
-
-  // Clear existing delay timer
-  if (delayTimer) {
-    clearTimeout(delayTimer);
-  }
-
-  // Start 3-second delay timer before rise/fade animation
-  delayTimer = setTimeout(() => {
-    // Trigger animation on next tick
-    setTimeout(() => {
-      isAnimating.value = true;
-    }, 10);
-
-    // Hide after animation completes (2 seconds)
-    notificationTimer = setTimeout(() => {
-      showNotification.value = false;
-      isAnimating.value = false;
-      displayedCount.value = 0;
-      displayedIsSelectAll.value = false;
-      showShimmer.value = false;
-    }, 2000);
-  }, 3000);
+  // No animations for individual or select-all modes - notification stays visible
 };
 
 watch(
@@ -280,26 +257,13 @@ watch(
     if (newCount > 0) {
       showSelectNotification(newCount);
     } else if (oldCount > 0 && newCount === 0) {
-      // If count goes to 0, don't hide immediately - let animations finish
-      // Only clear the delay timer if it hasn't started the animation yet
-      // If animation is already in progress, let it complete
-      if (delayTimer && !isAnimating.value) {
-        clearTimeout(delayTimer);
-        delayTimer = null;
-        // If delay timer was cleared and animation hasn't started, we should still let it fade out
-        // Start the fade animation immediately
-        setTimeout(() => {
-          isAnimating.value = true;
-        }, 10);
-        notificationTimer = setTimeout(() => {
-          showNotification.value = false;
-          isAnimating.value = false;
-          displayedCount.value = 0;
-          displayedIsSelectAll.value = false;
-          showShimmer.value = false;
-        }, 2000);
-      }
-      // If animation is already in progress, let it complete naturally
+      // Hide immediately when count goes to 0
+      showNotification.value = false;
+      isAnimating.value = false;
+      displayedCount.value = 0;
+      displayedIsSelectAll.value = false;
+      showShimmer.value = false;
+      clearTimers();
     }
   }
 );
@@ -314,9 +278,7 @@ onUnmounted(() => {
 
 <style scoped>
 .select-counter {
-  position: fixed;
-  right: 9%;
-  top: 80%;
+  position: relative;
   background: transparent;
   padding: 0;
   z-index: 1001;
@@ -365,7 +327,7 @@ onUnmounted(() => {
 }
 
 .counter-value-wrapper:not(.select-all) {
-  transform: rotate(20deg);
+  transform: none;
   transform-origin: center;
 }
 
@@ -432,7 +394,7 @@ onUnmounted(() => {
 }
 
 .counter-value-wrapper.select-all {
-  transform: rotate(20deg);
+  transform: none;
   transform-origin: center;
 }
 

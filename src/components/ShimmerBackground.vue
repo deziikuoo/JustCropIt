@@ -26,7 +26,7 @@ let globalOpacity = ref(0); // Controls overall visibility of the effect
 const IDLE_THRESHOLD = 10000; // 10 seconds of inactivity
 
 const PARTICLE_COUNT = 15; // Very sparse, premium feel
-const COLORS = ["#8892a0", "#6b7480", "#a5aeb8"];
+const COLORS = ["#FFD700", "#DAA520", "#FFC125"];
 
 const isMobile = () => window.innerWidth <= 768;
 
@@ -153,7 +153,7 @@ onMounted(() => {
   // Start the idle timer
   resetIdleTimer();
 
-  window.addEventListener("resize", handleResize);
+  window.addEventListener("resize", handleResize, { passive: true });
 });
 
 onUnmounted(() => {

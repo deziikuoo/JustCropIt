@@ -189,7 +189,7 @@ onMounted(() => {
     isFadingIn.value = false;
   }, 300); // Match CSS transition duration
 
-  window.addEventListener("resize", handleResize);
+  window.addEventListener("resize", handleResize, { passive: true });
   // Also resize on next tick in case notification size changes
   setTimeout(handleResize, 100);
 });
@@ -208,7 +208,7 @@ onUnmounted(() => {
 <style scoped>
 .deletion-notification {
   position: fixed;
-  bottom: 20px;
+  bottom: calc(20px + env(safe-area-inset-bottom, 0px));
   left: 50%;
   display: flex;
   align-items: center;
@@ -307,7 +307,7 @@ onUnmounted(() => {
 
 @media (max-width: 768px) {
   .deletion-notification {
-    bottom: 16px;
+    bottom: calc(16px + env(safe-area-inset-bottom, 0px));
     min-width: 240px;
   }
 
@@ -318,7 +318,7 @@ onUnmounted(() => {
 
 @media (max-width: 480px) {
   .deletion-notification {
-    bottom: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
     padding: 10px 16px;
     min-width: 200px;
     max-width: calc(100% - 24px);

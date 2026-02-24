@@ -2,7 +2,7 @@
   <div
     v-if="showNotification"
     class="photo-counter"
-    :class="{ 'rise-and-fade': isAnimating }"
+    :class="{ 'fade-out': isFading }"
   >
     <div class="counter-content">
       <div class="counter-text">
@@ -29,7 +29,7 @@ const props = withDefaults(defineProps<Props>(), {
 
 const showNotification = ref(false);
 const displayedCount = ref(0);
-const isAnimating = ref(false);
+const isFading = ref(false);
 let notificationTimer: ReturnType<typeof setTimeout> | null = null;
 
 const clearTimers = () => {
@@ -45,19 +45,18 @@ const showNewPhotosNotification = (count: number) => {
   clearTimers();
   displayedCount.value = count;
   showNotification.value = true;
-  isAnimating.value = false;
+  isFading.value = false;
 
-  // Trigger animation on next tick
-  setTimeout(() => {
-    isAnimating.value = true;
-  }, 10);
-
-  // Hide after animation completes (2 seconds)
+  // Start fade-out after 3 seconds
   notificationTimer = setTimeout(() => {
-    showNotification.value = false;
-    isAnimating.value = false;
-    displayedCount.value = 0;
-  }, 2000);
+    isFading.value = true;
+    // Hide after fade animation completes (0.5 seconds)
+    notificationTimer = setTimeout(() => {
+      showNotification.value = false;
+      isFading.value = false;
+      displayedCount.value = 0;
+    }, 500);
+  }, 3000);
 };
 
 watch(
@@ -72,33 +71,24 @@ watch(
 onUnmounted(() => {
   clearTimers();
 });
+
 </script>
 
 <style scoped>
 .photo-counter {
-  position: fixed;
-  left: 9%;
-  top: 33%;
+  position: relative;
   background: transparent;
   padding: 0;
   z-index: 1001;
   pointer-events: none;
+  opacity: 1;
+  transition: opacity 0.5s ease-out;
 }
 
-.photo-counter.rise-and-fade {
-  animation: riseAndFade 2s ease-out forwards;
+.photo-counter.fade-out {
+  opacity: 0;
 }
 
-@keyframes riseAndFade {
-  from {
-    opacity: 1;
-    transform: translateY(0);
-  }
-  to {
-    opacity: 0;
-    transform: translateY(-100px);
-  }
-}
 
 .counter-content {
   display: flex;
