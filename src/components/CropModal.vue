@@ -97,9 +97,7 @@ type CropperInstance = InstanceType<typeof Cropper> & {
 const {
   show,
   imageSrc,
-  initialCrop,
   initialRotation,
-  batchMode,
   currentBatchIndex,
   totalBatchCount,
 } = defineProps<{

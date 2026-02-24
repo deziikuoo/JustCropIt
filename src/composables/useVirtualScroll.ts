@@ -1,5 +1,5 @@
 import { ref, computed, onMounted, onUnmounted, watch, type Ref } from 'vue';
-import { useThrottleFn, useResizeObserver } from '@vueuse/core';
+import { useResizeObserver } from '@vueuse/core';
 
 interface UseVirtualScrollOptions {
   totalItems: Ref<number>;

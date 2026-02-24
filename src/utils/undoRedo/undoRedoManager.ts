@@ -3,7 +3,7 @@
  * Central manager for undo/redo operations using Command Pattern
  */
 
-import type { Command, HistoryEntry, PhotoState } from "./types";
+import type { Command, HistoryEntry } from "./types";
 import { comparePhotoStates } from "./types";
 
 export class UndoRedoManager {

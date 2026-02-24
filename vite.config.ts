@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig, type ViteDevServer } from "vite";
 import vue from "@vitejs/plugin-vue";
 import { existsSync } from "fs";
 import { join } from "path";
@@ -43,11 +43,7 @@ export default defineConfig(({ mode }) => ({
 function openChromeOnStart() {
   return {
     name: "open-chrome-on-start",
-    configureServer(
-      server: { httpServer?: import("http").Server } & {
-        config: { server: { port?: number } };
-      },
-    ) {
+    configureServer(server: ViteDevServer) {
       const httpServer = server.httpServer;
       if (!httpServer) {
         return;
@@ -59,12 +55,11 @@ function openChromeOnStart() {
       }
 
       httpServer.once("listening", () => {
+        const addr = httpServer.address();
         const port =
           server.config.server.port ??
-          (typeof httpServer.address === "function" &&
-          httpServer.address() &&
-          typeof httpServer.address() === "object"
-            ? httpServer.address().port
+          (typeof addr === "object" && addr !== null && "port" in addr
+            ? (addr as { port: number }).port
             : 5173);
         const url = `http://localhost:${port}/`;
         execFile(chromePath, [url]);

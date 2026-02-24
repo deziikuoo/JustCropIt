@@ -44,7 +44,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onUnmounted, computed, nextTick } from "vue";
+import { ref, watch, onUnmounted, computed } from "vue";
 
 interface Props {
   selectedCount: number;
@@ -218,24 +218,6 @@ const animateShimmer = (currentTime?: number) => {
   }
 };
 
-const triggerShimmer = () => {
-  if (props.selectedCount <= 0) return;
-  
-  // Don't show shimmer for select all mode (animations removed)
-  if (isSelectAll.value) return;
-
-  // Stop existing shimmer animation
-  if (shimmerAnimationId) {
-    cancelAnimationFrame(shimmerAnimationId);
-    shimmerAnimationId = null;
-  }
-
-  showShimmer.value = true;
-  nextTick(() => {
-    createShimmerParticles();
-  });
-};
-
 const showSelectNotification = (count: number) => {
   if (count <= 0) {
     showNotification.value = false;
@@ -267,6 +249,8 @@ watch(
     }
   }
 );
+
+defineExpose({ createShimmerParticles });
 
 onUnmounted(() => {
   clearTimers();

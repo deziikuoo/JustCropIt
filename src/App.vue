@@ -108,12 +108,8 @@ import PerformanceDashboard from "./components/PerformanceDashboard.vue";
 import OptimizationCheckModal from "./components/OptimizationCheckModal.vue";
 import CopyPasteVisualizer from "./components/CopyPasteVisualizer.vue";
 import JSZip from "jszip";
-import {
-  WORKER_POOL_MAX,
-  MIN_BATCH_FOR_WORKERS,
-  DOWNLOAD_PARALLEL_BATCH_SIZE,
-} from "./constants/optimization";
-import { copyPasteLogger, type PhotoState } from "./utils/copyPasteLogger";
+import { DOWNLOAD_PARALLEL_BATCH_SIZE } from "./constants/optimization";
+import { copyPasteLogger } from "./utils/copyPasteLogger";
 import { performanceLogger } from "./utils/performanceLogger";
 import {
   initDB,

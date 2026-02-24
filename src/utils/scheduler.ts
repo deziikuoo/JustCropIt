@@ -45,8 +45,10 @@ export const scheduleIdleTask = (
     );
   }
   
-  // Fallback: use setTimeout to yield to the event loop
-  return window.setTimeout(callback, 1);
+  // Fallback: use setTimeout to yield to the event loop (browser/env)
+  const setTimer = (cb: () => void, ms: number): number =>
+    (typeof setTimeout !== 'undefined' ? setTimeout(cb, ms) : 0) as number;
+  return setTimer(callback, 1);
 };
 
 /**
