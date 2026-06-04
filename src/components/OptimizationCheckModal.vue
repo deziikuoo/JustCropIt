@@ -18,8 +18,10 @@
 
     <div class="opt-check-content">
       <p class="intro">
-        Verifies optimization features and parameter rules from
+        Verifies optimization features (Phases 0–8) and parameter rules from
         <code>OptimizationImp2.md</code>.
+        Manual QA: see
+        <code>docs/GridOptimizationTestMatrix.md</code>.
       </p>
 
       <div class="summary-cards">
@@ -54,6 +56,10 @@
           </div>
         </div>
       </div>
+
+      <p v-if="gridSnapshotLine" class="grid-snapshot-footer">
+        {{ gridSnapshotLine }}
+      </p>
     </div>
   </div>
 
@@ -74,10 +80,12 @@ import {
   type OptimizationCheckResult,
   type CheckStatus,
 } from '../utils/optimizationChecker';
+import { performanceLogger } from '../utils/performanceLogger';
 
 const isDev = import.meta.env.DEV;
 const show = ref(false);
 const results = ref<OptimizationCheckResult[]>([]);
+const gridSnapshotLine = ref('');
 
 const position = ref({ top: 20, left: 20 });
 const isDragging = ref(false);
@@ -85,6 +93,10 @@ const dragStart = ref({ x: 0, y: 0, startLeft: 0, startTop: 0 });
 
 function runChecks() {
   results.value = runOptimizationChecks();
+  const snapshot = performanceLogger.getLatestGridSnapshot();
+  gridSnapshotLine.value = snapshot
+    ? `Latest grid snapshot: ${snapshot.gridUrlsActive} URLs active, ${snapshot.gridDecodesQueued} decodes queued, ${snapshot.visibleIndices} visible`
+    : '';
 }
 
 function refresh() {
@@ -369,6 +381,14 @@ onUnmounted(() => {
   font-size: 11px;
   color: #888;
   margin-top: 4px;
+}
+
+.grid-snapshot-footer {
+  font-size: 12px;
+  color: #aaa;
+  margin: 16px 0 0 0;
+  padding-top: 12px;
+  border-top: 1px solid #3a3a4a;
 }
 
 .opt-check-toggle {

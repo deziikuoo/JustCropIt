@@ -5,18 +5,11 @@
 
 import type { Ref } from "vue";
 import type { Command, PhotoState } from "../types";
+import type { Photo } from "../../../types/photo";
 import { updatePhoto } from "../../photoStorage";
+import { applyDisplayInvalidation } from "../../thumbnailInvalidation";
 
-export interface Photo {
-  id?: string;
-  original: File;
-  current: File;
-  cropHistory: Blob[];
-  cropFuture: Blob[];
-  flips: { horizontal: boolean; vertical: boolean };
-  crop?: { x: number; y: number; width: number; height: number };
-  rotation?: number;
-}
+export type { Photo };
 
 /**
  * Function type for applying flips, rotation, and crop to an image
@@ -147,13 +140,12 @@ export abstract class BaseCommand implements Command {
     }
 
     // Update in-memory photo
-    this.photos.value[photoIndex] = {
-      ...photo,
+    this.photos.value[photoIndex] = applyDisplayInvalidation(photo, {
       current: newCurrent,
       flips: newState.flips,
       crop: newState.crop,
       rotation: newState.rotation,
-    };
+    });
 
     // Persist to IndexedDB
     try {

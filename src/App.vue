@@ -55,6 +55,7 @@
       @select-multiple="handleSelectMultiple"
       @deselect-multiple="handleDeselectMultiple"
       @drag-selection-progress="handleDragSelectionProgress"
+      @photo-thumbnail-updated="handlePhotoThumbnailUpdated"
     />
     <BatchCropSelector
       v-if="showBatchCropSelector"
@@ -125,17 +126,13 @@ import {
 } from "./utils/photoStorage";
 import { runBatchFlip, runBatchCropRemaining, runBatchPaste } from "./utils/batchImageOps";
 import { UndoRedoManager, FlipCommand } from "./utils/undoRedo";
-
-interface Photo {
-  id?: string; // IndexedDB ID
-  original: File;
-  current: File;
-  cropHistory: Blob[];
-  cropFuture: Blob[];
-  flips: { horizontal: boolean; vertical: boolean };
-  crop?: { x: number; y: number; width: number; height: number };
-  rotation?: number; // Rotation angle in degrees
-}
+import type { Photo } from "./types/photo";
+import { blobToFile } from "./utils/blobToFile";
+import { createThumbnailFromFile } from "./utils/thumbnailGenerator";
+import { createThumbhashFromBlob } from "./utils/thumbhashGenerator";
+import { scheduleThumbnailBackfill } from "./utils/thumbnailBackfill";
+import { applyDisplayInvalidation } from "./utils/thumbnailInvalidation";
+import { processInChunks } from "./utils/scheduler";
 
 interface CopiedSettings {
   flips: { horizontal: boolean; vertical: boolean };
@@ -146,6 +143,20 @@ interface CopiedSettings {
 const photos = ref<Photo[]>([]);
 const newPhotosCount = ref(0);
 const deletedPhotosCount = ref(0);
+
+const handlePhotoThumbnailUpdated = (
+  index: number,
+  thumbnail: File,
+  thumbhash?: string | null
+) => {
+  const photo = photos.value[index];
+  if (!photo) return;
+  photos.value[index] = {
+    ...photo,
+    thumbnail,
+    ...(thumbhash !== undefined ? { thumbhash } : {}),
+  };
+};
 
 // Initialize UndoRedoManager
 const undoRedoManager = new UndoRedoManager();
@@ -169,6 +180,7 @@ watch(
       }
       // Always use original image - crop coordinates are relative to original
       // The CropModal applies rotation visually, so user sees the same result
+      // Tier 2 full-res — not for grid
       cropImageSrcURL = URL.createObjectURL(photo.original);
       cropImageSrc.value = cropImageSrcURL;
     }
@@ -218,10 +230,7 @@ const debounce = <T extends (...args: any[]) => void>(fn: T, delay: number) => {
   };
 };
 
-// Convert Blob to File helper
-const blobToFile = (blob: Blob, fileName: string, mimeType: string): File => {
-  return new File([blob], fileName, { type: mimeType });
-};
+const UPLOAD_THUMB_CHUNK_SIZE = 3;
 
 // Helper function to apply flips, rotation, and crop to an image
 // All transformations are applied starting from the original image
@@ -466,6 +475,15 @@ const loadPhotosFromStorage = async () => {
         id: stored.id,
         original: originalFile,
         current: currentFile,
+        thumbnail: stored.thumbnail
+          ? blobToFile(
+              stored.thumbnail,
+              `thumb-${stored.metadata.name}`,
+              stored.thumbnail.type || "image/jpeg"
+            )
+          : null,
+        thumbhash: stored.metadata.thumbhash ?? null,
+        thumbRevision: 0,
         cropHistory: [],
         cropFuture: [],
         flips: stored.metadata.flips,
@@ -475,6 +493,7 @@ const loadPhotosFromStorage = async () => {
     }
 
     photos.value = loadedPhotos;
+    scheduleThumbnailBackfill(photos, blobToFile);
     // Show notification if photos were loaded (triggers PhotoCounter animation)
     if (loadedPhotos.length > 0) {
       newPhotosCount.value = loadedPhotos.length;
@@ -536,31 +555,56 @@ const handleUpload = async (event: Event) => {
 
     // Save to IndexedDB and add to photos array
     const newPhotos: Photo[] = [];
-    for (const file of checkedFiles) {
-      try {
-        const id = await savePhoto(file, file, {
-          name: file.name,
-          flips: { horizontal: false, vertical: false },
-        });
+    const uploadResults = await processInChunks(
+      checkedFiles,
+      async (file) => {
+        try {
+          const thumbnailBlob = await createThumbnailFromFile(file);
+          const thumbhash = await createThumbhashFromBlob(thumbnailBlob);
+          const id = await savePhoto(
+            file,
+            file,
+            {
+              name: file.name,
+              flips: { horizontal: false, vertical: false },
+              ...(thumbhash ? { thumbhash } : {}),
+            },
+            thumbnailBlob
+          );
+          const thumbnailFile = blobToFile(
+            thumbnailBlob,
+            `thumb-${file.name}`,
+            "image/jpeg"
+          );
+          return { id, file, thumbnailFile, thumbhash };
+        } catch (error) {
+          console.error("Failed to save photo to storage:", error);
+          showAlert(
+            "error",
+            "Upload Error",
+            `Failed to save ${file.name}. Please try again.`,
+            5000
+          );
+          return null;
+        }
+      },
+      UPLOAD_THUMB_CHUNK_SIZE
+    );
 
-        newPhotos.push({
-          id,
-          original: file,
-          current: file,
-          cropHistory: [],
-          cropFuture: [],
-          flips: { horizontal: false, vertical: false },
-          rotation: undefined,
-        });
-      } catch (error) {
-        console.error("Failed to save photo to storage:", error);
-        showAlert(
-          "error",
-          "Upload Error",
-          `Failed to save ${file.name}. Please try again.`,
-          5000
-        );
-      }
+    for (const result of uploadResults) {
+      if (!result) continue;
+      newPhotos.push({
+        id: result.id,
+        original: result.file,
+        current: result.file,
+        thumbnail: result.thumbnailFile,
+        thumbhash: result.thumbhash,
+        thumbRevision: 0,
+        cropHistory: [],
+        cropFuture: [],
+        flips: { horizontal: false, vertical: false },
+        rotation: undefined,
+      });
     }
 
     photos.value.push(...newPhotos);
@@ -623,6 +667,7 @@ const openCropModal = (index: number) => {
   // Always use original image for cropping - crop coordinates are relative to original
   // The CropModal will apply rotation visually via initialRotation prop
   // This prevents double-rotation and ensures crop coordinates work correctly
+  // Tier 2 full-res — not for grid
   cropImageSrcURL = URL.createObjectURL(photos.value[index].original);
   cropImageSrc.value = cropImageSrcURL;
   showCropModal.value = true;
@@ -642,15 +687,14 @@ const handleCrop = async (
   const newFile = new File([blob], photo.current.name, {
     type: photo.current.type,
   });
-  photos.value[cropIndex.value] = {
-    ...photo,
+  photos.value[cropIndex.value] = applyDisplayInvalidation(photo, {
     current: newFile,
     original: photo.original,
     cropHistory: [...photo.cropHistory, await blobFromFile(photo.current)],
     cropFuture: [],
     crop,
     rotation,
-  };
+  });
 
   // Save to IndexedDB if photo has an ID
   if (photo.id) {
@@ -809,6 +853,7 @@ const handleBatchCropImageSelect = (index: number) => {
     URL.revokeObjectURL(cropImageSrcURL);
   }
   // Always use original image for cropping - crop coordinates are relative to original
+  // Tier 2 full-res — not for grid
   cropImageSrcURL = URL.createObjectURL(photos.value[cropIndex.value].original);
   cropImageSrc.value = cropImageSrcURL;
   // Close selector and open crop modal
@@ -887,8 +932,7 @@ const handleBatchCropNext = async (
           const newFile = new File([cropBlob], photo.current.name, {
             type: photo.current.type,
           });
-          const updatedPhoto = {
-            ...photo,
+          photos.value[index] = applyDisplayInvalidation(photo, {
             current: newFile,
             crop: {
               x: crop.x,
@@ -902,8 +946,7 @@ const handleBatchCropNext = async (
               await blobFromFile(photo.current),
             ],
             cropFuture: [],
-          };
-          photos.value[index] = updatedPhoto;
+          });
 
           // Save to IndexedDB if photo has an ID
           if (photo.id) {
@@ -1183,6 +1226,7 @@ const handleBatchDelete = async () => {
 
 const handleDownload = async (index: number) => {
   const photo = photos.value[index];
+  // Tier 2 full-res — not for grid
   const url = URL.createObjectURL(photo.current);
   const a = document.createElement("a");
   a.href = url;
@@ -1193,16 +1237,14 @@ const handleDownload = async (index: number) => {
 
 const handleRevert = async (index: number) => {
   const photo = photos.value[index];
-  const revertedPhoto = {
-    ...photo,
+  photos.value[index] = applyDisplayInvalidation(photo, {
     current: photo.original,
     cropHistory: [],
     cropFuture: [],
     flips: { horizontal: false, vertical: false },
     crop: undefined,
     rotation: undefined,
-  };
-  photos.value[index] = revertedPhoto;
+  });
 
   // Save to IndexedDB if photo has an ID
   if (photo.id) {
@@ -1349,10 +1391,9 @@ const handlePasteSettings = async (singleIndex?: number) => {
               width: settings.crop.width,
               height: settings.crop.height,
             };
-            const updatedPhoto = {
-              ...photo,
+            photos.value[index] = applyDisplayInvalidation(photo, {
               current: newFile,
-              flips: { ...settings.flips }, 
+              flips: { ...settings.flips },
               crop: updatedCrop,
               rotation: rotationToApply,
               cropHistory: [
@@ -1360,8 +1401,7 @@ const handlePasteSettings = async (singleIndex?: number) => {
                 await blobFromFile(photo.current),
               ],
               cropFuture: [],
-            };
-            photos.value[index] = updatedPhoto;
+            });
 
             if (photo.id) {
               try {

@@ -16,9 +16,19 @@ export interface PerformanceMetrics {
   workerUsed: boolean; // Whether Web Workers were used
 }
 
+export interface GridRuntimeSnapshot {
+  gridUrlsActive: number;
+  gridDecodesQueued: number;
+  visibleIndices: number;
+  timestamp: number;
+}
+
+const GRID_SNAPSHOT_MAX = 120;
+
 class PerformanceLogger {
   private metrics: PerformanceMetrics[] = [];
   private activeMeasurements: Map<string, number> = new Map();
+  private gridSnapshots: GridRuntimeSnapshot[] = [];
 
   /**
    * Start measuring an operation
@@ -324,6 +334,40 @@ class PerformanceLogger {
    */
   getTotalOperations(): number {
     return this.metrics.length;
+  }
+
+  /**
+   * Record grid runtime metrics (dev-only storage).
+   */
+  recordGridSnapshot(
+    snapshot: Omit<GridRuntimeSnapshot, 'timestamp'>
+  ): void {
+    if (!import.meta.env.DEV) return;
+
+    this.gridSnapshots.push({
+      ...snapshot,
+      timestamp: Date.now(),
+    });
+
+    while (this.gridSnapshots.length > GRID_SNAPSHOT_MAX) {
+      this.gridSnapshots.shift();
+    }
+  }
+
+  getLatestGridSnapshot(): GridRuntimeSnapshot | null {
+    if (this.gridSnapshots.length === 0) return null;
+    return this.gridSnapshots[this.gridSnapshots.length - 1];
+  }
+
+  getGridSnapshots(limit?: number): GridRuntimeSnapshot[] {
+    if (limit === undefined || limit >= this.gridSnapshots.length) {
+      return [...this.gridSnapshots];
+    }
+    return this.gridSnapshots.slice(-limit);
+  }
+
+  clearGridSnapshots(): void {
+    this.gridSnapshots = [];
   }
 }
 

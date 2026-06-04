@@ -1,10 +1,11 @@
 import { openDB } from "idb";
 import type { DBSchema, IDBPDatabase } from "idb";
 
-interface PhotoData {
+export interface PhotoData {
   id: string;
   original: Blob;
   current: Blob;
+  thumbnail?: Blob;
   metadata: {
     name: string;
     uploadedAt: number;
@@ -12,6 +13,7 @@ interface PhotoData {
     flips: { horizontal: boolean; vertical: boolean };
     crop?: { x: number; y: number; width: number; height: number };
     rotation?: number; // Rotation angle in degrees (0, 90, 180, 270, etc.)
+    thumbhash?: string;
   };
 }
 
@@ -24,7 +26,7 @@ interface PhotoStorageDB extends DBSchema {
 }
 
 const DB_NAME = "photo-editor-db";
-const DB_VERSION = 1;
+const DB_VERSION = 3;
 const STORE_NAME = "photos";
 const STORAGE_LIMIT_SOFT = 2 * 1024 * 1024 * 1024; // 2GB
 const STORAGE_LIMIT_HARD = 2.5 * 1024 * 1024 * 1024; // 2.5GB
@@ -36,11 +38,15 @@ export const initDB = async (): Promise<IDBPDatabase<PhotoStorageDB>> => {
   if (db) return db;
 
   db = await openDB<PhotoStorageDB>(DB_NAME, DB_VERSION, {
-    upgrade(database: IDBPDatabase<PhotoStorageDB>) {
-      const store = database.createObjectStore(STORE_NAME, {
-        keyPath: "id",
-      });
-      store.createIndex("by-expiresAt", "metadata.expiresAt");
+    upgrade(database: IDBPDatabase<PhotoStorageDB>, oldVersion) {
+      if (oldVersion < 1) {
+        const store = database.createObjectStore(STORE_NAME, {
+          keyPath: "id",
+        });
+        store.createIndex("by-expiresAt", "metadata.expiresAt");
+      }
+      // v2: thumbnail is an optional field on existing records; no store migration needed
+      // v3: optional metadata.thumbhash on existing records; no store migration needed
     },
   });
 
@@ -121,8 +127,8 @@ export const canStorePhoto = async (
   const photoSize = await estimatePhotoSize(file);
   const { available } = await checkStorageQuota();
 
-  // Reserve space for both original and current (worst case: current is same size)
-  const requiredSpace = photoSize * 2;
+  // Reserve space for original, current, and approximate thumbnail overhead
+  const requiredSpace = photoSize * 2 + photoSize * 0.15;
 
   if (requiredSpace > available) {
     return {
@@ -148,7 +154,9 @@ export const savePhoto = async (
     flips: { horizontal: boolean; vertical: boolean };
     crop?: { x: number; y: number; width: number; height: number };
     rotation?: number;
-  }
+    thumbhash?: string;
+  },
+  thumbnail?: Blob
 ): Promise<string> => {
   const database = await initDB();
 
@@ -168,6 +176,7 @@ export const savePhoto = async (
     id,
     original: originalBlob,
     current: currentBlob,
+    ...(thumbnail ? { thumbnail } : {}),
     metadata: {
       ...metadata,
       uploadedAt: now,
@@ -208,6 +217,7 @@ export const updatePhoto = async (
   const updated: PhotoData = {
     ...existing,
     current: currentBlob,
+    thumbnail: undefined,
     metadata: {
       name: existing.metadata.name,
       uploadedAt: existing.metadata.uploadedAt,
@@ -215,6 +225,7 @@ export const updatePhoto = async (
       flips: plainFlips,
       crop: metadata.crop ? { ...metadata.crop } : undefined,
       rotation: metadata.rotation,
+      thumbhash: undefined,
     },
   };
 
@@ -265,6 +276,7 @@ export const updatePhotosBatch = async (
       const updated: PhotoData = {
         ...existing,
         current: update.currentBlob,
+        thumbnail: undefined,
         metadata: {
           name: existing.metadata.name,
           uploadedAt: existing.metadata.uploadedAt,
@@ -272,6 +284,7 @@ export const updatePhotosBatch = async (
           flips: plainFlips,
           crop: update.metadata.crop ? { ...update.metadata.crop } : undefined,
           rotation: update.metadata.rotation,
+          thumbhash: undefined,
         },
       };
 
@@ -281,6 +294,28 @@ export const updatePhotosBatch = async (
 
   await tx.done;
   console.log(`updatePhotosBatch: Successfully updated ${updates.length} photos`);
+};
+
+export const updatePhotoThumbnail = async (
+  id: string,
+  thumbnail: Blob,
+  thumbhash?: string
+): Promise<void> => {
+  const database = await initDB();
+  const existing = await database.get(STORE_NAME, id);
+
+  if (!existing) {
+    throw new Error(`Photo with id ${id} not found`);
+  }
+
+  await database.put(STORE_NAME, {
+    ...existing,
+    thumbnail,
+    metadata: {
+      ...existing.metadata,
+      ...(thumbhash ? { thumbhash } : {}),
+    },
+  });
 };
 
 export const loadPhoto = async (id: string): Promise<PhotoData | undefined> => {

@@ -10,18 +10,10 @@ import { imageWorkerPool } from './imageWorkerPool';
 import { processInChunks } from './scheduler';
 import { MAIN_THREAD_CHUNK_SIZE } from '../constants/optimization';
 import type { FlipParams, CropParams, PasteParams, WorkerRequest } from '../types/worker';
+import type { Photo } from '../types/photo';
+import { applyDisplayInvalidation } from './thumbnailInvalidation';
 
-// Minimal interface matching App.vue's Photo
-interface Photo {
-  id?: string;
-  original: File;
-  current: File;
-  flips: { horizontal: boolean; vertical: boolean };
-  crop?: { x: number; y: number; width: number; height: number };
-  rotation?: number;
-  cropHistory: Blob[];
-  cropFuture: Blob[];
-}
+export type { Photo };
 
 interface CopiedSettings {
   flips: { horizontal: boolean; vertical: boolean };
@@ -101,11 +93,10 @@ export async function runBatchFlip(
             [direction]: !photo.flips[direction]
           };
           
-          photos.value[index] = {
-            ...photo,
+          photos.value[index] = applyDisplayInvalidation(photo, {
             current: newFile,
-            flips: newFlips
-          };
+            flips: newFlips,
+          });
 
           if (photo.id) {
             batchUpdates.push({
@@ -199,14 +190,13 @@ export async function runBatchCropRemaining(
           // Update crop history if needed (App.vue does it)
           const historyBlob = await blobFromFile(photo.current);
 
-          photos.value[index] = {
-            ...photo,
+          photos.value[index] = applyDisplayInvalidation(photo, {
             current: newFile,
             crop: { ...crop },
             rotation,
             cropHistory: [...photo.cropHistory, historyBlob],
-            cropFuture: []
-          };
+            cropFuture: [],
+          });
 
           if (photo.id) {
             batchUpdates.push({
@@ -307,15 +297,14 @@ export async function runBatchPaste(
 
           const historyBlob = await blobFromFile(photo.current);
 
-          photos.value[index] = {
-            ...photo,
+          photos.value[index] = applyDisplayInvalidation(photo, {
             current: newFile,
             flips: { ...settings.flips },
             crop: { ...settings.crop! },
             rotation: settings.rotation,
             cropHistory: [...photo.cropHistory, historyBlob],
-            cropFuture: []
-          };
+            cropFuture: [],
+          });
 
           if (photo.id) {
             batchUpdates.push({

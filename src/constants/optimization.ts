@@ -17,7 +17,19 @@ export const WORKER_POOL_MAX = 8;
 export const MIN_BATCH_FOR_WORKERS = 2;
 
 // Virtual Scrolling Configuration (P0 item 2)
-export const VIRTUAL_SCROLL_PHOTO_THRESHOLD = 300;
+// Device-aware crossover: full DOM below threshold; virtual scroll above.
+// Mobile gets a lower threshold (fewer cores, less memory, narrower grid).
+export const VIRTUAL_SCROLL_PHOTO_THRESHOLD_MOBILE = 80;
+export const VIRTUAL_SCROLL_PHOTO_THRESHOLD_DESKTOP = 150;
+
+/** Same breakpoint as PhotoGrid small-screen layout (max-width: 480px). */
+export const VIRTUAL_SCROLL_MOBILE_BREAKPOINT_PX = 480;
+
+export function getVirtualScrollPhotoThreshold(isMobileViewport: boolean): number {
+  return isMobileViewport
+    ? VIRTUAL_SCROLL_PHOTO_THRESHOLD_MOBILE
+    : VIRTUAL_SCROLL_PHOTO_THRESHOLD_DESKTOP;
+}
 
 // Batch Download Configuration (P1)
 export const DOWNLOAD_PARALLEL_BATCH_SIZE = 10;
@@ -25,3 +37,23 @@ export const DOWNLOAD_PARALLEL_BATCH_SIZE = 10;
 // Main Thread Chunking Configuration (P2 item 6)
 // Chunk size for heavy operations on the main thread to allow UI updates
 export const MAIN_THREAD_CHUNK_SIZE = 5;
+
+// Grid display / thumbnail pipeline
+export const THUMBNAIL_MAX_EDGE_PX = 320;
+export const THUMBNAIL_JPEG_QUALITY = 0.82;
+export const GRID_URL_LRU_MAX = 48;
+export const GRID_DECODE_CONCURRENCY = 6;
+export const VIEWABILITY_THROTTLE_MS = 100;
+export const VIEWABILITY_ROOT_MARGIN = '200px';
+export const IDLE_PREFETCH_AHEAD = 12;
+export const INITIAL_GRID_MOUNT_BATCH = 24;
+export const GRID_MOUNT_BATCH_SIZE = 16;
+export const GRID_ENTRANCE_ANIMATION_CAP = 6;
+export const GRID_ENTRANCE_STAGGER_MS = 70;
+
+export function getThumbnailCacheKey(
+  photoId: string,
+  thumbRevision: number
+): string {
+  return `${photoId}:${thumbRevision}`;
+}

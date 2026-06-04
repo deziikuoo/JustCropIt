@@ -26,6 +26,28 @@
     </div>
 
     <div class="perf-content">
+      <!-- Grid Runtime (dev) -->
+      <div v-if="isDev" class="grid-runtime-section">
+        <h4 class="section-title">Grid Runtime</h4>
+        <div class="summary-cards grid-runtime-cards">
+          <div class="card" :class="{ warn: urlsOverCap }">
+            <div class="card-label">Active URLs</div>
+            <div class="card-value">{{ gridSnapshot?.gridUrlsActive ?? '—' }} / {{ GRID_URL_LRU_MAX }}</div>
+          </div>
+          <div class="card" :class="{ warn: decodesOverCap }">
+            <div class="card-label">Decodes Queued</div>
+            <div class="card-value">{{ gridSnapshot?.gridDecodesQueued ?? '—' }} / {{ GRID_DECODE_CONCURRENCY }}</div>
+          </div>
+          <div class="card">
+            <div class="card-label">Visible Indices</div>
+            <div class="card-value">{{ gridSnapshot?.visibleIndices ?? '—' }}</div>
+          </div>
+        </div>
+        <p v-if="!gridSnapshot" class="grid-runtime-hint">
+          Scroll the grid to record runtime snapshots.
+        </p>
+      </div>
+
       <!-- Summary Cards -->
       <div v-if="metrics.length > 0" class="summary-cards">
         <div class="card">
@@ -122,11 +144,22 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue';
-import { performanceLogger, type PerformanceMetrics } from '../utils/performanceLogger';
+import {
+  performanceLogger,
+  type PerformanceMetrics,
+  type GridRuntimeSnapshot,
+} from '../utils/performanceLogger';
+import {
+  GRID_URL_LRU_MAX,
+  GRID_DECODE_CONCURRENCY,
+} from '../constants/optimization';
 
 const isDev = import.meta.env.DEV;
 const show = ref(false);
 const metrics = ref<PerformanceMetrics[]>(performanceLogger.getMetrics());
+const gridSnapshot = ref<GridRuntimeSnapshot | null>(
+  performanceLogger.getLatestGridSnapshot()
+);
 const comparisonData = ref<Array<{
   operationType: string;
   improvement: number;
@@ -190,6 +223,15 @@ const avgPerImage = computed(() => {
   return total / totalImages.value;
 });
 
+const urlsOverCap = computed(
+  () => (gridSnapshot.value?.gridUrlsActive ?? 0) > GRID_URL_LRU_MAX
+);
+const decodesOverCap = computed(
+  () =>
+    (gridSnapshot.value?.gridDecodesQueued ?? 0) >
+    GRID_DECODE_CONCURRENCY + 2
+);
+
 const formatTime = (ms: number): string => {
   if (ms < 1000) return `${Math.round(ms)}ms`;
   if (ms < 60000) return `${(ms / 1000).toFixed(2)}s`;
@@ -231,6 +273,7 @@ onMounted(() => {
   }
   refreshInterval = setInterval(() => {
     metrics.value = performanceLogger.getMetrics();
+    gridSnapshot.value = performanceLogger.getLatestGridSnapshot();
   }, 1000);
 });
 
@@ -384,6 +427,32 @@ defineExpose({
   font-size: 24px;
   font-weight: bold;
   color: #4CAF50;
+}
+
+.card.warn .card-value {
+  color: #ff9800;
+}
+
+.grid-runtime-section {
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #3a3a4a;
+}
+
+.section-title {
+  margin: 0 0 12px 0;
+  font-size: 14px;
+  color: #ffd700;
+}
+
+.grid-runtime-cards {
+  margin-bottom: 8px;
+}
+
+.grid-runtime-hint {
+  font-size: 12px;
+  color: #888;
+  margin: 0;
 }
 
 .operations-list {

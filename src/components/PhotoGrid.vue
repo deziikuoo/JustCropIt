@@ -202,108 +202,52 @@
             :style="{ height: spacerBeforeHeight + 'px', gridColumn: '1 / -1' }"
           ></div>
 
-          <div
+          <PhotoCard
             v-for="(photo, index) in displayPhotos"
-            :key="`${visibleRange.start + index}-${photo.current.name}`"
-            class="photo-card-wrapper"
-            :style="{
-               width: '100%',
-               height: '100%',
-               '--item-size': itemMinWidth + 'px'
-            }"
-          >
-          <div
-            :ref="(el) => setPhotoCardRef(el as HTMLElement, visibleRange.start + index)"
-            class="photo-card"
-            :data-photo-index="visibleRange.start + index"
-            :class="{
-              selected: isSelected(visibleRange.start + index),
-              'select-mode': selectMode,
-              'dragging-over': draggedOverIndices.has(visibleRange.start + index),
-            }"
+            v-memo="[
+              visibleRange.start + index,
+              getDisplayUrl(visibleRange.start + index),
+              isLoading(visibleRange.start + index),
+              isSelected(visibleRange.start + index),
+              selectMode,
+              draggedOverIndices.has(visibleRange.start + index),
+              hasCopiedSettings,
+              photo.thumbRevision,
+              photo.thumbhash,
+              entranceIndices.has(visibleRange.start + index),
+              allowGridAnimation,
+            ]"
+            :key="`${visibleRange.start + index}-${photo.id ?? photo.current.name}`"
+            :photo="photo"
+            :real-index="visibleRange.start + index"
+            :display-url="getDisplayUrl(visibleRange.start + index)"
+            :is-loading="isLoading(visibleRange.start + index)"
+            :placeholder-preview-url="getPlaceholderPreviewUrl(photo)"
+            :selected="isSelected(visibleRange.start + index)"
+            :select-mode="selectMode"
+            :has-copied-settings="hasCopiedSettings"
+            :dragging-over="draggedOverIndices.has(visibleRange.start + index)"
+            :show-entrance-animation="entranceIndices.has(visibleRange.start + index)"
+            :entrance-delay-ms="getEntranceDelayMs(visibleRange.start + index)"
+            :allow-transition="allowGridAnimation"
+            :drag-selecting="isDragSelecting"
+            :item-size="itemMinWidth + 'px'"
+            :register-card-ref="(el) => setPhotoCardRef(el, visibleRange.start + index)"
             @click="handlePhotoCardClick(visibleRange.start + index, $event)"
             @mousedown="handlePhotoCardMouseDown(visibleRange.start + index, $event)"
             @mouseup="handlePhotoCardMouseUp"
             @mouseleave="handlePhotoCardMouseUp"
             @touchstart="handlePhotoCardTouchStart(visibleRange.start + index, $event)"
-          >
-            <input
-              type="checkbox"
-              class="photo-checkbox"
-              :checked="isSelected(visibleRange.start + index)"
-              @change="handleToggleSelect(visibleRange.start + index, $event)"
-              @click.stop
-            />
-            <div class="image-container">
-              <img
-                v-if="photoUrl(photo.current, visibleRange.start + index)"
-                :src="photoUrl(photo.current, visibleRange.start + index)!"
-                alt="Uploaded photo"
-                @error="handleImageError(visibleRange.start + index)"
-                draggable="false"
-                @dragstart.prevent
-              />
-              <div v-else class="image-placeholder"></div>
-            </div>
-            <div class="actions">
-              <button
-                class="Flip H"
-                @click="$emit('flip', visibleRange.start + index, 'horizontal')"
-                title="Flip Horizontally"
-              >
-                <i class="fas fa-arrows-left-right"></i>
-              </button>
-              <button
-                class="Flip V"
-                @click="$emit('flip', visibleRange.start + index, 'vertical')"
-                title="Flip Vertically"
-              >
-                <i class="fas fa-arrows-up-down"></i>
-              </button>
-              <button class="Crop" @click="$emit('crop', visibleRange.start + index)" title="Crop">
-                <i class="fas fa-crop"></i>
-              </button>
-              <button
-                class="CopySettings"
-                @click="$emit('copy-settings', visibleRange.start + index)"
-                title="Copy Settings"
-              >
-                <i class="fas fa-copy"></i>
-              </button>
-              <button
-                class="PasteSettings"
-                :disabled="!hasCopiedSettings"
-                @click="$emit('paste-settings', visibleRange.start + index)"
-                title="Paste Settings"
-              >
-                <i class="fas fa-paste"></i>
-              </button>
-              <button
-                class="Revert"
-                @click="$emit('revert', visibleRange.start + index)"
-                title="Revert"
-              >
-                <i class="fas fa-undo"></i>
-              </button>
-            </div>
-            <div class="actions-bottom">
-              <button
-                class="Download"
-                @click="$emit('download', visibleRange.start + index)"
-                title="Download"
-              >
-                <i class="fas fa-download"></i>
-              </button>
-              <button
-                class="Delete"
-                @click="$emit('delete', visibleRange.start + index)"
-                title="Delete"
-              >
-                <i class="fas fa-trash"></i>
-              </button>
-            </div>
-            </div>
-          </div>
+            @toggle-select="(checked) => handleToggleSelectChecked(visibleRange.start + index, checked)"
+            @flip="(dir) => $emit('flip', visibleRange.start + index, dir)"
+            @crop="$emit('crop', visibleRange.start + index)"
+            @download="$emit('download', visibleRange.start + index)"
+            @revert="$emit('revert', visibleRange.start + index)"
+            @delete="$emit('delete', visibleRange.start + index)"
+            @copy-settings="$emit('copy-settings', visibleRange.start + index)"
+            @paste-settings="$emit('paste-settings', visibleRange.start + index)"
+            @image-error="handleImageError(visibleRange.start + index)"
+          />
 
           <div 
             v-if="spacerAfterHeight > 0"
@@ -348,24 +292,29 @@ import {
   onMounted,
   onUnmounted,
   computed,
-  nextTick,
-  type Ref,
+  toRef,
 } from "vue";
-import { useLazyImage } from "../composables/useLazyImage";
 import { useTouchCapability } from "../composables/useTouchCapability";
 import { usePinchZoom } from "../composables/usePinchZoom";
 import { useVirtualScroll } from "../composables/useVirtualScroll";
-import { VIRTUAL_SCROLL_PHOTO_THRESHOLD } from "../constants/optimization";
-import { useMediaQuery } from "@vueuse/core";
-
-interface Photo {
-  original: File;
-  current: File;
-  cropHistory: Blob[];
-  cropFuture: Blob[];
-  flips: { horizontal: boolean; vertical: boolean };
-  crop?: { x: number; y: number; width: number; height: number };
-}
+import { useVirtualScrollThreshold } from "../composables/useVirtualScrollThreshold";
+import { useGridViewability } from "../composables/useGridViewability";
+import { useGridImageDisplay } from "../composables/useGridImageDisplay";
+import { useBatchedGridMount } from "../composables/useBatchedGridMount";
+import { useGridEntranceAnimation } from "../composables/useGridEntranceAnimation";
+import { useGridIdlePrefetch } from "../composables/useGridIdlePrefetch";
+import { useMediaQuery, useThrottleFn } from "@vueuse/core";
+import { thumbhashToDataUrl } from "../utils/thumbhashDecode";
+import PhotoCard from "./PhotoCard.vue";
+import type { Photo } from "../types/photo";
+import { VIEWABILITY_THROTTLE_MS } from "../constants/optimization";
+import { GridUrlCache } from "../utils/gridUrlCache";
+import { createGridDecodeQueue } from "../utils/gridDecodeQueue";
+import { recordGridMetrics } from "../utils/gridMetricsBridge";
+import {
+  syncGridUrlsForVisibility,
+  revokePhotoCacheKey,
+} from "../utils/gridUrlSync";
 
 const props = defineProps<{
   photos: Photo[];
@@ -395,11 +344,15 @@ const emit = defineEmits<{
   (e: "select-multiple", indices: number[]): void;
   (e: "deselect-multiple", indices: number[]): void;
   (e: "drag-selection-progress", count: number): void;
+  (e: "photo-thumbnail-updated", index: number, thumbnail: File, thumbhash?: string | null): void;
 }>();
 
-const urlCache = ref<Map<File, string>>(new Map());
+const isSmallScreen = useMediaQuery('(max-width: 480px)');
+const { isVirtualScrollEnabled } = useVirtualScrollThreshold(isSmallScreen);
+
+// GRID DISPLAY RULE: Tier 1 thumbnails via useGridImageDisplay only.
+// Full-res (Tier 2) is reserved for CropModal / App handlers.
 const photoCardRefs = ref<Map<number, HTMLElement>>(new Map());
-const visibleIndices = ref<Set<number>>(new Set());
 
 // Set template ref for photo card
 const setPhotoCardRef = (el: HTMLElement | null, index: number) => {
@@ -410,78 +363,25 @@ const setPhotoCardRef = (el: HTMLElement | null, index: number) => {
   }
 };
 
-const photoUrl = (file: File, index: number): string | null => {
-  // Only create URL if image is visible
-  if (!visibleIndices.value.has(index)) {
-    return null;
-  }
-
-  if (!urlCache.value.has(file)) {
-    const url = URL.createObjectURL(file);
-    urlCache.value.set(file, url);
-  }
-  return urlCache.value.get(file)!;
-};
-
 const handleImageError = (index: number) => {
   // Handle image load error - could add error state tracking here if needed
   console.warn(`Failed to load image at index ${index}`);
 };
 
-// Track observers to clean them up
-const observerStops = ref<Map<number, () => void>>(new Map());
-const elementRefs = ref<Map<number, Ref<HTMLElement | null | undefined>>>(
-  new Map(),
-);
+const getPlaceholderPreviewUrl = (photo: Photo): string | null => {
+  if (!photo.thumbhash) return null;
+  return thumbhashToDataUrl(photo.thumbhash);
+};
 
-
-watch(
-  () => props.photos,
-  (newPhotos, oldPhotos) => {
-    // Cleanup URL cache for removed photos
-    const newFiles = new Set(newPhotos.map((p) => p.current));
-    for (const [file, url] of urlCache.value) {
-      if (!newFiles.has(file)) {
-        URL.revokeObjectURL(url);
-        urlCache.value.delete(file);
-      }
-    }
-
-    // When virtual scroll is disabled, mark all indices visible so images display immediately
-    if (newPhotos.length > 0 && newPhotos.length < VIRTUAL_SCROLL_PHOTO_THRESHOLD) {
-      const allIndices = new Set<number>();
-      for (let i = 0; i < newPhotos.length; i++) allIndices.add(i);
-      visibleIndices.value = allIndices;
-    }
-
-    // Clean up observers and visibility tracking for removed photos
-    if (oldPhotos) {
-      const oldIndices = new Set(oldPhotos.map((_, i) => i));
-      const newIndicesSet = new Set(newPhotos.map((_, i) => i));
-      for (const index of oldIndices) {
-        if (!newIndicesSet.has(index)) {
-          visibleIndices.value.delete(index);
-          const stopObserver = observerStops.value.get(index);
-          if (stopObserver) {
-            stopObserver();
-            observerStops.value.delete(index);
-          }
-        }
-      }
-    }
-  },
-  { deep: true },
-);
 
 onMounted(() => {
   resetSizeControlsDimTimer();
 });
 
 onUnmounted(() => {
-  for (const [, url] of urlCache.value) {
-    URL.revokeObjectURL(url);
-  }
-  urlCache.value.clear();
+  stopViewability();
+  clearDisplayState();
+  gridUrlCache.clear();
 
   // Clean up pinch zoom instance
   if (pinchZoomInstance?.cleanup) {
@@ -515,9 +415,8 @@ const handleToggleSelectAll = (event: Event) => {
   emit("toggle-select-all", target.checked);
 };
 
-const handleToggleSelect = (index: number, event: Event) => {
-  const target = event.target as HTMLInputElement;
-  emit("toggle-select", index, target.checked);
+const handleToggleSelectChecked = (index: number, checked: boolean) => {
+  emit("toggle-select", index, checked);
 };
 
 const selectMode = ref(false);
@@ -1064,6 +963,14 @@ const photoSizes = [
 ];
 
 const selectedPhotoSize = ref(2); // Default to medium (index 2)
+const allowGridAnimation = ref(true);
+
+watch(selectedPhotoSize, () => {
+  allowGridAnimation.value = false;
+  requestAnimationFrame(() => {
+    allowGridAnimation.value = true;
+  });
+});
 
 // Touch capability detection
 const hasTouchCapability = useTouchCapability();
@@ -1137,7 +1044,6 @@ watch(
 );
 
 const gridRef = ref<HTMLElement>();
-const isSmallScreen = useMediaQuery('(max-width: 480px)');
 const isMediumScreen = useMediaQuery('(max-width: 768px)');
 
 const gap = computed(() => {
@@ -1172,7 +1078,9 @@ const itemMinWidth = computed(() => {
   return photoSizes[selectedPhotoSize.value].minSize;
 });
 
-const virtualScrollEnabled = computed(() => props.photos.length >= VIRTUAL_SCROLL_PHOTO_THRESHOLD);
+const virtualScrollEnabled = computed(() =>
+  isVirtualScrollEnabled(props.photos.length)
+);
 
 const { visibleRange, spacerBeforeHeight, spacerAfterHeight } = useVirtualScroll({
   totalItems: computed(() => props.photos.length),
@@ -1182,69 +1090,91 @@ const { visibleRange, spacerBeforeHeight, spacerAfterHeight } = useVirtualScroll
   enabled: virtualScrollEnabled
 });
 
+const { mountedDisplayCount } = useBatchedGridMount(
+  computed(() => props.photos.length),
+  virtualScrollEnabled
+);
+
+const { entranceIndices, getEntranceDelayMs } = useGridEntranceAnimation(
+  toRef(props, "photos")
+);
+
 const displayPhotos = computed(() => {
   if (virtualScrollEnabled.value) {
     return props.photos.slice(visibleRange.value.start, visibleRange.value.end);
   }
-  return props.photos;
+  return props.photos.slice(0, mountedDisplayCount.value);
 });
 
-watch(
-  () => [virtualScrollEnabled.value, visibleRange.value, props.photos.length] as const,
-  ([enabled, range, total]) => {
-    const newIndices = new Set<number>();
-    if (enabled) {
-      // In virtual scroll, only the visible range is considered in view
-      const start = (range as { start: number }).start;
-      const end = (range as { end: number }).end;
-      for (let i = start; i < end; i++) {
-        newIndices.add(i);
-      }
-    } else {
-      // When virtual scroll is disabled, all items are in the DOM — treat all as visible so images display
-      for (let i = 0; i < total; i++) {
-        newIndices.add(i);
-      }
-    }
-    visibleIndices.value = newIndices;
-  },
-  { immediate: true }
-);
+const gridUrlCache = new GridUrlCache();
+const decodeQueue = createGridDecodeQueue();
+const previousVisibleIndices = ref<Set<number>>(new Set());
 
-// Setup intersection observers when photo cards are added (only when virtual scroll is disabled)
-watch(
-  () => photoCardRefs.value.size,
-  () => {
-    nextTick(() => {
-      // If virtual scroll is enabled, visibility is managed by the range watcher above
-      if (virtualScrollEnabled.value) return;
+const { visibleIndices, stop: stopViewability } = useGridViewability({
+  totalCount: computed(() => props.photos.length),
+  virtualScrollEnabled,
+  visibleRange,
+  containerRef: gridRef,
+  photoCardRefs,
+});
 
-      for (const [index, element] of photoCardRefs.value) {
-        // Only setup observer if not already visible and no observer exists
-        if (!visibleIndices.value.has(index) && !elementRefs.value.has(index)) {
-          const elementRef = ref<HTMLElement | null | undefined>(element);
-          elementRefs.value.set(index, elementRef);
+const { getDisplayUrl, isLoading, cancelForPhoto, clearDisplayState } =
+  useGridImageDisplay({
+    photos: toRef(props, "photos"),
+    visibleIndices,
+    urlCache: gridUrlCache,
+    decodeQueue,
+    onThumbnailUpdated: (index, thumbnail, thumbhash) =>
+      emit("photo-thumbnail-updated", index, thumbnail, thumbhash),
+  });
 
-          const { isVisible, stop } = useLazyImage(elementRef);
-          observerStops.value.set(index, stop);
+useGridIdlePrefetch({
+  photos: toRef(props, "photos"),
+  visibleIndices,
+  urlCache: gridUrlCache,
+  totalCount: computed(() => props.photos.length),
+});
 
-          watch(
-            isVisible,
-            (visible) => {
-              if (visible) {
-                visibleIndices.value.add(index);
-                // Clean up observer after visibility is set
-                observerStops.value.delete(index);
-                elementRefs.value.delete(index);
-              }
-            },
-            { immediate: true },
-          );
-        }
-      }
+const recordGridMetricsSnapshot = useThrottleFn(
+  (indices: ReadonlySet<number>) => {
+    recordGridMetrics({
+      urlCache: gridUrlCache,
+      decodeQueue,
+      visibleIndices: indices,
     });
   },
-  { flush: "post" },
+  VIEWABILITY_THROTTLE_MS
+);
+
+watch(
+  visibleIndices,
+  (next) => {
+    syncGridUrlsForVisibility(
+      gridUrlCache,
+      props.photos,
+      next,
+      previousVisibleIndices.value
+    );
+    previousVisibleIndices.value = new Set(next);
+    recordGridMetricsSnapshot(next);
+  },
+  { flush: "post" }
+);
+
+watch(
+  () => props.photos,
+  (newPhotos, oldPhotos) => {
+    if (!oldPhotos) return;
+    const newIds = new Set(newPhotos.map((photo) => photo.id).filter(Boolean));
+    for (const photo of oldPhotos) {
+      if (photo.id && !newIds.has(photo.id)) {
+        revokePhotoCacheKey(gridUrlCache, photo);
+        cancelForPhoto(photo.id);
+        decodeQueue.cancelForPhoto(photo.id);
+      }
+    }
+  },
+  { deep: true }
 );
 
 const currentGridTemplate = computed(() => {
@@ -2236,348 +2166,11 @@ h1 {
   }
 }
 
-/* Photo Card Wrapper */
-.photo-card-wrapper {
-  content-visibility: auto;
-  contain-intrinsic-size: var(--item-size) var(--item-size);
-}
-
-/* Photo Card Wrapper */
-.photo-card-wrapper {
-  content-visibility: auto;
-  contain-intrinsic-size: var(--item-size) var(--item-size);
-}
-
-/* Photo Card */
-.photo-card {
-  position: relative;
-  aspect-ratio: 1;
-  border-radius: var(--border-radius);
-  border: 1px solid var(--surface-border);
-  background: var(--surface-color);
-  overflow: hidden;
-  transition: all var(--transition-normal);
-  box-shadow: var(--shadow-sm);
-  touch-action: pan-y; /* Allow vertical scrolling on touch */
-  user-select: none;
-  -webkit-user-select: none;
-  -moz-user-select: none;
-  -ms-user-select: none;
-}
-
-.photo-card.select-mode {
-  cursor: grab;
-}
-
-.photo-card.select-mode:active {
-  cursor: grabbing;
-}
-
-/* Only apply hover effects on devices that support hover (desktop) */
-@media (hover: hover) {
-  .photo-card:hover {
-    border-color: #ffffff;
-    box-shadow:
-      0 0 8px rgba(255, 215, 0, 0.15),
-      var(--shadow-md);
-    transform: translateY(-4px);
-  }
-
-  .photo-card.select-mode:hover {
-    border-color: #ffffff;
-  }
-
-  .photo-card:hover .photo-checkbox,
-  .photo-card:hover .actions,
-  .photo-card:hover .actions-bottom {
-    opacity: 1;
-  }
-
-  .photo-card:hover .image-container img {
-    transform: scale(1.02);
-  }
-}
-
-.photo-card.selected {
-  border: 2px solid #ffffff;
-  box-shadow:
-    0 0 0 3px rgba(255, 255, 255, 0.2),
-    0 0 12px rgba(255, 255, 255, 0.3),
-    var(--shadow-md);
-}
-
-/* Drag-to-select visual feedback */
-.photo-card.dragging-over {
-  border-color: #ffffff;
-  background: rgba(255, 215, 0, 0.08);
-  box-shadow:
-    0 0 0 2px rgba(255, 215, 0, 0.3),
-    0 0 8px rgba(255, 215, 0, 0.2),
-    var(--shadow-md);
-}
-
-.photo-card.dragging-over.selected {
-  border-color: #ffffff;
-  box-shadow:
-    0 0 0 3px rgba(255, 255, 255, 0.35),
-    0 0 12px rgba(255, 255, 255, 0.3),
-    var(--shadow-md);
-}
-
-/* Photo Checkbox */
-.photo-checkbox {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  z-index: 3;
-  width: 22px;
-  height: 22px;
-  opacity: 0;
-  transition: opacity var(--transition-fast);
-  cursor: pointer;
-  appearance: none;
-  -webkit-appearance: none;
-  border: 2px solid rgba(255, 255, 255, 0.3);
-  border-radius: 4px;
-  background: rgba(30, 30, 46, 0.6);
-  backdrop-filter: blur(8px);
-}
-
-.photo-checkbox:checked {
-  background: linear-gradient(135deg, #ffd700 0%, #d4af37 100%);
-  border-color: #ffffff;
-  box-shadow:
-    0 0 8px rgba(255, 215, 0, 0.4),
-    0 0 0 2px rgba(255, 215, 0, 0.2);
-}
-
-.photo-checkbox:checked::after {
-  content: "✓";
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  color: #1e1e2e;
-  font-size: 14px;
-  font-weight: bold;
-}
-
-.photo-card.selected .photo-checkbox {
-  opacity: 1;
-}
-
-/* Show checkbox on mobile when in select mode */
-@media (max-width: 768px) {
-  .photo-card.select-mode .photo-checkbox {
-    opacity: 1;
-  }
-}
-
-/* Image Container */
-.image-container {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1;
-}
-
-/* Photo Image */
-.image-container img {
-  max-height: 100%;
-  max-width: 100%;
-  object-fit: contain;
-  border-radius: var(--border-radius-sm);
-  transition:
-    opacity var(--transition-normal),
-    transform var(--transition-normal);
-}
-
-/* Image Placeholder */
-.image-placeholder {
-  width: 80%;
-  height: 80%;
-  background: linear-gradient(
-    135deg,
-    rgba(255, 255, 255, 0.05) 0%,
-    rgba(136, 146, 160, 0.03) 30%,
-    rgba(136, 146, 160, 0.02) 70%,
-    rgba(107, 116, 128, 0.02) 100%
-  );
-  border: 1px solid rgba(136, 146, 160, 0.1);
-  border-radius: var(--border-radius-sm);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-  overflow: hidden;
-}
-
-.image-placeholder::before {
-  content: "";
-  position: absolute;
-  top: -50%;
-  left: -50%;
-  width: 200%;
-  height: 200%;
-  background: linear-gradient(
-    45deg,
-    transparent 30%,
-    rgba(136, 146, 160, 0.05) 50%,
-    transparent 70%
-  );
-  animation: shimmer 2s infinite;
-}
-
-@keyframes shimmer {
-  0% {
-    transform: translateX(-100%) translateY(-100%) rotate(45deg);
-  }
-  100% {
-    transform: translateX(100%) translateY(100%) rotate(45deg);
-  }
-}
-
-/* Top Actions */
-.actions {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 2;
-  display: flex;
-  justify-content: center;
-  gap: 8px;
-  padding: 12px;
-  background: linear-gradient(
-    to bottom,
-    rgba(0, 0, 0, 0.7) 0%,
-    transparent 100%
-  );
-  opacity: 0;
-  transition: opacity var(--transition-normal);
-}
-
-.actions button {
-  padding: 8px 12px;
-  font-size: 0.8rem;
-  background: rgba(30, 30, 46, 0.9);
-  backdrop-filter: blur(8px);
-}
-
-.actions button:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.2);
-}
-
-/* Show actions on mobile (not just hover) */
-@media (max-width: 768px) {
-  .actions {
-    opacity: 1;
-    padding: 8px;
-    gap: 6px;
-  }
-
-  .actions button {
-    padding: 8px 10px;
-    font-size: 0.75rem;
-    min-height: 36px;
-    min-width: 36px;
-  }
-}
-
-@media (max-width: 480px) {
-  .actions {
-    padding: 6px;
-    gap: 4px;
-  }
-
-  .actions button {
-    padding: 6px 8px;
-    font-size: 0.7rem;
-    min-height: 48px;
-    min-width: 48px;
-  }
-
-  .actions button i {
-    font-size: 0.85rem;
-  }
-}
-
-/* Bottom Actions */
-.actions-bottom {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  z-index: 2;
-  display: flex;
-  justify-content: space-between;
-  padding: 12px;
-  background: linear-gradient(to top, rgba(0, 0, 0, 0.7) 0%, transparent 100%);
-  opacity: 0;
-  transition: opacity var(--transition-normal);
-}
-
-.actions-bottom button {
-  padding: 8px 12px;
-  font-size: 0.8rem;
-  background: rgba(30, 30, 46, 0.9);
-  backdrop-filter: blur(8px);
-}
-
-.actions-bottom button.Download:hover:not(:disabled) {
-  background: var(--success-color);
-  border-color: var(--success-color);
-}
-
-.actions-bottom button.Delete:hover:not(:disabled) {
-  background: var(--danger-color);
-  border-color: var(--danger-color);
-}
-
-/* Show bottom actions on mobile (not just hover) */
-@media (max-width: 768px) {
-  .actions-bottom {
-    opacity: 1;
-    padding: 8px;
-  }
-
-  .actions-bottom button {
-    padding: 8px 14px;
-    font-size: 0.75rem;
-    min-height: 36px;
-  }
-}
-
-@media (max-width: 480px) {
-  .actions-bottom {
-    padding: 6px;
-  }
-
-  .actions-bottom button {
-    padding: 6px 10px;
-    font-size: 0.7rem;
-    min-height: 48px;
-    min-width: 48px;
-  }
-}
-
 /* Responsive adjustments */
 @media (max-width: 768px) {
   .photoGrid-container {
     width: 95%;
     padding: env(safe-area-inset-top, 0px) calc(12px + env(safe-area-inset-right, 0px)) 0 calc(12px + env(safe-area-inset-left, 0px));
-  }
-
-  .photo-checkbox {
-    width: 24px;
-    height: 24px;
-    top: 8px;
-    right: 8px;
   }
 }
 
@@ -2594,15 +2187,6 @@ h1 {
   .photo-input input[type="file"] {
     font-size: 0.8rem;
     padding: 8px 12px;
-  }
-
-  .photo-checkbox {
-    width: 48px;
-    height: 48px;
-    min-width: 48px;
-    min-height: 48px;
-    top: 4px;
-    right: 4px;
   }
 }
 </style>
