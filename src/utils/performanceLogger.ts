@@ -6,7 +6,7 @@
  */
 
 export interface PerformanceMetrics {
-  operationType: 'flip-horizontal' | 'flip-vertical' | 'crop' | 'paste' | 'download' | 'delete' | 'upload' | 'select-drag' | 'select-all' | 'revert';
+  operationType: 'flip-horizontal' | 'flip-vertical' | 'crop' | 'paste' | 'download' | 'delete' | 'upload' | 'select-drag' | 'select-all' | 'revert' | 'video-extract';
   batchSize: number;
   totalTime: number; // Total operation time in milliseconds
   perImageTime: number; // Average time per image in milliseconds

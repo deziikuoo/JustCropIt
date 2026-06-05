@@ -32,7 +32,6 @@ const ctx: DedicatedWorkerGlobalScope = self as unknown as DedicatedWorkerGlobal
 
 let ffmpeg: FFmpeg | null = null;
 let isLoaded = false;
-let currentRequestId: string | null = null;
 let isCancelled = false;
 
 const recentLogs: string[] = [];
@@ -215,7 +214,6 @@ async function trimVideoExport(
   fileName: string,
   options: TrimExportOptions,
 ): Promise<void> {
-  currentRequestId = id;
   isCancelled = false;
 
   const ext = fileName.split('.').pop() || 'mp4';
@@ -344,8 +342,6 @@ async function trimVideoExport(
     await deleteFileIfExists(inputName);
     await deleteFileIfExists(outputName);
     sendError(id, `Failed to trim video: ${error instanceof Error ? error.message : String(error)}. FFmpeg output: ${getRecentLogs()}`);
-  } finally {
-    currentRequestId = null;
   }
 }
 
@@ -398,7 +394,6 @@ async function extractFrames(
   fileName: string,
   options: ExtractionOptions
 ): Promise<void> {
-  currentRequestId = id;
   isCancelled = false;
 
   const intervalSeconds = options.intervalMs / 1000;
@@ -554,8 +549,6 @@ async function extractFrames(
     } as VideoWorkerResponse);
   } catch (error) {
     sendError(id, error instanceof Error ? error.message : String(error));
-  } finally {
-    currentRequestId = null;
   }
 }
 
