@@ -51,6 +51,11 @@ export const GRID_MOUNT_BATCH_SIZE = 16;
 export const GRID_ENTRANCE_ANIMATION_CAP = 6;
 export const GRID_ENTRANCE_STAGGER_MS = 70;
 
+/** Frames per batch before WASM reset */
+export const VIDEO_EXTRACTION_CHUNK_SIZE = 25;
+/** Smaller batches when using lossless PNG */
+export const VIDEO_EXTRACTION_CHUNK_SIZE_PNG = 25;
+
 export function getThumbnailCacheKey(
   photoId: string,
   thumbRevision: number

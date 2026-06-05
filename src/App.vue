@@ -9,14 +9,14 @@
       :auto-dismiss="alert.autoDismiss"
       @dismiss="alert.show = false"
     />
-    <div class="add-delete-counters-container">
+    <div class="add-delete-counters-container" v-show="appMode === 'photos'">
       <PhotoCounter
         :photo-count="photos.length"
         :new-photos-count="newPhotosCount"
       />
       <DeletedCounter :deleted-photos-count="deletedPhotosCount" />
     </div>
-    <div class="counters-container">
+    <div class="counters-container" v-show="appMode === 'photos'">
       <PrimaryPhotoCounter :photo-count="photos.length" />
       <SelectCounter
         :selected-count="
@@ -28,35 +28,68 @@
       />
     </div>
     <DeletionNotification />
-    <PhotoGrid
-      :photos="photos"
-      :selectedIndices="selectedIndices"
-      :hasSelection="selectedIndices.length > 0"
-      :allSelected="
-        selectedIndices.length === photos.length && photos.length > 0
-      "
-      :hasCopiedSettings="hasCopiedSettings"
-      @upload="handleUpload"
-      @flip="handleFlip"
-      @crop="openCropModal"
-      @download="handleDownload"
-      @revert="handleRevert"
-      @delete="handleDelete"
-      @copy-settings="handleCopySettings"
-      @paste-settings="handlePasteSettings"
-      @toggle-select-all="handleToggleSelectAll"
-      @toggle-select="handleToggleSelect"
-      @batch-flip="handleBatchFlip"
-      @batch-crop="handleBatchCrop"
-      @batch-download="handleBatchDownload"
-      @batch-revert="handleBatchRevert"
-      @batch-delete="handleBatchDelete"
-      @clear-clipboard="handleClearClipboard"
-      @select-multiple="handleSelectMultiple"
-      @deselect-multiple="handleDeselectMultiple"
-      @drag-selection-progress="handleDragSelectionProgress"
-      @photo-thumbnail-updated="handlePhotoThumbnailUpdated"
-    />
+    
+    <!-- Mode Tabs -->
+    <div class="mode-tabs-container">
+      <div class="mode-tabs">
+        <button 
+          class="mode-tab" 
+          :class="{ active: appMode === 'photos' }"
+          @click="appMode = 'photos'"
+        >
+          <i class="fas fa-images"></i>
+          <span>Photos</span>
+        </button>
+        <button 
+          class="mode-tab" 
+          :class="{ active: appMode === 'video' }"
+          @click="appMode = 'video'"
+        >
+          <i class="fas fa-film"></i>
+          <span>Video Frames</span>
+        </button>
+      </div>
+    </div>
+
+    <main class="main-content">
+      <!-- Wrapper div required: PhotoGrid has multiple root nodes, so v-show on the
+           component itself does not hide it. Wrapping preserves tab state. -->
+      <div v-show="appMode === 'photos'" class="photos-page">
+        <PhotoGrid
+          :photos="photos"
+          :selectedIndices="selectedIndices"
+          :hasSelection="selectedIndices.length > 0"
+          :allSelected="
+            selectedIndices.length === photos.length && photos.length > 0
+          "
+          :hasCopiedSettings="hasCopiedSettings"
+          @upload="handleUpload"
+          @flip="handleFlip"
+          @crop="openCropModal"
+          @download="handleDownload"
+          @revert="handleRevert"
+          @delete="handleDelete"
+          @copy-settings="handleCopySettings"
+          @paste-settings="handlePasteSettings"
+          @toggle-select-all="handleToggleSelectAll"
+          @toggle-select="handleToggleSelect"
+          @batch-flip="handleBatchFlip"
+          @batch-crop="handleBatchCrop"
+          @batch-download="handleBatchDownload"
+          @batch-revert="handleBatchRevert"
+          @batch-delete="handleBatchDelete"
+          @clear-clipboard="handleClearClipboard"
+          @select-multiple="handleSelectMultiple"
+          @deselect-multiple="handleDeselectMultiple"
+          @drag-selection-progress="handleDragSelectionProgress"
+          @photo-thumbnail-updated="handlePhotoThumbnailUpdated"
+        />
+      </div>
+
+      <div v-show="appMode === 'video'" class="video-page">
+        <VideoExtractor @frames-extracted="handleVideoFramesExtracted" />
+      </div>
+    </main>
     <BatchCropSelector
       v-if="showBatchCropSelector"
       :show="showBatchCropSelector"
@@ -108,6 +141,7 @@ import PrimaryPhotoCounter from "./components/PrimaryPhotoCounter.vue";
 import PerformanceDashboard from "./components/PerformanceDashboard.vue";
 import OptimizationCheckModal from "./components/OptimizationCheckModal.vue";
 import CopyPasteVisualizer from "./components/CopyPasteVisualizer.vue";
+import VideoExtractor from "./components/VideoExtractor.vue";
 import JSZip from "jszip";
 import { DOWNLOAD_PARALLEL_BATCH_SIZE } from "./constants/optimization";
 import { copyPasteLogger } from "./utils/copyPasteLogger";
@@ -143,6 +177,29 @@ interface CopiedSettings {
 const photos = ref<Photo[]>([]);
 const newPhotosCount = ref(0);
 const deletedPhotosCount = ref(0);
+
+// App mode: 'photos' for standard photo editing, 'video' for video frame extraction
+const APP_MODE_STORAGE_KEY = 'justcropit-app-mode';
+
+function getInitialAppMode(): 'photos' | 'video' {
+  try {
+    const stored = sessionStorage.getItem(APP_MODE_STORAGE_KEY);
+    if (stored === 'photos' || stored === 'video') return stored;
+  } catch {
+    // sessionStorage unavailable
+  }
+  return 'photos';
+}
+
+const appMode = ref<'photos' | 'video'>(getInitialAppMode());
+
+watch(appMode, (mode) => {
+  try {
+    sessionStorage.setItem(APP_MODE_STORAGE_KEY, mode);
+  } catch {
+    // sessionStorage unavailable
+  }
+});
 
 const handlePhotoThumbnailUpdated = (
   index: number,
@@ -627,6 +684,120 @@ const handleUpload = async (event: Event) => {
 
     // Clear input
     input.value = "";
+  }
+};
+
+// Handle video frames extracted from VideoExtractor
+const handleVideoFramesExtracted = async (files: File[]) => {
+  if (files.length === 0) return;
+
+  // Switch to photos mode to show the results
+  appMode.value = 'photos';
+
+  // Check storage quota before adding
+  const uploadPromises = files.map(async (file) => {
+    const check = await canStorePhoto(file);
+    if (!check.canStore) {
+      console.warn(`Cannot store frame ${file.name}: ${check.reason}`);
+      return null;
+    }
+    return file;
+  });
+
+  const checkedFiles = (await Promise.all(uploadPromises)).filter(
+    (f): f is File => f !== null
+  );
+
+  if (checkedFiles.length === 0) {
+    showAlert(
+      "error",
+      "Storage Limit",
+      "Cannot store extracted frames due to storage limits.",
+      5000
+    );
+    return;
+  }
+
+  // Check storage status for warnings
+  const status = await getStorageStatus();
+  if (status.shouldWarn) {
+    showAlert("warning", "Storage Warning", status.message || "", 6000);
+  }
+
+  // Start performance measurement
+  const operationId = `video-frames-${Date.now()}`;
+  performanceLogger.startMeasurement(operationId);
+
+  // Save frames to IndexedDB and add to photos array
+  const newPhotos: Photo[] = [];
+  const uploadResults = await processInChunks(
+    checkedFiles,
+    async (file) => {
+      try {
+        const thumbnailBlob = await createThumbnailFromFile(file);
+        const thumbhash = await createThumbhashFromBlob(thumbnailBlob);
+        const id = await savePhoto(
+          file,
+          file,
+          {
+            name: file.name,
+            flips: { horizontal: false, vertical: false },
+            ...(thumbhash ? { thumbhash } : {}),
+          },
+          thumbnailBlob
+        );
+        const thumbnailFile = blobToFile(
+          thumbnailBlob,
+          `thumb-${file.name}`,
+          "image/jpeg"
+        );
+        return { id, file, thumbnailFile, thumbhash };
+      } catch (error) {
+        console.error("Failed to save video frame to storage:", error);
+        return null;
+      }
+    },
+    UPLOAD_THUMB_CHUNK_SIZE
+  );
+
+  for (const result of uploadResults) {
+    if (!result) continue;
+    newPhotos.push({
+      id: result.id,
+      original: result.file,
+      current: result.file,
+      thumbnail: result.thumbnailFile,
+      thumbhash: result.thumbhash,
+      thumbRevision: 0,
+      cropHistory: [],
+      cropFuture: [],
+      flips: { horizontal: false, vertical: false },
+      rotation: undefined,
+    });
+  }
+
+  photos.value.push(...newPhotos);
+
+  // End performance measurement
+  await performanceLogger.endMeasurement(
+    operationId,
+    "video-extract",
+    newPhotos.length,
+    true // Uses worker
+  );
+
+  // Show notification for new photos
+  if (newPhotos.length > 0) {
+    newPhotosCount.value = newPhotos.length;
+    showAlert(
+      "info",
+      "Frames Added",
+      `${newPhotos.length} video frames have been added to your photos.`,
+      4000
+    );
+    setTimeout(() => {
+      newPhotosCount.value = 0;
+    }, 2100);
   }
 };
 
@@ -1564,10 +1735,33 @@ onUnmounted(() => {
   box-sizing: border-box;
   position: relative;
   display: flex;
-  flex-direction: row;
+  flex-direction: column;
   width: 100%;
-  height: 100%;
+  min-height: 100vh;
   text-align: center;
+}
+
+.main-content {
+  flex: 1;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.photos-page {
+  flex: 1;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.video-page {
+  flex: 1;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  padding-top: calc(72px + env(safe-area-inset-top, 0px));
+  padding-bottom: 40px;
 }
 
 .counters-container {
@@ -1594,5 +1788,87 @@ onUnmounted(() => {
   z-index: 1001;
   pointer-events: none;
   align-items: flex-start;
+}
+
+/* Mode Tabs */
+.mode-tabs-container {
+  position: fixed;
+  top: calc(20px + env(safe-area-inset-top, 0px));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1001;
+}
+
+.mode-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: rgba(24, 24, 32, 0.95);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+}
+
+.mode-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.mode-tab:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.mode-tab.active {
+  background: linear-gradient(135deg, rgba(212, 175, 55, 0.2) 0%, rgba(212, 175, 55, 0.1) 100%);
+  color: #ffd700;
+  box-shadow: 0 2px 8px rgba(212, 175, 55, 0.2);
+}
+
+.mode-tab i {
+  font-size: 1rem;
+}
+
+@media (max-width: 768px) {
+  .mode-tabs-container {
+    top: calc(12px + env(safe-area-inset-top, 0px));
+  }
+
+  .mode-tab {
+    padding: 8px 16px;
+    font-size: 0.85rem;
+  }
+
+  .mode-tab span {
+    display: none;
+  }
+
+  .mode-tab i {
+    font-size: 1.1rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .mode-tabs {
+    padding: 3px;
+    border-radius: 12px;
+  }
+
+  .mode-tab {
+    padding: 8px 14px;
+    border-radius: 9px;
+  }
 }
 </style>

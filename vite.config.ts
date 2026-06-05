@@ -32,11 +32,29 @@ function getChromePath(): string | null {
 export default defineConfig(({ mode }) => ({
   plugins: [vue(), openChromeOnStart()],
   base: mode === "production" ? "/JustCropIt/" : "/",
+  optimizeDeps: {
+    // @ffmpeg/ffmpeg ships its own worker entry; pre-bundling breaks worker resolution
+    exclude: ["@ffmpeg/ffmpeg", "@ffmpeg/util"],
+  },
+  worker: {
+    format: "es",
+  },
   server: {
     open: false, // Disable auto-open, we'll handle it manually
     host: true, // listen on all addresses, including network
     port: 5173, // explicit port (optional, this is the default)
     strictPort: true, // Exit if port 5173 is already in use (prevents multiple instances)
+    headers: {
+      // COOP/COEP enable SharedArrayBuffer if we switch to @ffmpeg/core-mt later
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Cross-Origin-Embedder-Policy": "require-corp",
+    },
+  },
+  preview: {
+    headers: {
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Cross-Origin-Embedder-Policy": "require-corp",
+    },
   },
 }));
 
