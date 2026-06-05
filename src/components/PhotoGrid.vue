@@ -1623,30 +1623,48 @@ h1 {
 
 .photo-input-wrapper {
   margin-top: 16px;
-  position: relative;
   display: inline-block;
 }
 
-.photo-input-wrapper::before {
-  content: "";
-  position: absolute;
-  inset: -2px;
-  background: linear-gradient(
-    135deg,
-    #708090 0%,
-    #8892a0 30%,
-    #ffffff 70%,
-    #ffffff 100%
-  );
-  border-radius: var(--border-radius);
-  z-index: -1;
+.photo-input {
+  font-family: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  padding: 10px 18px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  background: rgba(18, 18, 26, 0.98);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  color: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.55);
+  cursor: pointer;
+  transition: all 0.2s ease;
 }
 
-.photo-input {
-  position: relative;
-  border: 2px solid transparent !important;
-  background: var(--surface-color);
-  border-radius: var(--border-radius);
+.photo-input:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.9);
+  border-color: rgba(255, 255, 255, 0.12) !important;
+}
+
+.photo-input::file-selector-button {
+  font-family: inherit;
+  font-size: 0.875rem;
+  font-weight: 600;
+  padding: 6px 12px;
+  margin-right: 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.9);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.photo-input:hover::file-selector-button {
+  background: rgba(255, 255, 255, 0.12) !important;
+  color: rgba(255, 255, 255, 0.95) !important;
 }
 
 /* Panel Content Container */

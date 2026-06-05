@@ -1809,11 +1809,8 @@ onUnmounted(() => {
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   border-radius: 16px;
-  border: 1px solid rgba(212, 175, 55, 0.45);
-  box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.06),
-    0 8px 32px rgba(0, 0, 0, 0.55),
-    0 0 24px rgba(212, 175, 55, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.55);
 }
 
 .mode-tab {
@@ -1838,10 +1835,10 @@ onUnmounted(() => {
 }
 
 .mode-tab.active {
-  background: linear-gradient(135deg, rgba(212, 175, 55, 0.35) 0%, rgba(212, 175, 55, 0.18) 100%);
-  color: #ffe566;
-  border-color: rgba(212, 175, 55, 0.55);
-  box-shadow: 0 2px 12px rgba(212, 175, 55, 0.35);
+  background: rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.95);
+  border-color: rgba(255, 255, 255, 0.15);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
 .mode-tab i {
