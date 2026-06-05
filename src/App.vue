@@ -1829,9 +1829,10 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
-.mode-tab:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: rgba(255, 255, 255, 0.9);
+.mode-tab:hover:not(.active) {
+  background: linear-gradient(135deg, rgba(212, 175, 55, 0.22) 0%, rgba(212, 175, 55, 0.1) 100%);
+  color: #ffd700;
+  box-shadow: 0 2px 8px rgba(212, 175, 55, 0.2);
 }
 
 .mode-tab.active {

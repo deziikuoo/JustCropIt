@@ -1643,9 +1643,10 @@ h1 {
 }
 
 .photo-input:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: rgba(255, 255, 255, 0.9);
-  border-color: rgba(255, 255, 255, 0.12) !important;
+  background: linear-gradient(135deg, rgba(212, 175, 55, 0.22) 0%, rgba(212, 175, 55, 0.1) 100%);
+  color: #ffd700;
+  border-color: rgba(255, 255, 255, 0.08) !important;
+  box-shadow: 0 2px 8px rgba(212, 175, 55, 0.2), 0 8px 32px rgba(0, 0, 0, 0.55);
 }
 
 .photo-input::file-selector-button {
@@ -1663,8 +1664,9 @@ h1 {
 }
 
 .photo-input:hover::file-selector-button {
-  background: rgba(255, 255, 255, 0.12) !important;
-  color: rgba(255, 255, 255, 0.95) !important;
+  background: rgba(212, 175, 55, 0.18) !important;
+  color: #ffd700 !important;
+  border-color: rgba(212, 175, 55, 0.25) !important;
 }
 
 /* Panel Content Container */
