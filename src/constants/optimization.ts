@@ -39,7 +39,7 @@ export const DOWNLOAD_PARALLEL_BATCH_SIZE = 10;
 export const MAIN_THREAD_CHUNK_SIZE = 5;
 
 // Grid display / thumbnail pipeline
-export const THUMBNAIL_MAX_EDGE_PX = 320;
+export const THUMBNAIL_MAX_EDGE_PX = 400;
 export const THUMBNAIL_JPEG_QUALITY = 0.82;
 export const GRID_URL_LRU_MAX = 48;
 export const GRID_DECODE_CONCURRENCY = 6;

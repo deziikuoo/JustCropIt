@@ -28,9 +28,29 @@ interface Particle {
   maxOpacity: number;
   speed: number;
   phase: number;
-  vx: number; // Velocity X (movement speed in X direction)
-  vy: number; // Velocity Y (movement speed in Y direction)
+  vx: number;
+  vy: number;
+  color: string;
 }
+
+const PARTICLE_COLORS = [
+  "#000000",
+  "#1a1a1a",
+  "#2d2d2d",
+  "#ffffff",
+  "#fff9e6",
+  "#ffd700",
+  "#d4af37",
+  "#ffe566",
+];
+
+const SHINY_PARTICLE_COLORS = new Set([
+  "#ffffff",
+  "#fff9e6",
+  "#ffd700",
+  "#d4af37",
+  "#ffe566",
+]);
 
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 const notificationRef = ref<HTMLElement | null>(null);
@@ -38,31 +58,33 @@ let animationId: number | null = null;
 let particles: Particle[] = [];
 const isVisible = ref(true);
 const isFadingOut = ref(false);
-const isFadingIn = ref(true); // Track fade-in state
+const isFadingIn = ref(true);
 let dismissTimer: ReturnType<typeof setTimeout> | null = null;
 
-// Auto-dismiss after 12 seconds
 const DISPLAY_DURATION = 12000;
-
-const PARTICLE_COUNT = 15; // Sparse, premium feel
-const PARTICLE_COLOR = "#000000"; // Black particles
+const PARTICLE_COUNT = 12;
 
 const isMobile = () => window.innerWidth <= 768;
 
 const createParticle = (width: number, height: number): Particle => {
   const mobile = isMobile();
-  // Random velocity for floating movement - slow and smooth for high-tech vibe
   const baseVelocity = mobile ? 0.08 : 0.12;
+  const color = PARTICLE_COLORS[Math.floor(Math.random() * PARTICLE_COLORS.length)];
+  const isShiny = SHINY_PARTICLE_COLORS.has(color);
+
   return {
     x: Math.random() * width,
     y: Math.random() * height,
-    size: mobile ? 0.5 + Math.random() * 1 : 1 + Math.random() * 2,
+    size: mobile
+      ? (isShiny ? 0.8 + Math.random() * 1.2 : 0.5 + Math.random() * 1)
+      : (isShiny ? 1.2 + Math.random() * 2 : 1 + Math.random() * 2),
     opacity: 0,
-    maxOpacity: 0.5 + Math.random() * 0.4, // Increased from 0.3-0.8 to 0.5-0.9 for better visibility
-    speed: 0.005 + Math.random() * 0.015, // Opacity pulsing speed
+    maxOpacity: isShiny ? 0.75 + Math.random() * 0.25 : 0.45 + Math.random() * 0.45,
+    speed: 0.005 + Math.random() * 0.015,
     phase: Math.random() * Math.PI * 2,
-    vx: (Math.random() - 0.5) * baseVelocity, // Random X velocity
-    vy: (Math.random() - 0.5) * baseVelocity, // Random Y velocity
+    vx: (Math.random() - 0.5) * baseVelocity,
+    vy: (Math.random() - 0.5) * baseVelocity,
+    color,
   };
 };
 
@@ -81,30 +103,19 @@ const updateParticles = () => {
   const height = canvas.height;
 
   for (const particle of particles) {
-    // Update opacity pulsing
     particle.phase += particle.speed;
     if (particle.phase > Math.PI * 2) {
       particle.phase -= Math.PI * 2;
     }
     particle.opacity =
       ((Math.sin(particle.phase) + 1) / 2) * particle.maxOpacity;
-
-    // Update position based on velocity (floating movement)
     particle.x += particle.vx;
     particle.y += particle.vy;
 
-    // Wrap around edges for continuous floating effect (like particles in a contained space)
-    if (particle.x < 0) {
-      particle.x = width;
-    } else if (particle.x > width) {
-      particle.x = 0;
-    }
-
-    if (particle.y < 0) {
-      particle.y = height;
-    } else if (particle.y > height) {
-      particle.y = 0;
-    }
+    if (particle.x < 0) particle.x = width;
+    else if (particle.x > width) particle.x = 0;
+    if (particle.y < 0) particle.y = height;
+    else if (particle.y > height) particle.y = 0;
   }
 };
 
@@ -116,9 +127,23 @@ const drawParticles = (ctx: CanvasRenderingContext2D) => {
 
     ctx.beginPath();
     ctx.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
-    ctx.fillStyle = PARTICLE_COLOR;
+    ctx.fillStyle = particle.color;
     ctx.globalAlpha = particle.opacity;
     ctx.fill();
+
+    if (SHINY_PARTICLE_COLORS.has(particle.color)) {
+      ctx.beginPath();
+      ctx.arc(
+        particle.x - particle.size * 0.25,
+        particle.y - particle.size * 0.25,
+        particle.size * 0.35,
+        0,
+        Math.PI * 2,
+      );
+      ctx.fillStyle = "#ffffff";
+      ctx.globalAlpha = particle.opacity * 0.65;
+      ctx.fill();
+    }
   }
 
   ctx.globalAlpha = 1;
@@ -133,7 +158,6 @@ const animate = () => {
 
   updateParticles();
   drawParticles(ctx);
-
   animationId = requestAnimationFrame(animate);
 };
 
@@ -145,26 +169,21 @@ const handleResize = () => {
   const rect = notification.getBoundingClientRect();
   canvas.width = rect.width;
   canvas.height = rect.height;
-
   initParticles(canvas.width, canvas.height);
 };
 
 const handleClose = () => {
-  // Cancel auto-dismiss timer if it's running
   if (dismissTimer !== null) {
     clearTimeout(dismissTimer);
     dismissTimer = null;
   }
-  // Start fade out
   isFadingOut.value = true;
-  // Hide after fade animation completes
   setTimeout(() => {
     isVisible.value = false;
-  }, 300); // Match CSS transition duration
+  }, 300);
 };
 
 const startDismissTimer = () => {
-  // Start fade out slightly before hiding
   dismissTimer = setTimeout(() => {
     handleClose();
   }, DISPLAY_DURATION);
@@ -175,7 +194,6 @@ onMounted(() => {
   const notification = notificationRef.value;
   if (!canvas || !notification) return;
 
-  // Initialize canvas size
   const rect = notification.getBoundingClientRect();
   canvas.width = rect.width;
   canvas.height = rect.height;
@@ -184,13 +202,11 @@ onMounted(() => {
   animate();
   startDismissTimer();
 
-  // Remove fade-in class after animation completes
   setTimeout(() => {
     isFadingIn.value = false;
-  }, 300); // Match CSS transition duration
+  }, 300);
 
   window.addEventListener("resize", handleResize, { passive: true });
-  // Also resize on next tick in case notification size changes
   setTimeout(handleResize, 100);
 });
 
@@ -207,44 +223,47 @@ onUnmounted(() => {
 
 <style scoped>
 .deletion-notification {
-  position: fixed;
-  bottom: calc(20px + env(safe-area-inset-bottom, 0px));
-  left: 50%;
+  position: relative;
   display: flex;
   align-items: center;
-  justify-content: center;
-  transform: translateX(-50%);
-  padding: 10px;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 5px 10px;
   background: linear-gradient(
     135deg,
-    #708090 0%,
-    #8892a0 30%,
-    #ffffff 70%,
-    #ffffff 100%
+    #9a7b0a 0%,
+    #d4af37 30%,
+    #ffd700 65%,
+    #ffe566 100%
   );
-  border-radius: var(--border-radius);
-  min-width: 280px;
-  max-width: 90%;
-  height: 50px;
-  max-height: 50px;
-  box-shadow: var(--shadow-md);
+  border-radius: 9px;
+  border: 1px solid rgba(212, 175, 55, 0.55);
+  width: auto;
+  min-width: 0;
+  max-width: min(280px, calc(100vw - 24px));
+  min-height: 30px;
+  height: auto;
+  max-height: none;
+  box-shadow:
+    0 3px 12px rgba(212, 175, 55, 0.3),
+    0 1px 4px rgba(0, 0, 0, 0.2);
   backdrop-filter: blur(8px);
-  overflow: visible;
-  z-index: 1000;
+  overflow: hidden;
+  z-index: 1;
   transition: opacity 0.3s ease-out, transform 0.3s ease-out;
   opacity: 1;
 }
 
 .fade-in {
   opacity: 0;
-  transform: translateX(-50%) translateY(20px);
-  animation: fadeInUp 0.3s ease-out forwards;
+  transform: translateY(-10px);
+  animation: fadeInDown 0.3s ease-out forwards;
 }
 
-@keyframes fadeInUp {
+@keyframes fadeInDown {
   to {
     opacity: 1;
-    transform: translateX(-50%) translateY(0);
+    transform: translateY(0);
   }
 }
 
@@ -256,41 +275,46 @@ onUnmounted(() => {
   height: 100%;
   pointer-events: none;
   z-index: 1;
+  border-radius: inherit;
 }
 
 .notification-content {
   position: relative;
   z-index: 2;
+  min-width: 0;
+  flex: 1;
+  padding-right: 4px;
 }
 
 .notification-text {
   margin: 0;
-  font-size: 0.875rem;
-  font-weight: 500;
-  color: rgba(0, 0, 0, 0.87);
-  text-align: center;
-  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.5);
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: rgba(20, 14, 4, 0.92);
+  text-align: left;
+  line-height: 1.25;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.25);
+  white-space: nowrap;
 }
 
 .notification-close {
-  position: absolute;
-  top: -5%;
-  right: -1%;
-  background: none !important;
+  position: relative;
+  flex-shrink: 0;
+  background: transparent !important;
   border: none !important;
-  color: rgba(0, 0, 0, 0.87);
+  color: rgba(20, 14, 4, 0.85);
   cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.2s ease-in-out;
+  opacity: 0.7;
+  transition: opacity 0.2s ease-in-out, background 0.2s ease;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
-  font-size: 0.75rem;
-  z-index: 1001;
+  width: 20px;
+  height: 20px;
+  font-size: 0.68rem;
+  z-index: 3;
   padding: 0 !important;
-  border-radius: 0 !important;
+  border-radius: 50% !important;
   box-shadow: none !important;
   transform: none !important;
   backdrop-filter: none !important;
@@ -303,35 +327,38 @@ onUnmounted(() => {
 
 .notification-close:hover {
   opacity: 1 !important;
+  background: rgba(20, 14, 4, 0.12) !important;
 }
 
 @media (max-width: 768px) {
   .deletion-notification {
-    bottom: calc(16px + env(safe-area-inset-bottom, 0px));
-    min-width: 240px;
+    max-width: min(240px, calc(100vw - 24px));
+    padding: 4px 9px;
+    min-height: 28px;
   }
 
   .notification-text {
-    font-size: 0.8125rem;
+    font-size: 0.64rem;
   }
 }
 
 @media (max-width: 480px) {
   .deletion-notification {
-    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
-    padding: 10px 16px;
-    min-width: 200px;
-    max-width: calc(100% - 24px);
+    padding: 4px 8px;
+    gap: 6px;
+    min-height: 26px;
+    max-width: min(220px, calc(100vw - 16px));
   }
 
   .notification-text {
-    font-size: 0.75rem;
+    font-size: 0.6rem;
+    white-space: normal;
   }
 }
 
-.fade-out {
+.deletion-notification.fade-out {
   opacity: 0;
-  transform: translateX(-50%) translateY(20px);
+  transform: translateY(-10px);
   transition: opacity 0.3s ease-out, transform 0.3s ease-out;
 }
 </style>

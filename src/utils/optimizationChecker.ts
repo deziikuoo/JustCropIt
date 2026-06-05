@@ -109,7 +109,7 @@ export function runOptimizationChecks(): OptimizationCheckResult[] {
 
   // --- Phase 0: Grid memory foundation ---
   const gridConstantsOk =
-    THUMBNAIL_MAX_EDGE_PX === 320 &&
+    THUMBNAIL_MAX_EDGE_PX === 400 &&
     GRID_URL_LRU_MAX === 48 &&
     GRID_DECODE_CONCURRENCY === 6 &&
     getThumbnailCacheKey('photo-test', 0) === 'photo-test:0';

@@ -138,7 +138,7 @@ function onEndInput(event: Event) {
 
 <style scoped>
 .video-trimmer {
-  margin-bottom: 8px;
+  margin-bottom: 0;
 }
 
 .video-trimmer.disabled {
@@ -150,8 +150,8 @@ function onEndInput(event: Event) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
+  gap: 16px;
+  margin-bottom: 20px;
 }
 
 .option-label {
@@ -166,7 +166,7 @@ function onEndInput(event: Event) {
 .trim-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 12px;
 }
 
 .trim-action-btn {
@@ -204,9 +204,9 @@ function onEndInput(event: Event) {
 .trim-summary {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 12px;
   align-items: baseline;
-  margin-bottom: 12px;
+  margin-bottom: 20px;
   font-size: 0.9rem;
   color: rgba(255, 255, 255, 0.9);
   font-variant-numeric: tabular-nums;
@@ -221,7 +221,7 @@ function onEndInput(event: Event) {
   position: relative;
   height: 8px;
   border-radius: 4px;
-  margin-bottom: 16px;
+  margin-bottom: 24px;
   overflow: hidden;
 }
 
@@ -244,13 +244,13 @@ function onEndInput(event: Event) {
 .trim-sliders {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 18px;
 }
 
 .trim-slider-row {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 16px;
 }
 
 .trim-slider-label {
@@ -289,7 +289,7 @@ function onEndInput(event: Event) {
 }
 
 .trim-hint {
-  margin: 12px 0 0;
+  margin: 20px 0 0;
   font-size: 0.78rem;
   color: rgba(255, 255, 255, 0.45);
 }

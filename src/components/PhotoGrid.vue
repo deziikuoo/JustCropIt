@@ -1,67 +1,159 @@
 <template>
-  <div class="photoGrid-container" @dblclick="handleContainerDoubleClick">
+  <div class="photoGrid-container" ref="photoGridContainerRef" @dblclick="handleContainerDoubleClick">
     <div class="header">
-      <h1>JustCropIt</h1>
-      <div class="photo-input-wrapper">
-        <input
-          class="photo-input"
-          type="file"
-          multiple
-          accept="image/*"
-          @change="$emit('upload', $event)"
-        />
+      <div class="photo-input-wrapper" ref="photoInputWrapperRef">
+        <label class="photo-input-label">
+          <span class="photo-input-label__text">Choose Files</span>
+          <input
+            class="photo-input-native"
+            type="file"
+            multiple
+            accept="image/*"
+            @change="$emit('upload', $event)"
+          />
+        </label>
       </div>
     </div>
     <div class="grid-wrapper" ref="gridWrapperRef">
-      <div
-        class="select-controls-above-grid"
-        :class="{ 'select-mode-active': selectMode }"
-        v-show="photos.length > 0"
-      >
-        <label v-show="selectMode">
-          <input
-            type="checkbox"
-            :checked="allSelected"
-            @change="handleToggleSelectAll($event)"
-          />
-          {{ hasSelection ? "Deselect All" : "Select All" }}
-        </label>
-        <button
-          class="Select"
-          @click="handleSelectModeClick"
-          :title="selectMode ? 'Exit Select Mode' : 'Enter Select Mode'"
-        >
-          {{ selectMode ? "Exit Select" : "Select" }}
-        </button>
-      </div>
-      <div class="grid-tools-wrapper">
-        <aside
-          class="tools-panel"
-          :class="{ 'tools-panel--collapsed': leftSidebarCollapsed }"
+      <div class="grid-tools-wrapper" ref="gridToolsWrapperRef">
+        <div
           v-show="photos.length > 0"
-          role="toolbar"
-          aria-label="Batch editing tools"
+          ref="toolsSidebarColumnRef"
+          class="tools-sidebar-column"
+          :class="{ 'tools-sidebar-column--expanded': !leftSidebarCollapsed }"
         >
-          <!-- Collapse/Expand Toggle -->
-          <button
-            class="tools-panel__toggle"
-            @click="leftSidebarCollapsed = !leftSidebarCollapsed"
-            :aria-expanded="!leftSidebarCollapsed"
-            aria-controls="tools-panel-content"
-            :title="
-              leftSidebarCollapsed ? 'Expand toolbar' : 'Collapse toolbar'
-            "
+          <div
+            ref="toolsSidebarStackRef"
+            class="tools-sidebar-stack"
+            :class="{ 'tools-sidebar-stack--in-flow': !toolsStackIsFixed }"
+            :style="toolsStackFixedStyle"
           >
-            <i
-              class="fas"
-              :class="
-                leftSidebarCollapsed ? 'fa-angles-right' : 'fa-angles-left'
-              "
-            ></i>
-          </button>
+            <div class="tools-sidebar-stack__group">
+              <div
+                ref="toolsSidebarControlsRef"
+                class="tools-sidebar-stack__controls"
+              >
+                <div
+                  class="tools-sidebar-stack__file"
+                  :class="{
+                    'is-active': floatingFileInputVisible,
+                    'fade-out': floatingFileInputFading,
+                  }"
+                >
+                  <label class="photo-input-label photo-input-label--floating">
+                    <span class="photo-input-label__text">Choose Files</span>
+                    <input
+                      class="photo-input-native"
+                      type="file"
+                      multiple
+                      accept="image/*"
+                      aria-label="Choose files"
+                      @change="handleFloatingUpload"
+                    />
+                  </label>
+                </div>
 
-          <!-- Panel Content -->
-          <div id="tools-panel-content" class="tools-panel__content">
+                <button
+                  type="button"
+                  class="tools-panel__toggle"
+                  :class="{ 'tools-panel__toggle--expanded': !leftSidebarCollapsed }"
+                  @click="leftSidebarCollapsed ? expandToolkit() : collapseToolkit()"
+                  :aria-expanded="!leftSidebarCollapsed"
+                  aria-controls="tools-panel-content"
+                  title="Batch Edit"
+                >
+                  <i class="fas fa-wrench" aria-hidden="true"></i>
+                  <span class="tools-panel__toggle-label">Batch Edit</span>
+                </button>
+              </div>
+
+              <aside
+                v-show="!leftSidebarCollapsed"
+                class="tools-panel"
+                role="toolbar"
+                aria-label="Batch editing tools"
+              >
+            <!-- Panel Content -->
+            <div id="tools-panel-content" class="tools-panel__content">
+              <div class="tools-panel__header">
+                <button
+                  v-show="!leftSidebarCollapsed"
+                  type="button"
+                  class="tools-panel__close"
+                  @click="collapseToolkit"
+                  aria-label="Collapse toolbar"
+                  title="Collapse toolbar"
+                >
+                  <i class="fas fa-xmark"></i>
+                </button>
+
+                <div class="tools-panel__total-count">
+                  <PrimaryPhotoCounter
+                    embedded
+                    header
+                    :photo-count="photos.length"
+                  />
+                </div>
+
+                <div
+                  class="tools-panel__activity-row"
+                  :class="{ 'is-dual': addedActivityVisible && deletedActivityVisible }"
+                >
+                  <div
+                    class="tools-panel__activity-slot"
+                    :class="{ 'is-visible': addedActivityVisible }"
+                  >
+                    <PhotoCounter
+                      embedded
+                      header
+                      :photo-count="photos.length"
+                      :new-photos-count="newPhotosCount"
+                      @visibility-change="addedActivityVisible = $event"
+                    />
+                  </div>
+                  <div
+                    class="tools-panel__activity-slot"
+                    :class="{ 'is-visible': deletedActivityVisible }"
+                  >
+                    <DeletedCounter
+                      embedded
+                      header
+                      :deleted-photos-count="deletedPhotosCount"
+                      @visibility-change="deletedActivityVisible = $event"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <!-- Select Mode Controls -->
+              <section
+                class="tools-section tools-section--select"
+                aria-labelledby="select-heading"
+              >
+                <h3 id="select-heading" class="tools-section__heading">
+                  <i class="fas fa-mouse-pointer"></i>
+                  <span>Selection</span>
+                </h3>
+                <div class="tools-panel__select-controls">
+                  <label class="tools-panel__select-all">
+                    <input
+                      type="checkbox"
+                      :checked="allSelected"
+                      @change="handleToggleSelectAll($event)"
+                    />
+                    <span>{{ hasSelection ? "Deselect All" : "Select All" }}</span>
+                  </label>
+                  <SelectCounter
+                    embedded
+                    inline
+                    :selected-count="displayedSelectedCount"
+                    :total-photos="photos.length"
+                  />
+                </div>
+              </section>
+
+              <div class="tools-divider" v-show="selectMode"></div>
+
             <!-- Transform Tools Section -->
             <section
               class="tools-section"
@@ -185,17 +277,13 @@
               </section>
             </template>
 
-            <!-- Empty State when not in select mode -->
-            <div
-              class="tools-empty-state"
-              v-show="!selectMode && !hasCopiedSettings"
-            >
-              <i class="fas fa-hand-pointer"></i>
-              <p>Enter select mode to access batch tools</p>
+          </div>
+              </aside>
             </div>
           </div>
-        </aside>
-        <div class="grid" :style="{ gridTemplateColumns: currentGridTemplate, '--item-size': itemMinWidth + 'px' }" ref="gridRef">
+        </div>
+
+        <div class="grid" :style="{ gridTemplateColumns: currentGridTemplate, '--item-size': gridCellSizePx + 'px' }" ref="gridRef">
           <div 
             v-if="spacerBeforeHeight > 0" 
             class="virtual-spacer" 
@@ -231,7 +319,7 @@
             :entrance-delay-ms="getEntranceDelayMs(visibleRange.start + index)"
             :allow-transition="allowGridAnimation"
             :drag-selecting="isDragSelecting"
-            :item-size="itemMinWidth + 'px'"
+            :item-size="gridCellSizePx + 'px'"
             :register-card-ref="(el) => setPhotoCardRef(el, visibleRange.start + index)"
             @click="handlePhotoCardClick(visibleRange.start + index, $event)"
             @mousedown="handlePhotoCardMouseDown(visibleRange.start + index, $event)"
@@ -258,31 +346,6 @@
       </div>
     </div>
   </div>
-  <div class="RightSide-container">
-    <div
-      class="size-controls-container"
-      :class="{ dimmed: sizeControlsDimmed }"
-      @mouseenter="handleSizeControlsMouseEnter"
-      @mouseleave="handleSizeControlsMouseLeave"
-      v-show="photos.length > 0"
-    >
-      <div class="photos-size-controls">
-        <label>Size:</label>
-        <div class="size-buttons-container">
-          <button
-            v-for="(size, index) in photoSizes"
-            :key="index"
-            @click="selectedPhotoSize = index"
-            :class="{ active: selectedPhotoSize === index }"
-            class="size-button"
-            :title="size.label"
-          >
-            {{ size.label }}
-          </button>
-        </div>
-      </div>
-    </div>
-  </div>
 </template>
 
 <script setup lang="ts">
@@ -293,6 +356,7 @@ import {
   onUnmounted,
   computed,
   toRef,
+  nextTick,
 } from "vue";
 import { useTouchCapability } from "../composables/useTouchCapability";
 import { usePinchZoom } from "../composables/usePinchZoom";
@@ -306,6 +370,10 @@ import { useGridIdlePrefetch } from "../composables/useGridIdlePrefetch";
 import { useMediaQuery, useThrottleFn } from "@vueuse/core";
 import { thumbhashToDataUrl } from "../utils/thumbhashDecode";
 import PhotoCard from "./PhotoCard.vue";
+import PhotoCounter from "./PhotoCounter.vue";
+import DeletedCounter from "./DeletedCounter.vue";
+import PrimaryPhotoCounter from "./PrimaryPhotoCounter.vue";
+import SelectCounter from "./SelectCounter.vue";
 import type { Photo } from "../types/photo";
 import { VIEWABILITY_THROTTLE_MS } from "../constants/optimization";
 import { GridUrlCache } from "../utils/gridUrlCache";
@@ -316,13 +384,34 @@ import {
   revokePhotoCacheKey,
 } from "../utils/gridUrlSync";
 
-const props = defineProps<{
-  photos: Photo[];
-  selectedIndices: number[];
-  hasSelection: boolean;
-  allSelected: boolean;
-  hasCopiedSettings: boolean;
-}>();
+const props = withDefaults(
+  defineProps<{
+    photos: Photo[];
+    selectedIndices: number[];
+    hasSelection: boolean;
+    allSelected: boolean;
+    hasCopiedSettings: boolean;
+    newPhotosCount?: number;
+    deletedPhotosCount?: number;
+    dragSelectionCount?: number | null;
+    selectedPhotoSize?: number;
+  }>(),
+  {
+    newPhotosCount: 0,
+    deletedPhotosCount: 0,
+    dragSelectionCount: null,
+    selectedPhotoSize: 2,
+  },
+);
+
+const displayedSelectedCount = computed(() =>
+  props.dragSelectionCount !== null && props.dragSelectionCount !== undefined
+    ? props.dragSelectionCount
+    : props.selectedIndices.length,
+);
+
+const addedActivityVisible = ref(false);
+const deletedActivityVisible = ref(false);
 
 const emit = defineEmits<{
   (e: "upload", event: Event): void;
@@ -345,6 +434,7 @@ const emit = defineEmits<{
   (e: "deselect-multiple", indices: number[]): void;
   (e: "drag-selection-progress", count: number): void;
   (e: "photo-thumbnail-updated", index: number, thumbnail: File, thumbhash?: string | null): void;
+  (e: "update:selectedPhotoSize", value: number): void;
 }>();
 
 const isSmallScreen = useMediaQuery('(max-width: 480px)');
@@ -374,8 +464,155 @@ const getPlaceholderPreviewUrl = (photo: Photo): string | null => {
 };
 
 
+const photoInputWrapperRef = ref<HTMLElement | null>(null);
+const primaryFileInputVisible = ref(true);
+
+const showFloatingFileInput = computed(
+  () => props.photos.length > 0 && !primaryFileInputVisible.value,
+);
+
+const floatingFileInputVisible = ref(false);
+const floatingFileInputFading = ref(false);
+const FLOATING_FILE_FADE_MS = 500;
+let floatingFileFadeTimer: ReturnType<typeof setTimeout> | null = null;
+
+const TOOLS_STACK_FIXED_BREAKPOINT = 900;
+const toolsSidebarColumnRef = ref<HTMLElement | null>(null);
+const toolsSidebarStackRef = ref<HTMLElement | null>(null);
+const photoGridContainerRef = ref<HTMLElement | null>(null);
+const gridToolsWrapperRef = ref<HTMLElement | null>(null);
+const toolsStackLeftPx = ref(0);
+const toolsStackWidthPx = ref(0);
+const toolsStackIsFixed = ref(true);
+let toolsStackPositionObserver: ResizeObserver | null = null;
+
+const isToolsStackFixedViewport = () =>
+  typeof window !== "undefined" &&
+  window.innerWidth > TOOLS_STACK_FIXED_BREAKPOINT;
+
+const updateToolsStackPosition = () => {
+  const columnEl = toolsSidebarColumnRef.value;
+  const fixed = isToolsStackFixedViewport();
+  toolsStackIsFixed.value = fixed;
+
+  if (!columnEl || !fixed) {
+    toolsStackLeftPx.value = 0;
+    toolsStackWidthPx.value = 0;
+    return;
+  }
+
+  const stackEl = toolsSidebarStackRef.value;
+  const stackWidth = stackEl
+    ? Math.max(Math.round(stackEl.getBoundingClientRect().width), 1)
+    : 0;
+
+  const containerLeft =
+    photoGridContainerRef.value?.getBoundingClientRect().left ?? 0;
+
+  const minLeft = 12;
+  const centeredLeft = Math.max(
+    minLeft,
+    Math.round((containerLeft - stackWidth) / 2),
+  );
+
+  toolsStackLeftPx.value = centeredLeft;
+  toolsStackWidthPx.value = stackWidth;
+};
+
+const throttledUpdateToolsStackPosition = useThrottleFn(
+  updateToolsStackPosition,
+  16,
+);
+
+const toolsStackFixedStyle = computed(() => {
+  if (!toolsStackIsFixed.value) {
+    return undefined;
+  }
+  return {
+    left: `${toolsStackLeftPx.value}px`,
+  };
+});
+
+let photoInputObserver: IntersectionObserver | null = null;
+
+const observeToolsSidebarColumn = () => {
+  const columnEl = toolsSidebarColumnRef.value;
+  if (!columnEl) return;
+
+  toolsStackPositionObserver?.disconnect();
+  toolsStackPositionObserver = new ResizeObserver(() =>
+    throttledUpdateToolsStackPosition(),
+  );
+  toolsStackPositionObserver.observe(columnEl);
+
+  if (gridToolsWrapperRef.value) {
+    toolsStackPositionObserver.observe(gridToolsWrapperRef.value);
+  }
+
+  const containerEl = photoGridContainerRef.value;
+  if (containerEl) {
+    toolsStackPositionObserver.observe(containerEl);
+  }
+
+  const stackEl = toolsSidebarStackRef.value;
+  if (stackEl) {
+    toolsStackPositionObserver.observe(stackEl);
+  }
+};
+
 onMounted(() => {
-  resetSizeControlsDimTimer();
+  requestAnimationFrame(() => {
+    observeToolsSidebarColumn();
+    updateToolsStackPosition();
+
+    if (photoInputWrapperRef.value) {
+      photoInputObserver = new IntersectionObserver(
+        ([entry]) => {
+          primaryFileInputVisible.value = entry.isIntersecting;
+        },
+        { threshold: 0, rootMargin: "0px" },
+      );
+      photoInputObserver.observe(photoInputWrapperRef.value);
+    }
+  });
+
+  window.addEventListener("scroll", throttledUpdateToolsStackPosition, {
+    passive: true,
+  });
+  window.addEventListener("resize", throttledUpdateToolsStackPosition, {
+    passive: true,
+  });
+});
+
+watch(
+  () => props.photos.length,
+  async () => {
+    await nextTick();
+    observeToolsSidebarColumn();
+    updateToolsStackPosition();
+  },
+);
+
+watch(showFloatingFileInput, (shouldShow) => {
+  if (shouldShow) {
+    if (floatingFileFadeTimer) {
+      clearTimeout(floatingFileFadeTimer);
+      floatingFileFadeTimer = null;
+    }
+    floatingFileInputFading.value = false;
+    floatingFileInputVisible.value = true;
+    requestAnimationFrame(updateToolsStackPosition);
+    return;
+  }
+
+  if (!floatingFileInputVisible.value) return;
+
+  floatingFileInputFading.value = true;
+  floatingFileFadeTimer = setTimeout(() => {
+    floatingFileInputVisible.value = false;
+    floatingFileInputFading.value = false;
+    floatingFileFadeTimer = null;
+  }, FLOATING_FILE_FADE_MS);
 });
 
 onUnmounted(() => {
@@ -400,15 +637,24 @@ onUnmounted(() => {
   dragIntent.value = "undetermined";
   touchStartPosition.value = null;
 
-  // Clean up size controls dim timer
-  if (sizeControlsDimTimer) {
-    clearTimeout(sizeControlsDimTimer);
-    sizeControlsDimTimer = null;
+  photoInputObserver?.disconnect();
+  photoInputObserver = null;
+  toolsStackPositionObserver?.disconnect();
+  toolsStackPositionObserver = null;
+  window.removeEventListener("scroll", throttledUpdateToolsStackPosition);
+  window.removeEventListener("resize", throttledUpdateToolsStackPosition);
+  if (floatingFileFadeTimer) {
+    clearTimeout(floatingFileFadeTimer);
+    floatingFileFadeTimer = null;
   }
 });
 
 const isSelected = (index: number): boolean =>
   props.selectedIndices.includes(index);
+
+const handleFloatingUpload = (event: Event) => {
+  emit("upload", event);
+};
 
 const handleToggleSelectAll = (event: Event) => {
   const target = event.target as HTMLInputElement;
@@ -424,60 +670,31 @@ const holdTimeout = ref<ReturnType<typeof setTimeout> | null>(null);
 const isHolding = ref(false);
 const heldPhotoIndex = ref<number | null>(null);
 const justActivatedSelectMode = ref(false);
-const leftSidebarCollapsed = ref(false);
-const sizeControlsDimmed = ref(false);
-let sizeControlsDimTimer: ReturnType<typeof setTimeout> | null = null;
+const leftSidebarCollapsed = ref(true);
 
 // Drag detection for activating select mode
 const dragDetectionActive = ref(false);
 const dragStartPosition = ref<{ x: number; y: number } | null>(null);
 const dragDetectionThreshold = 10; // pixels of movement to detect drag
 
-// Watch collapse state and update CSS variable for photo-counter positioning
-// tools-container: 75% of 11.3% (LeftSide-container) when expanded, 50px/45px when collapsed
-// Calculate the difference to move photo-counter left when collapsed
-const updateToolsContainerMovement = () => {
-  if (typeof document === "undefined" || typeof window === "undefined") return;
-
-  const leftSidebarCollapsedValue = leftSidebarCollapsed.value;
-  const isMobile = window.innerWidth <= 480;
-  const isTablet = window.innerWidth <= 768;
-
-  if (leftSidebarCollapsedValue) {
-    const leftSideWidth = window.innerWidth * 0.113; // 11.3% of viewport
-    const toolsExpandedWidth = leftSideWidth * 0.75; // 75% of left side
-    const toolsCollapsedWidth = isMobile ? 45 : isTablet ? 50 : 50; // Responsive collapsed width
-    const movement = toolsExpandedWidth - toolsCollapsedWidth;
-    document.documentElement.style.setProperty(
-      "--tools-container-movement",
-      `${movement}px`,
-    );
-    // Add left margin when collapsed (e.g., 12px spacing from collapsed container)
-    document.documentElement.style.setProperty(
-      "--photo-counter-collapsed-margin",
-      "12px",
-    );
+const syncSelectModeWithToolkit = (collapsed: boolean) => {
+  if (collapsed) {
+    if (selectMode.value) {
+      emit("toggle-select-all", false);
+    }
+    selectMode.value = false;
   } else {
-    document.documentElement.style.setProperty(
-      "--tools-container-movement",
-      "0px",
-    );
-    document.documentElement.style.setProperty(
-      "--photo-counter-collapsed-margin",
-      "0px",
-    );
+    selectMode.value = true;
   }
 };
 
-watch(leftSidebarCollapsed, updateToolsContainerMovement, { immediate: true });
+watch(leftSidebarCollapsed, syncSelectModeWithToolkit, { immediate: true });
 
-// Also update on window resize to recalculate movement
-if (typeof window !== "undefined") {
-  window.addEventListener("resize", updateToolsContainerMovement, { passive: true });
-  onUnmounted(() => {
-    window.removeEventListener("resize", updateToolsContainerMovement);
-  });
-}
+watch(leftSidebarCollapsed, () => {
+  requestAnimationFrame(updateToolsStackPosition);
+  // Column width animates over 220ms when expanding/collapsing
+  setTimeout(updateToolsStackPosition, 240);
+});
 
 // Drag-to-select state
 const isDragSelecting = ref(false);
@@ -771,12 +988,12 @@ const handleDragEnd = () => {
   document.removeEventListener("touchcancel", handleDragEnd);
 };
 
-const handleSelectModeClick = () => {
-  if (selectMode.value) {
-    // Exiting select mode - deselect all images
-    emit("toggle-select-all", false);
-  }
-  selectMode.value = !selectMode.value;
+const expandToolkit = () => {
+  leftSidebarCollapsed.value = false;
+};
+
+const collapseToolkit = () => {
+  leftSidebarCollapsed.value = true;
 };
 
 const handleContainerDoubleClick = (event: MouseEvent) => {
@@ -798,9 +1015,8 @@ const handleContainerDoubleClick = (event: MouseEvent) => {
     return;
   }
 
-  // Double-clicked outside photo cards and interactive elements - exit select mode
-  emit("toggle-select-all", false);
-  selectMode.value = false;
+  // Double-clicked outside photo cards and interactive elements - collapse toolkit
+  collapseToolkit();
 };
 
 const handlePhotoCardMouseDown = (index: number, event: MouseEvent) => {
@@ -851,9 +1067,9 @@ const handlePhotoCardMouseDown = (index: number, event: MouseEvent) => {
         holdTimeout.value = null;
       }
 
-      // Activate select mode
-      if (!selectMode.value) {
-        selectMode.value = true;
+      // Expand toolkit (enables select mode) via drag gesture
+      if (leftSidebarCollapsed.value) {
+        expandToolkit();
         justActivatedSelectMode.value = true;
       }
 
@@ -871,12 +1087,12 @@ const handlePhotoCardMouseDown = (index: number, event: MouseEvent) => {
     document.removeEventListener("mousemove", handleDragDetectionMove);
     document.removeEventListener("mouseup", handleDragDetectionEnd);
 
-    // If we didn't activate select mode via drag, continue with hold logic
-    if (!selectMode.value && isHolding.value) {
-      // Set timeout to activate select mode after 500ms of holding
+    // If we didn't expand via drag, continue with hold logic
+    if (leftSidebarCollapsed.value && isHolding.value) {
+      // Set timeout to expand toolkit after 500ms of holding
       holdTimeout.value = setTimeout(() => {
-        if (isHolding.value && !selectMode.value) {
-          selectMode.value = true;
+        if (isHolding.value && leftSidebarCollapsed.value) {
+          expandToolkit();
           justActivatedSelectMode.value = true;
           // Also select the photo that was being held
           if (!isSelected(index)) {
@@ -924,8 +1140,8 @@ const handlePhotoCardTouchStart = (index: number, event: TouchEvent) => {
 
   // Set timeout to activate select mode after 500ms of holding
   holdTimeout.value = setTimeout(() => {
-    if (isHolding.value && !selectMode.value) {
-      selectMode.value = true;
+    if (isHolding.value && leftSidebarCollapsed.value) {
+      expandToolkit();
       justActivatedSelectMode.value = true;
       // Also select the photo that was being held
       if (!isSelected(index)) {
@@ -957,12 +1173,15 @@ const handlePhotoCardMouseUp = () => {
 const photoSizes = [
   { label: "XS", minSize: 180 },
   { label: "S", minSize: 220 },
-  { label: "M", minSize: 280 }, // Default
-  { label: "L", minSize: 350 },
-  { label: "XL", minSize: 400 },
+  { label: "M", minSize: 260 }, // Default
+  { label: "L", minSize: 310 },
+  { label: "XL", minSize: 360 },
 ];
 
-const selectedPhotoSize = ref(2); // Default to medium (index 2)
+const selectedPhotoSize = computed({
+  get: () => props.selectedPhotoSize,
+  set: (value: number) => emit("update:selectedPhotoSize", value),
+});
 const allowGridAnimation = ref(true);
 
 watch(selectedPhotoSize, () => {
@@ -1053,29 +1272,15 @@ const gap = computed(() => {
 });
 
 const itemMinWidth = computed(() => {
+  const presetSize = photoSizes[selectedPhotoSize.value].minSize;
+
   if (isSmallScreen.value) {
     const containerWidth = typeof window !== 'undefined' ? window.innerWidth - 16 : 300;
-    if (selectedPhotoSize.value === 4) {
-      return containerWidth - 12;
-    }
-    const mobileSizeMap: Record<number, number> = {
-      0: Math.floor(containerWidth * 0.45),
-      1: Math.floor(containerWidth * 0.48),
-      2: Math.floor(containerWidth * 0.5),
-      3: Math.floor(containerWidth * 0.75),
-    };
-    const mobileSize = mobileSizeMap[selectedPhotoSize.value] || 140;
-    return Math.max(140, Math.min(mobileSize, containerWidth - 12));
+    const maxCell = containerWidth - 12;
+    return Math.max(140, Math.min(presetSize, maxCell));
   }
-  
-  if (selectedPhotoSize.value === 4) {
-    if (typeof window !== 'undefined') {
-      return (window.innerWidth * 0.774) - 64;
-    }
-    return 800;
-  }
-  
-  return photoSizes[selectedPhotoSize.value].minSize;
+
+  return presetSize;
 });
 
 const virtualScrollEnabled = computed(() =>
@@ -1083,12 +1288,14 @@ const virtualScrollEnabled = computed(() =>
 );
 
 const { visibleRange, spacerBeforeHeight, spacerAfterHeight } = useVirtualScroll({
-  totalItems: computed(() => props.photos.length),
-  itemMinWidth,
-  gap,
-  containerRef: gridRef,
-  enabled: virtualScrollEnabled
-});
+    totalItems: computed(() => props.photos.length),
+    itemMinWidth,
+    gap,
+    containerRef: gridRef,
+    enabled: virtualScrollEnabled,
+  });
+
+const gridCellSizePx = computed(() => itemMinWidth.value);
 
 const { mountedDisplayCount } = useBatchedGridMount(
   computed(() => props.photos.length),
@@ -1178,43 +1385,8 @@ watch(
 );
 
 const currentGridTemplate = computed(() => {
-  const size = photoSizes[selectedPhotoSize.value];
-
-  // On mobile, use progressive sizing to differentiate all sizes
-  if (typeof window !== "undefined" && window.innerWidth <= 480) {
-    // Calculate container width (accounting for padding: 8px on each side = 16px total)
-    const containerWidth = window.innerWidth - 16;
-
-    // XL on mobile should force single column (full width minus gap)
-    if (selectedPhotoSize.value === 4) {
-      const xlSize = containerWidth - 12; // Full width minus gap to ensure single column
-      return `repeat(auto-fill, minmax(${xlSize}px, 1fr))`;
-    }
-
-    // Mobile-specific size mapping for better differentiation
-    // Provides distinct sizes: XS < S < M < L < XL
-    const mobileSizeMap: Record<number, number> = {
-      0: Math.floor(containerWidth * 0.45), // XS: ~211px on 485px screen
-      1: Math.floor(containerWidth * 0.48), // S: ~225px
-      2: Math.floor(containerWidth * 0.5), // M: ~234px
-      3: Math.floor(containerWidth * 0.75), // L: ~352px (larger but still allows flexibility)
-    };
-
-    const mobileSize = mobileSizeMap[selectedPhotoSize.value];
-    // Use the mobile-specific size, ensuring it's reasonable
-    const finalSize = Math.max(140, Math.min(mobileSize, containerWidth - 12));
-
-    return `repeat(auto-fill, minmax(${finalSize}px, 1fr))`;
-  }
-
-  if (selectedPhotoSize.value === 4) {
-    // XL size - force single column on desktop, fit within side containers
-    // Use calc() with percentages to ensure it fits within photoGrid-container
-    // photoGrid-container is 77.4% of viewport (100% - 11.3% - 11.3%)
-    // Account for padding (40px total) and gap (24px)
-    return `repeat(auto-fill, minmax(calc(77.4vw - 64px), 1fr))`;
-  }
-  return `repeat(auto-fill, minmax(${size.minSize}px, 1fr))`;
+  // Fixed pixel columns so each size preset renders at a distinct cell width
+  return `repeat(auto-fill, ${itemMinWidth.value}px)`;
 });
 
 const handlePhotoCardClick = (index: number, event: Event) => {
@@ -1238,29 +1410,6 @@ const handlePhotoCardClick = (index: number, event: Event) => {
   }
 };
 
-const resetSizeControlsDimTimer = () => {
-  if (sizeControlsDimTimer) {
-    clearTimeout(sizeControlsDimTimer);
-    sizeControlsDimTimer = null;
-  }
-  sizeControlsDimmed.value = false;
-  // Start dim timer after 6 seconds
-  sizeControlsDimTimer = setTimeout(() => {
-    sizeControlsDimmed.value = true;
-  }, 6000);
-};
-
-const handleSizeControlsMouseEnter = () => {
-  sizeControlsDimmed.value = false;
-  if (sizeControlsDimTimer) {
-    clearTimeout(sizeControlsDimTimer);
-    sizeControlsDimTimer = null;
-  }
-};
-
-const handleSizeControlsMouseLeave = () => {
-  resetSizeControlsDimTimer();
-};
 </script>
 
 <style scoped>
@@ -1286,143 +1435,204 @@ const handleSizeControlsMouseLeave = () => {
    Inspired by Photoshop, Lightroom, Figma
    ============================================ */
 
-.tools-panel {
-  --panel-width: 180px;
-  --panel-bg: rgba(24, 24, 32, 0.98);
-  --panel-border: rgba(255, 255, 255, 0.08);
-  --panel-shadow:
-    0 4px 24px rgba(0, 0, 0, 0.5), 0 0 1px rgba(255, 255, 255, 0.1);
-  --toggle-size: 28px;
-  --section-gap: 12px;
-  --btn-radius: 8px;
-  --transition-panel: 280ms cubic-bezier(0.4, 0, 0.2, 1);
+.tools-sidebar-column {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  overflow: visible;
+}
 
-  position: sticky;
-  top: 20px;
-  width: var(--panel-width);
-  min-width: var(--panel-width);
-  height: fit-content;
-  max-height: calc(100vh - 40px);
+
+.tools-sidebar-stack {
+  position: fixed;
+  top: calc(96px + env(safe-area-inset-top, 0px));
+  left: 0;
+  width: max-content;
+  max-width: calc(100vw - 24px);
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  background: var(--panel-bg);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
-  border-radius: 0 14px 14px 0;
-  border: 1px solid var(--panel-border);
-  border-left: none;
-  box-shadow: var(--panel-shadow);
-  overflow: visible;
-  z-index: 100;
-  transition:
-    width var(--transition-panel),
-    min-width var(--transition-panel),
-    opacity var(--transition-panel),
-    transform var(--transition-panel);
-  align-self: flex-start;
-  margin-right: 16px;
-}
-
-/* Collapsed State */
-.tools-panel--collapsed {
-  width: 0 !important;
-  min-width: 0 !important;
-  border-color: transparent;
-  background: transparent;
-  box-shadow: none;
-  margin-right: 0;
-}
-
-.tools-panel--collapsed .tools-panel__content {
-  opacity: 0;
-  visibility: hidden;
+  align-items: center;
+  gap: 8px;
+  z-index: 1101;
   pointer-events: none;
 }
 
-.RightSide-container {
-  position: fixed;
-  right: 0;
-  top: 0;
-  width: 11.3%;
-  min-height: 100vh;
+.tools-sidebar-stack__group {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  justify-content: flex-start;
-  background: transparent;
-  z-index: 1000;
-  padding: 20px 0;
-  padding-left: 24px; /* Add padding to accommodate any future elements */
-  padding-right: env(safe-area-inset-right, 0px);
-  overflow-y: auto;
-  overflow-x: visible;
+  align-items: center;
+  gap: 8px;
+  width: max-content;
+  pointer-events: auto;
 }
 
-.size-controls-container {
-  position: relative;
-  width: 45%;
-  height: auto;
+.tools-sidebar-stack__controls {
   display: flex;
   flex-direction: column;
-  transform: translateX(117%);
-  background: transparent;
-  border-radius: var(--border-radius);
-  border: 2px solid var(--surface-border);
-  margin-bottom: 16px;
-  align-self: stretch;
-  overflow: visible;
-  transition: opacity 0.1s ease-in-out;
-}
-
-.size-controls-container.dimmed {
-  opacity: 0.4;
-}
-
-/* Toggle Button - Elegant Edge Tab */
-.tools-panel__toggle {
-  position: absolute;
-  left: calc(-1 * var(--toggle-size));
-  top: 50%;
-  transform: translateY(-50%);
-  width: var(--toggle-size);
-  height: 72px;
-  background: linear-gradient(
-    135deg,
-    rgba(40, 40, 52, 0.98) 0%,
-    rgba(30, 30, 40, 0.98) 100%
-  );
-  border: 1px solid var(--panel-border);
-  border-right: none;
-  border-radius: 10px 0 0 10px;
-  display: flex;
   align-items: center;
   justify-content: center;
+  gap: 8px;
+  width: max-content;
+  pointer-events: auto;
+}
+
+.tools-sidebar-stack--in-flow {
+  position: relative;
+  top: auto;
+  left: auto;
+  width: 100%;
+  z-index: 2;
+}
+
+.tools-sidebar-stack > * {
+  pointer-events: auto;
+}
+
+.tools-sidebar-stack__file {
+  opacity: 0;
+  visibility: hidden;
+  max-height: 0;
+  overflow: hidden;
+  flex-shrink: 0;
+  transition:
+    opacity 0.5s ease-out,
+    visibility 0.5s ease-out,
+    max-height 0.35s ease-out;
+  pointer-events: none;
+}
+
+.tools-sidebar-stack__file.is-active {
+  opacity: 1;
+  visibility: visible;
+  max-height: 48px;
+  overflow: visible;
+  padding-bottom: 2px;
+  pointer-events: auto;
+  display: flex;
+  justify-content: center;
+  width: 100%;
+}
+
+.tools-sidebar-stack__file.fade-out {
+  opacity: 0;
+}
+
+.tools-panel__toggle + .tools-panel {
+  margin-top: 6px;
+}
+
+.tools-panel__toggle--expanded {
+  opacity: 0.92;
+}
+
+.tools-panel {
+  --panel-bg: rgba(18, 18, 26, 0.98);
+  --panel-border: rgba(255, 255, 255, 0.08);
+  --panel-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+  --section-gap: 8px;
+  --btn-radius: 6px;
+  --transition-panel: 280ms cubic-bezier(0.4, 0, 0.2, 1);
+
+  position: relative;
+  top: auto;
+  left: auto;
+  width: max-content;
+  min-width: 0;
+  max-width: calc(100vw - 24px);
+  height: fit-content;
+  max-height: calc(
+    100vh - 96px - env(safe-area-inset-top, 0px) - 48px - env(safe-area-inset-bottom, 0px)
+  );
+  display: flex;
+  flex-direction: column;
+  background: var(--panel-bg);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-radius: 10px;
+  border: 1px solid var(--panel-border);
+  box-shadow: var(--panel-shadow);
+  overflow: visible;
+  z-index: 1100;
+  transition:
+    background var(--transition-panel),
+    border-color var(--transition-panel),
+    box-shadow var(--transition-panel);
+  margin-right: 0;
+  will-change: top;
+}
+
+.photo-input-label--floating {
+  width: fit-content;
+  max-width: 100%;
+  font-size: 0.68rem;
+  padding: 8px 14px;
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  box-sizing: border-box;
+  line-height: 1.3;
+}
+
+.photo-input-label--floating .photo-input-label__text {
+  font-size: 0.7rem;
+}
+
+/* Collapsed expand bar — matches photo-input / size-controls containers */
+.tools-panel__toggle {
+  position: relative;
+  top: auto;
+  left: auto;
+  transform: none;
+  width: fit-content;
+  min-height: 32px;
+  padding: 5px 8px;
+  border-radius: 10px;
+  background: rgba(18, 18, 26, 0.98);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--panel-border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   cursor: pointer;
-  color: rgba(255, 255, 255, 0.7);
-  font-size: 12px;
-  transition: all 200ms ease;
-  z-index: 101;
-  box-shadow: -2px 0 12px rgba(0, 0, 0, 0.3);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 13px;
+  transition:
+    background 200ms ease,
+    color 200ms ease,
+    box-shadow 200ms ease,
+    transform 200ms ease,
+    border-color 200ms ease;
+  z-index: 1101;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.55);
 }
 
-.tools-panel__toggle:hover {
-  background: linear-gradient(
-    135deg,
-    rgba(55, 55, 70, 0.98) 0%,
-    rgba(45, 45, 58, 0.98) 100%
-  );
-  color: rgba(255, 255, 255, 0.95);
-  width: 32px;
-  left: -32px;
+.tools-panel__toggle-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.15px;
+  white-space: nowrap;
 }
 
-.tools-panel__toggle:active {
+.tools-panel__toggle:hover:not(:disabled) {
   background: linear-gradient(
     135deg,
-    rgba(35, 35, 48, 0.98) 0%,
-    rgba(28, 28, 38, 0.98) 100%
+    rgba(212, 175, 55, 0.22) 0%,
+    rgba(212, 175, 55, 0.1) 100%
   );
-  transform: translateY(-50%) scale(0.98);
+  color: #ffd700;
+  border-color: rgba(255, 255, 255, 0.08);
+  transform: none;
+  box-shadow:
+    0 2px 8px rgba(212, 175, 55, 0.2),
+    0 8px 32px rgba(0, 0, 0, 0.55);
+}
+
+.tools-panel__toggle:active:not(:disabled) {
+  transform: scale(0.98);
 }
 
 .tools-panel__toggle:focus-visible {
@@ -1430,81 +1640,204 @@ const handleSizeControlsMouseLeave = () => {
   outline-offset: 2px;
 }
 
-.tools-panel__toggle i {
-  transition: transform 200ms ease;
+/* Collapse button — top left when expanded */
+.tools-panel__close {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 2;
+  padding: 0;
+  min-height: unset;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--panel-border);
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    background 200ms ease,
+    color 200ms ease,
+    border-color 200ms ease;
 }
 
-.tools-panel--collapsed .tools-panel__toggle {
-  border-radius: 0 10px 10px 0;
-  left: 0;
-  border-left: none;
-  border-right: 1px solid var(--panel-border);
-  box-shadow: 2px 0 12px rgba(0, 0, 0, 0.3);
+.tools-panel__close:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.95);
+  border-color: rgba(255, 255, 255, 0.2);
+  transform: none;
+  box-shadow: none;
 }
 
-.tools-panel--collapsed .tools-panel__toggle:hover {
-  left: 0;
+.tools-panel__close:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.tools-panel__close:focus-visible {
+  outline: 2px solid rgba(212, 175, 55, 0.6);
+  outline-offset: 2px;
+}
+
+.tools-panel__header {
+  position: relative;
+  flex-shrink: 0;
+  padding-top: 20px;
+  padding-bottom: 6px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.tools-panel__total-count {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  pointer-events: none;
+}
+
+.tools-panel__total-count :deep(.primary-photo-counter.embedded) {
+  width: auto;
+  height: auto;
+}
+
+.tools-panel__total-count :deep(.counter-label) {
+  font-size: 0.52rem;
+  letter-spacing: 0.35px;
+}
+
+.tools-panel__total-count :deep(.counter-value) {
+  font-size: 0.65rem;
+}
+
+.tools-panel__activity-slot :deep(.counter-value) {
+  font-size: 0.62rem;
+}
+
+.tools-panel__activity-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  min-height: 22px;
+  width: 100%;
+}
+
+.tools-panel__activity-row.is-dual {
+  gap: 8px;
+}
+
+.tools-panel__activity-slot {
+  display: none;
+  height: 22px;
+  min-height: 22px;
+  flex-shrink: 0;
+  overflow: visible;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+}
+
+.tools-panel__activity-slot.is-visible {
+  display: flex;
+}
+
+.tools-panel__activity-slot :deep(.photo-counter.embedded),
+.tools-panel__activity-slot :deep(.deleted-counter.embedded) {
+  width: auto;
+  height: auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tools-panel__activity-slot :deep(.counter-content) {
+  height: auto;
+  min-height: 0;
+  align-items: center;
+}
+
+.tools-panel__activity-slot :deep(.counter-value) {
+  line-height: 1.3;
+  overflow: visible;
+  text-overflow: unset;
 }
 
 .photoGrid-container {
   display: flex;
   flex-direction: column;
   min-height: 100vh;
-  width: calc(100% - 22.6%); /* 100% - 11.3% (left) - 11.3% (right) = 77.4% */
-  max-width: 1238px; /* 77.4% of original 1600px max-width to maintain proportions */
-  margin-left: 11.3%; /* Account for fixed left sidebar */
+  width: 100%;
+  max-width: 1400px;
+  margin-left: auto;
   margin-right: auto;
   padding: env(safe-area-inset-top, 0px) calc(20px + env(safe-area-inset-right, 0px)) 0 calc(20px + env(safe-area-inset-left, 0px));
-  /* No transition on margin/width - should remain constant regardless of tools-container collapse */
+}
+
+/* Narrow screens: tools row above grid */
+@media (max-width: 900px) {
+  .grid-tools-wrapper {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .tools-sidebar-column,
+  .tools-sidebar-column--expanded {
+    position: relative;
+    width: 100%;
+    height: auto;
+    overflow: visible;
+  }
+
+  .tools-sidebar-stack,
+  .tools-sidebar-stack--in-flow {
+    position: relative;
+    top: auto;
+    left: auto;
+    width: 100% !important;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .tools-sidebar-stack__group {
+    width: 100%;
+    align-items: center;
+  }
+
+  .tools-sidebar-stack__controls {
+    width: 100%;
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .tools-panel__toggle {
+    width: auto;
+    flex: 0 0 auto;
+  }
+
+  .tools-panel {
+    flex: 1 1 11rem;
+    max-width: 11rem;
+  }
+
+  .tools-sidebar-stack__file.is-active {
+    flex: 1 1 100%;
+  }
 }
 
 /* Tablet Responsive */
 @media (max-width: 768px) {
-  .tools-panel {
-    --panel-width: 160px;
-    --toggle-size: 26px;
-    max-height: calc(100vh - 32px);
-    top: 16px;
-  }
-
-  .tools-panel__toggle {
-    height: 60px;
-  }
-
-  .tools-panel__content {
-    padding: 12px 10px;
-    gap: 10px;
-  }
-
-  .tool-btn {
-    padding: 10px 6px;
-    min-height: 50px;
-  }
-
-  .tool-btn i {
-    font-size: 14px;
-  }
-
-  .tool-btn__label {
-    font-size: 9px;
-  }
-
-  .tool-btn--wide {
-    padding: 10px 12px;
-    min-height: 40px;
-  }
-
-  .tools-section__heading {
-    font-size: 10px;
-  }
-
-  .size-controls-container {
-    height: 85vh;
-  }
-
   .photoGrid-container {
-    width: calc(100% - 22.6%);
-    margin-left: 11.3%;
     padding: env(safe-area-inset-top, 0px) calc(12px + env(safe-area-inset-right, 0px)) 0 calc(12px + env(safe-area-inset-left, 0px));
   }
 }
@@ -1512,20 +1845,64 @@ const handleSizeControlsMouseLeave = () => {
 /* Mobile Responsive */
 @media (max-width: 480px) {
   .tools-panel {
-    --panel-width: 140px;
-    --toggle-size: 24px;
-    max-height: calc(100vh - 24px);
-    top: 12px;
-    border-radius: 0 10px 10px 0;
+    border-radius: 12px;
+  }
+
+  .tools-sidebar-stack {
+    gap: 8px;
+  }
+
+  .tools-sidebar-stack__file.is-active {
+    max-height: 50px;
+    padding-bottom: 2px;
   }
 
   .tools-panel__toggle {
-    height: 52px;
-    border-radius: 8px 0 0 8px;
+    min-height: 32px;
+    padding: 5px 10px;
+    font-size: 11px;
   }
 
-  .tools-panel--collapsed .tools-panel__toggle {
-    border-radius: 0 8px 8px 0;
+  .tools-panel__toggle-label {
+    font-size: 0.68rem;
+  }
+
+  .photo-input-label--floating {
+    padding: 6px 10px;
+  }
+
+  .photo-input-label--floating .photo-input-label__text {
+    font-size: 0.68rem;
+  }
+
+  .tools-panel__close {
+    top: 6px;
+    left: 6px;
+    width: 26px;
+    height: 26px;
+    font-size: 11px;
+  }
+
+  .tools-panel__header {
+    padding-top: 22px;
+  }
+
+  .tools-panel__total-count {
+    top: 6px;
+    right: 6px;
+  }
+
+  .tools-panel__activity-row {
+    min-height: 26px;
+  }
+
+  .tools-panel__activity-slot {
+    height: 26px;
+    min-height: 26px;
+  }
+
+  .tools-panel__activity-row.is-dual {
+    gap: 12px;
   }
 
   .tools-panel__content {
@@ -1586,38 +1963,8 @@ const handleSizeControlsMouseLeave = () => {
     font-size: 10px;
   }
 
-  .size-controls-container {
-    height: 80vh;
-  }
-
   .photoGrid-container {
-    width: calc(100% - 22.6%);
-    margin-left: 11.3%;
     padding: env(safe-area-inset-top, 0px) calc(8px + env(safe-area-inset-right, 0px)) 0 calc(8px + env(safe-area-inset-left, 0px));
-  }
-}
-
-h1 {
-  margin-top: 80px;
-  font-size: 2.5rem;
-  margin-bottom: 8px;
-  background: linear-gradient(
-    135deg,
-    #d4af37 0%,
-    #ffd700 30%,
-    #ffffff 70%,
-    #ffffff 100%
-  );
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
-
-@media (max-width: 480px) {
-  h1 {
-    margin-top: 0;
-    font-size: 1.5rem;
-    margin-bottom: 4px;
   }
 }
 
@@ -1626,55 +1973,52 @@ h1 {
   display: inline-block;
 }
 
-.photo-input {
-  font-family: inherit;
-  font-size: 0.9rem;
-  font-weight: 600;
-  padding: 10px 18px;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.08) !important;
-  background: rgba(18, 18, 26, 0.98);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  color: rgba(255, 255, 255, 0.82);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.55);
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.photo-input:hover {
-  background: linear-gradient(135deg, rgba(212, 175, 55, 0.22) 0%, rgba(212, 175, 55, 0.1) 100%);
-  color: #ffd700;
-  border-color: rgba(255, 255, 255, 0.08) !important;
-  box-shadow: 0 2px 8px rgba(212, 175, 55, 0.2), 0 8px 32px rgba(0, 0, 0, 0.55);
-}
-
-.photo-input::file-selector-button {
+.photo-input-label {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
   font-family: inherit;
   font-size: 0.875rem;
   font-weight: 600;
-  padding: 6px 12px;
-  margin-right: 12px;
-  border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.06);
+  padding: 10px 18px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(18, 18, 26, 0.98);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   color: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.55);
   cursor: pointer;
   transition: all 0.2s ease;
+  user-select: none;
 }
 
-.photo-input:hover::file-selector-button {
-  background: rgba(212, 175, 55, 0.18) !important;
-  color: #ffd700 !important;
-  border-color: rgba(212, 175, 55, 0.25) !important;
+.photo-input-label:hover {
+  background: linear-gradient(135deg, rgba(212, 175, 55, 0.22) 0%, rgba(212, 175, 55, 0.1) 100%);
+  color: #ffd700;
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 2px 8px rgba(212, 175, 55, 0.2), 0 8px 32px rgba(0, 0, 0, 0.55);
+}
+
+.photo-input-native {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  font-size: 0;
 }
 
 /* Panel Content Container */
 .tools-panel__content {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: var(--section-gap);
-  padding: 14px 12px;
+  padding: 10px 8px;
   overflow-y: auto;
   overflow-x: hidden;
   flex: 1;
@@ -1687,6 +2031,10 @@ h1 {
   /* Custom Scrollbar */
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+}
+
+.tools-panel .tools-panel__content {
+  padding-top: 10px;
 }
 
 .tools-panel__content::-webkit-scrollbar {
@@ -1723,24 +2071,25 @@ h1 {
 .tools-section {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
 }
 
 .tools-section__heading {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 11px;
+  justify-content: center;
+  gap: 5px;
+  font-size: 9px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.8px;
+  letter-spacing: 0.5px;
   color: rgba(255, 255, 255, 0.5);
   padding: 0 4px;
   margin: 0;
 }
 
 .tools-section__heading i {
-  font-size: 10px;
+  font-size: 8px;
   opacity: 0.7;
 }
 
@@ -1748,14 +2097,14 @@ h1 {
 .tools-section__grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 8px;
+  gap: 5px;
 }
 
 /* Stack Layout for Full-Width Buttons */
 .tools-section__stack {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 5px;
 }
 
 /* ============================================
@@ -1767,9 +2116,9 @@ h1 {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  padding: 12px 8px;
-  min-height: 56px;
+  gap: 3px;
+  padding: 7px 4px;
+  min-height: 42px;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: var(--btn-radius);
@@ -1814,7 +2163,7 @@ h1 {
 }
 
 .tool-btn i {
-  font-size: 16px;
+  font-size: 13px;
   transition: transform 180ms ease;
 }
 
@@ -1823,9 +2172,9 @@ h1 {
 }
 
 .tool-btn__label {
-  font-size: 10px;
+  font-size: 8px;
   font-weight: 500;
-  letter-spacing: 0.3px;
+  letter-spacing: 0.2px;
   opacity: 0.85;
   text-align: center;
   line-height: 1.2;
@@ -1835,17 +2184,17 @@ h1 {
 .tool-btn--wide {
   flex-direction: row;
   justify-content: flex-start;
-  gap: 10px;
-  padding: 12px 14px;
-  min-height: 44px;
+  gap: 7px;
+  padding: 8px 8px;
+  min-height: 34px;
 }
 
 .tool-btn--wide i {
-  font-size: 14px;
+  font-size: 12px;
 }
 
 .tool-btn--wide .tool-btn__label {
-  font-size: 12px;
+  font-size: 10px;
   opacity: 1;
 }
 
@@ -1978,165 +2327,53 @@ h1 {
   margin: 0;
 }
 
-/* Photos Size Controls - Vertical */
-.photos-size-controls {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 8px;
-  padding: 16px 12px;
-  border-radius: var(--border-radius);
-  background: var(--surface-color);
-  backdrop-filter: blur(12px);
-  box-shadow: var(--shadow-lg);
-  width: 100%;
-  height: 100%;
-  overflow-y: auto;
-  overflow-x: hidden;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.3) transparent;
-}
-
-.photos-size-controls::-webkit-scrollbar {
-  width: 6px;
-}
-
-.photos-size-controls::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.photos-size-controls::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.3);
-  border-radius: 3px;
-}
-
-.photos-size-controls::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.5);
-}
-
-.photos-size-controls label {
-  white-space: nowrap;
-  font-weight: 500;
-  font-size: 0.8rem;
-  margin-bottom: 4px;
-}
-
-.size-buttons-container {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  width: 100%;
-}
-
-.size-button {
-  padding: 10px 8px;
-  width: 100%;
-  min-height: 36px;
-  font-size: 0.75rem;
-}
-
-.size-button.active {
-  background: rgba(255, 255, 255, 0.25);
-  border-color: #aaa;
-}
-
-/* Select Controls Above Grid */
-.grid-wrapper .select-controls-above-grid {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  width: auto;
-  margin-top: 0;
-  margin-bottom: 16px;
-  padding: 12px 16px;
-  border-radius: var(--border-radius);
-  background: var(--surface-color);
-  backdrop-filter: blur(12px);
-  box-shadow: var(--shadow-lg);
-  align-self: flex-start;
-}
-
-/* Grid Tools Wrapper - places tools-panel and grid side by side */
+/* Grid Tools Wrapper */
 .grid-tools-wrapper {
   position: relative;
   display: flex;
   flex-direction: row;
-  align-items: flex-start;
-  gap: 0;
+  align-items: stretch;
+  gap: 14px;
   width: 100%;
   max-width: 100%;
-  justify-content: flex-start;
 }
 
-/* Ensure grid takes remaining space when panel is shown */
 .grid-tools-wrapper > .grid {
-  flex: 1;
-  min-width: 0; /* Allow grid to shrink */
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
 
-.select-controls-above-grid label {
+/* Select controls inside tools panel */
+.tools-panel__select-controls {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+}
+
+.tools-panel__select-all {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 0.875rem;
+  gap: 5px;
+  font-size: 0.68rem;
   white-space: nowrap;
   font-weight: 500;
+  color: rgba(255, 255, 255, 0.85);
   cursor: pointer;
+  padding: 0 4px;
 }
 
-.select-controls-above-grid label input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
+.tools-panel__select-all input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
   cursor: pointer;
   flex-shrink: 0;
-}
-
-.select-controls-above-grid button {
-  padding: 10px 20px;
-  min-height: 40px;
-  font-size: 0.875rem;
-  white-space: nowrap;
-}
-
-@media (max-width: 768px) {
-  .select-controls-above-grid {
-    margin-top: 20px;
-    margin-bottom: 12px;
-    padding: 10px 12px;
-    gap: 10px;
-  }
-
-  .select-controls-above-grid label {
-    font-size: 0.8rem;
-  }
-
-  .select-controls-above-grid button {
-    padding: 8px 16px;
-    min-height: 36px;
-    font-size: 0.8rem;
-  }
-}
-
-@media (max-width: 480px) {
-  .select-controls-above-grid {
-    margin-top: 16px;
-    margin-bottom: 10px;
-    padding: 8px 10px;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-
-  .select-controls-above-grid label {
-    font-size: 0.75rem;
-  }
-
-  .select-controls-above-grid button {
-    padding: 6px 12px;
-    min-height: 48px;
-    font-size: 0.75rem;
-  }
 }
 
 /* Photo Grid Wrapper */
@@ -2156,6 +2393,7 @@ h1 {
   gap: 24px;
   width: 100%;
   max-width: 100%;
+  justify-content: center;
   user-select: none;
   -webkit-user-select: none;
   -moz-user-select: none;
@@ -2189,24 +2427,19 @@ h1 {
 /* Responsive adjustments */
 @media (max-width: 768px) {
   .photoGrid-container {
-    width: 95%;
     padding: env(safe-area-inset-top, 0px) calc(12px + env(safe-area-inset-right, 0px)) 0 calc(12px + env(safe-area-inset-left, 0px));
   }
 }
 
 @media (max-width: 480px) {
   .photoGrid-container {
-    width: 100%;
     padding: env(safe-area-inset-top, 0px) calc(8px + env(safe-area-inset-right, 0px)) 0 calc(8px + env(safe-area-inset-left, 0px));
   }
 
-  .photo-input {
+  .photo-input-label {
     margin-top: 12px;
-  }
-
-  .photo-input input[type="file"] {
-    font-size: 0.8rem;
     padding: 8px 12px;
+    font-size: 0.8rem;
   }
 }
 </style>

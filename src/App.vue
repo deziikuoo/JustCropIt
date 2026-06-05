@@ -9,45 +9,58 @@
       :auto-dismiss="alert.autoDismiss"
       @dismiss="alert.show = false"
     />
-    <div class="add-delete-counters-container" v-show="appMode === 'photos'">
-      <PhotoCounter
-        :photo-count="photos.length"
-        :new-photos-count="newPhotosCount"
-      />
-      <DeletedCounter :deleted-photos-count="deletedPhotosCount" />
-    </div>
-    <div class="counters-container" v-show="appMode === 'photos'">
-      <PrimaryPhotoCounter :photo-count="photos.length" />
-      <SelectCounter
-        :selected-count="
-          dragSelectionCount !== null
-            ? dragSelectionCount
-            : selectedIndices.length
-        "
-        :total-photos="photos.length"
-      />
-    </div>
-    <DeletionNotification />
-    
-    <!-- Mode Tabs -->
-    <div class="mode-tabs-container">
-      <div class="mode-tabs">
-        <button 
-          class="mode-tab" 
-          :class="{ active: appMode === 'photos' }"
-          @click="appMode = 'photos'"
+    <div class="app-top-controls">
+      <div class="app-top-controls__left">
+        <div class="app-brand" aria-label="JustCropIt">JustCropIt</div>
+      </div>
+
+      <div class="app-top-controls__center">
+        <div class="mode-tabs">
+          <button 
+            class="mode-tab" 
+            :class="{ active: appMode === 'photos' }"
+            @click="appMode = 'photos'"
+          >
+            <i class="fas fa-images"></i>
+            <span>Photos</span>
+          </button>
+          <button 
+            class="mode-tab" 
+            :class="{ active: appMode === 'video' }"
+            @click="appMode = 'video'"
+          >
+            <i class="fas fa-film"></i>
+            <span>Video Frames</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="app-top-controls__right">
+        <div
+          v-show="appMode === 'photos'"
+          class="app-top-right-stack"
         >
-          <i class="fas fa-images"></i>
-          <span>Photos</span>
-        </button>
-        <button 
-          class="mode-tab" 
-          :class="{ active: appMode === 'video' }"
-          @click="appMode = 'video'"
-        >
-          <i class="fas fa-film"></i>
-          <span>Video Frames</span>
-        </button>
+          <div
+            class="app-size-controls"
+            v-show="photos.length > 0"
+          >
+            <label>Size:</label>
+            <div class="size-buttons-container">
+              <button
+                v-for="(size, index) in photoSizes"
+                :key="size.label"
+                type="button"
+                class="size-button"
+                :class="{ active: selectedPhotoSize === index }"
+                :title="size.label"
+                @click="selectedPhotoSize = index"
+              >
+                {{ size.label }}
+              </button>
+            </div>
+          </div>
+          <DeletionNotification />
+        </div>
       </div>
     </div>
 
@@ -57,12 +70,16 @@
       <div v-show="appMode === 'photos'" class="photos-page">
         <PhotoGrid
           :photos="photos"
+          v-model:selected-photo-size="selectedPhotoSize"
           :selectedIndices="selectedIndices"
           :hasSelection="selectedIndices.length > 0"
           :allSelected="
             selectedIndices.length === photos.length && photos.length > 0
           "
           :hasCopiedSettings="hasCopiedSettings"
+          :new-photos-count="newPhotosCount"
+          :deleted-photos-count="deletedPhotosCount"
+          :drag-selection-count="dragSelectionCount"
           @upload="handleUpload"
           @flip="handleFlip"
           @crop="openCropModal"
@@ -120,9 +137,11 @@
       @next-image="handleNextBatchImage"
       @previous-image="handlePreviousBatchImage"
     />
+    <!-- Debug tools (disabled)
     <PerformanceDashboard />
     <OptimizationCheckModal />
     <CopyPasteVisualizer />
+    -->
   </div>
 </template>
 
@@ -134,13 +153,9 @@ import BatchCropSelector from "./components/BatchCropSelector.vue";
 import StorageAlert from "./components/StorageAlert.vue";
 import ShimmerBackground from "./components/ShimmerBackground.vue";
 import DeletionNotification from "./components/DeletionNotification.vue";
-import PhotoCounter from "./components/PhotoCounter.vue";
-import DeletedCounter from "./components/DeletedCounter.vue";
-import SelectCounter from "./components/SelectCounter.vue";
-import PrimaryPhotoCounter from "./components/PrimaryPhotoCounter.vue";
-import PerformanceDashboard from "./components/PerformanceDashboard.vue";
-import OptimizationCheckModal from "./components/OptimizationCheckModal.vue";
-import CopyPasteVisualizer from "./components/CopyPasteVisualizer.vue";
+// import PerformanceDashboard from "./components/PerformanceDashboard.vue";
+// import OptimizationCheckModal from "./components/OptimizationCheckModal.vue";
+// import CopyPasteVisualizer from "./components/CopyPasteVisualizer.vue";
 import VideoExtractor from "./components/VideoExtractor.vue";
 import JSZip from "jszip";
 import { DOWNLOAD_PARALLEL_BATCH_SIZE } from "./constants/optimization";
@@ -168,6 +183,14 @@ import { scheduleThumbnailBackfill } from "./utils/thumbnailBackfill";
 import { applyDisplayInvalidation } from "./utils/thumbnailInvalidation";
 import { processInChunks } from "./utils/scheduler";
 
+const photoSizes = [
+  { label: "XS", minSize: 180 },
+  { label: "S", minSize: 220 },
+  { label: "M", minSize: 260 },
+  { label: "L", minSize: 310 },
+  { label: "XL", minSize: 360 },
+];
+
 interface CopiedSettings {
   flips: { horizontal: boolean; vertical: boolean };
   crop?: { x: number; y: number; width: number; height: number };
@@ -175,8 +198,42 @@ interface CopiedSettings {
 }
 
 const photos = ref<Photo[]>([]);
+const selectedPhotoSize = ref(2);
 const newPhotosCount = ref(0);
 const deletedPhotosCount = ref(0);
+let addedCountResetTimer: ReturnType<typeof setTimeout> | null = null;
+let deletedCountResetTimer: ReturnType<typeof setTimeout> | null = null;
+const ACTIVITY_COUNT_PERSIST_MS = 7000;
+
+const trackPhotoAddition = (count: number) => {
+  if (count <= 0) return;
+
+  newPhotosCount.value += count;
+
+  if (addedCountResetTimer) {
+    clearTimeout(addedCountResetTimer);
+  }
+
+  addedCountResetTimer = setTimeout(() => {
+    newPhotosCount.value = 0;
+    addedCountResetTimer = null;
+  }, ACTIVITY_COUNT_PERSIST_MS);
+};
+
+const trackPhotoDeletion = (count: number) => {
+  if (count <= 0) return;
+
+  deletedPhotosCount.value += count;
+
+  if (deletedCountResetTimer) {
+    clearTimeout(deletedCountResetTimer);
+  }
+
+  deletedCountResetTimer = setTimeout(() => {
+    deletedPhotosCount.value = 0;
+    deletedCountResetTimer = null;
+  }, ACTIVITY_COUNT_PERSIST_MS);
+};
 
 // App mode: 'photos' for standard photo editing, 'video' for video frame extraction
 const APP_MODE_STORAGE_KEY = 'justcropit-app-mode';
@@ -553,11 +610,7 @@ const loadPhotosFromStorage = async () => {
     scheduleThumbnailBackfill(photos, blobToFile);
     // Show notification if photos were loaded (triggers PhotoCounter animation)
     if (loadedPhotos.length > 0) {
-      newPhotosCount.value = loadedPhotos.length;
-      // Reset after animation completes (2 seconds) plus small buffer
-      setTimeout(() => {
-        newPhotosCount.value = 0;
-      }, 2100);
+      trackPhotoAddition(loadedPhotos.length);
     }
   } catch (error) {
     console.error("Failed to load photos from storage:", error);
@@ -675,11 +728,7 @@ const handleUpload = async (event: Event) => {
     );
     // Show notification for new photos
     if (newPhotos.length > 0) {
-      newPhotosCount.value = newPhotos.length;
-      // Reset after animation completes (2 seconds) plus small buffer
-      setTimeout(() => {
-        newPhotosCount.value = 0;
-      }, 2100);
+      trackPhotoAddition(newPhotos.length);
     }
 
     // Clear input
@@ -788,16 +837,13 @@ const handleVideoFramesExtracted = async (files: File[]) => {
 
   // Show notification for new photos
   if (newPhotos.length > 0) {
-    newPhotosCount.value = newPhotos.length;
+    trackPhotoAddition(newPhotos.length);
     showAlert(
       "info",
       "Frames Added",
       `${newPhotos.length} video frames have been added to your photos.`,
       4000
     );
-    setTimeout(() => {
-      newPhotosCount.value = 0;
-    }, 2100);
   }
 };
 
@@ -1387,11 +1433,7 @@ const handleBatchDelete = async () => {
       false 
     );
 
-    // Track batch deletion for counter animation
-    deletedPhotosCount.value = deleteCount;
-    setTimeout(() => {
-      deletedPhotosCount.value = 0;
-    }, 2100);
+    trackPhotoDeletion(deleteCount);
   }
 };
 
@@ -1451,10 +1493,7 @@ const handleDelete = async (index: number) => {
     // Track user deletion for counter animation (only if not part of batch delete)
     // Batch delete will set the count after all deletions complete
     if (!isBatchDeleting.value) {
-      deletedPhotosCount.value = 1;
-      setTimeout(() => {
-        deletedPhotosCount.value = 0;
-      }, 2100);
+      trackPhotoDeletion(1);
     }
 
     if (cropIndex.value === index && showCropModal.value) {
@@ -1762,46 +1801,59 @@ onUnmounted(() => {
   display: flex;
   justify-content: center;
   padding-top: calc(72px + env(safe-area-inset-top, 0px));
-  padding-bottom: 40px;
+  padding-bottom: 56px;
 }
 
-.counters-container {
-  position: fixed;
-  top: calc(20px + env(safe-area-inset-top, 0px));
-  right: 9%;
-  padding-right: env(safe-area-inset-right, 0px);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  z-index: 1001;
-  pointer-events: none;
-  align-items: flex-end;
-}
-
-.add-delete-counters-container {
-  position: fixed;
-  top: calc(20px + env(safe-area-inset-top, 0px));
-  left: 9%;
-  padding-left: env(safe-area-inset-left, 0px);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  z-index: 1001;
-  pointer-events: none;
-  align-items: flex-start;
-}
-
-/* Mode Tabs */
-.mode-tabs-container {
+.app-top-controls {
   position: fixed;
   top: calc(12px + env(safe-area-inset-top, 0px));
-  left: 50%;
-  transform: translateX(-50%);
+  left: 0;
+  right: 0;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: start;
+  padding-left: calc(12px + env(safe-area-inset-left, 0px));
+  padding-right: calc(12px + env(safe-area-inset-right, 0px));
   z-index: 1200;
+  pointer-events: none;
+  background: transparent;
+  border: 0;
+}
+
+.app-top-controls__left {
+  justify-self: start;
   pointer-events: auto;
 }
 
+.app-top-controls__center {
+  justify-self: center;
+  pointer-events: auto;
+}
+
+.app-top-controls__right {
+  justify-self: end;
+  pointer-events: auto;
+}
+
+.app-brand {
+  flex: 0 0 auto;
+  padding-top: 8px;
+  font-size: 1.35rem;
+  font-weight: 700;
+  line-height: 1;
+  background: linear-gradient(
+    135deg,
+    #d4af37 0%,
+    #ffd700 35%,
+    #ffffff 100%
+  );
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
 .mode-tabs {
+  flex: 0 0 auto;
   display: flex;
   gap: 6px;
   padding: 6px;
@@ -1842,13 +1894,83 @@ onUnmounted(() => {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
+.mode-tab.active:hover {
+  background: rgba(255, 255, 255, 0.2);
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.22);
+  box-shadow: 0 2px 12px rgba(255, 255, 255, 0.12);
+}
+
 .mode-tab i {
   font-size: 1rem;
 }
 
+.app-top-right-stack {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.app-size-controls {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 10px;
+  background: rgba(18, 18, 26, 0.98);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+.app-size-controls label {
+  white-space: nowrap;
+  font-weight: 600;
+  font-size: 0.65rem;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.55);
+  margin: 0;
+  padding: 0 2px;
+}
+
+.size-buttons-container {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+  width: auto;
+}
+
+.size-button {
+  padding: 3px 7px;
+  width: auto;
+  min-width: 28px;
+  min-height: 24px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  border-radius: 6px;
+  line-height: 1;
+}
+
+.size-button:hover:not(:disabled) {
+  transform: none;
+}
+
+.size-button.active {
+  background: rgba(255, 255, 255, 0.25);
+  border-color: #aaa;
+}
+
 @media (max-width: 768px) {
-  .mode-tabs-container {
-    top: calc(12px + env(safe-area-inset-top, 0px));
+  .app-brand {
+    font-size: 1.05rem;
+    padding-top: 7px;
   }
 
   .mode-tab {
@@ -1864,9 +1986,15 @@ onUnmounted(() => {
   .mode-tab i {
     font-size: 1rem;
   }
+
 }
 
 @media (max-width: 480px) {
+  .app-top-controls {
+    padding-left: calc(8px + env(safe-area-inset-left, 0px));
+    padding-right: calc(8px + env(safe-area-inset-right, 0px));
+  }
+
   .mode-tabs {
     padding: 3px;
     border-radius: 12px;
@@ -1875,6 +2003,17 @@ onUnmounted(() => {
   .mode-tab {
     padding: 8px 14px;
     border-radius: 9px;
+  }
+
+  .app-size-controls {
+    padding: 3px 6px;
+    gap: 4px;
+  }
+
+  .size-button {
+    min-width: 24px;
+    padding: 2px 5px;
+    font-size: 0.6rem;
   }
 }
 </style>

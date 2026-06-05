@@ -160,6 +160,7 @@ defineEmits<{
 
 .photo-card {
   position: relative;
+  width: 100%;
   aspect-ratio: 1;
   border-radius: var(--border-radius);
   border: 1px solid var(--surface-border);
@@ -338,8 +339,8 @@ defineEmits<{
 }
 
 .image-container img {
-  max-height: 100%;
-  max-width: 100%;
+  width: 100%;
+  height: 100%;
   object-fit: contain;
   border-radius: var(--border-radius-sm);
   transition:

@@ -1,6 +1,30 @@
 <template>
   <div
-    v-if="showNotification"
+    v-if="embedded"
+    class="select-counter embedded"
+    :class="{ 'is-active': isEmbeddedVisible, 'is-inline': inline }"
+    ref="counterRef"
+  >
+    <div class="counter-content">
+      <div class="counter-text">
+        <div class="counter-value-wrapper" :class="{ 'select-all': isSelectAll }">
+          <div class="icon-wrapper">
+            <i class="fas fa-check-square counter-icon"></i>
+          </div>
+          <span class="counter-value">
+            <template v-if="!isSelectAll">
+              ({{ displayedCount }}) Sel.
+            </template>
+            <template v-else>
+              All ({{ displayedCount }})
+            </template>
+          </span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div
+    v-else-if="showNotification"
     class="select-counter"
     :class="{ 'rise-and-fade': isAnimating }"
     ref="counterRef"
@@ -8,7 +32,7 @@
     <canvas
       ref="shimmerCanvasRef"
       class="shimmer-canvas"
-      v-if="showShimmer"
+      v-if="showShimmer && !embedded"
       :style="{
         width: shimmerCanvasWidth + 'px',
         height: shimmerCanvasHeight + 'px',
@@ -20,21 +44,18 @@
       <div class="counter-text">
         <div class="counter-value-wrapper" :class="{ 'select-all': isSelectAll }">
           <div class="icon-wrapper">
-            <i
-              v-if="!isSelectAll"
-              class="fas fa-check-square counter-icon"
-            ></i>
-            <div v-else class="select-all-icon">
-              <i class="fas fa-check-square counter-icon"></i>
-              <i class="fas fa-exclamation exclamation-icon"></i>
-            </div>
+            <i class="fas fa-check-square counter-icon"></i>
           </div>
           <span class="counter-value">
             <template v-if="!isSelectAll">
-              ({{ displayedCount }}) Selected
+              {{ embedded ? `(${displayedCount}) Sel.` : `(${displayedCount}) Selected` }}
             </template>
             <template v-else>
-              All ({{ displayedCount }}) Selected!
+              {{
+                embedded
+                  ? `All (${displayedCount})`
+                  : `All (${displayedCount}) Selected`
+              }}
             </template>
           </span>
         </div>
@@ -44,14 +65,19 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onUnmounted, computed } from "vue";
+import { ref, watch, onUnmounted, computed, withDefaults } from "vue";
 
 interface Props {
   selectedCount: number;
   totalPhotos: number;
+  embedded?: boolean;
+  inline?: boolean;
 }
 
-const props = defineProps<Props>();
+const props = withDefaults(defineProps<Props>(), {
+  embedded: false,
+  inline: false,
+});
 
 interface ShimmerParticle {
   x: number;
@@ -83,6 +109,12 @@ const isSelectAll = computed(() => {
     return displayedIsSelectAll.value;
   }
   return props.selectedCount === props.totalPhotos && props.totalPhotos > 0;
+});
+
+const isEmbeddedVisible = computed(() => {
+  if (!showNotification.value) return false;
+  if (props.inline) return isSelectAll.value;
+  return true;
 });
 
 const SHIMMER_COLORS = ["#ffd700", "#d4af37", "#fff9e6"];
@@ -265,9 +297,30 @@ onUnmounted(() => {
   position: relative;
   background: transparent;
   padding: 0;
-  z-index: 1001;
+  z-index: 1;
   pointer-events: none;
   overflow: visible;
+}
+
+.select-counter.embedded {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.2s ease, visibility 0.2s ease;
+}
+
+.select-counter.embedded.is-inline {
+  width: auto;
+  height: auto;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.select-counter.embedded.is-active {
+  opacity: 1;
+  visibility: visible;
 }
 
 .select-counter.rise-and-fade {
@@ -297,6 +350,8 @@ onUnmounted(() => {
   align-items: center;
   position: relative;
   z-index: 2;
+  height: 100%;
+  min-width: 0;
 }
 
 .counter-text {
@@ -308,6 +363,11 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+}
+
+.select-counter.embedded .counter-value-wrapper {
+  gap: 4px;
 }
 
 .counter-value-wrapper:not(.select-all) {
@@ -321,22 +381,8 @@ onUnmounted(() => {
   align-items: center;
 }
 
-.select-all-icon {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-}
-
-.exclamation-icon {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  font-size: 0.4rem;
-  color: #ffffff;
-  z-index: 1;
-  font-weight: 900;
-  text-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
+.select-counter.embedded .counter-icon {
+  font-size: 0.7rem;
 }
 
 .counter-icon {
@@ -357,9 +403,15 @@ onUnmounted(() => {
   background-clip: text;
 }
 
+.select-counter.embedded .counter-value {
+  font-size: 0.65rem;
+}
+
 .counter-value {
   font-size: 0.9rem;
   font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
   background: linear-gradient(135deg, #ffffff 0%, #ffd700 90%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
@@ -370,20 +422,11 @@ onUnmounted(() => {
 }
 
 .counter-value-wrapper.select-all .counter-value {
-  background: linear-gradient(135deg, #ffffff 0%, #ffd700 90%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
   font-size: 1rem;
 }
 
-.counter-value-wrapper.select-all {
-  transform: none;
-  transform-origin: center;
-}
-
-.counter-value-wrapper.select-all .counter-value {
-  font-size: 1rem;
+.select-counter.embedded .counter-value-wrapper.select-all .counter-value {
+  font-size: 0.65rem;
 }
 </style>
 

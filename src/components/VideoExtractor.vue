@@ -1,10 +1,5 @@
 <template>
   <div class="video-extractor">
-    <header class="video-extractor-header">
-      <h1>JustCropIt</h1>
-      <p class="video-extractor-subtitle">Extract high-quality frames from video</p>
-    </header>
-
     <!-- Unsupported Browser Warning -->
     <div v-if="!isSupported" class="unsupported-warning">
       <i class="fas fa-exclamation-triangle"></i>
@@ -16,6 +11,10 @@
     </div>
 
     <template v-else>
+      <header class="video-extractor-header">
+        <p class="video-extractor-subtitle">Extract high-quality frames from video</p>
+      </header>
+
       <!-- Video Input Area -->
       <div 
         class="video-dropzone"
@@ -162,40 +161,72 @@
             Output Quality
           </label>
           <div class="quality-options">
-            <button
-              class="quality-btn"
-              :class="{ active: outputFormat === 'jpeg' }"
-              @click="outputFormat = 'jpeg'"
-              :disabled="isExtracting"
-            >
-              <i class="fas fa-bolt"></i>
-              High Quality (JPEG)
-            </button>
-            <button
-              class="quality-btn"
-              :class="{ active: outputFormat === 'png' }"
-              @click="outputFormat = 'png'"
-              :disabled="isExtracting"
-            >
-              <i class="fas fa-gem"></i>
-              Lossless (PNG)
-            </button>
+            <div class="quality-option-row">
+              <button
+                class="quality-btn"
+                :class="{ active: outputFormat === 'jpeg' }"
+                @click="outputFormat = 'jpeg'"
+                :disabled="isExtracting"
+              >
+                <i class="fas fa-bolt"></i>
+                High Quality (JPEG)
+              </button>
+              <span
+                class="quality-help"
+                tabindex="0"
+                role="button"
+                aria-label="JPEG format details"
+              >
+                <i class="fas fa-circle-question" aria-hidden="true"></i>
+                <span class="quality-help-tooltip">
+                  Smaller files and faster extraction. Best for long clips with many frames.
+                  Slight compression artifacts are possible.
+                </span>
+              </span>
+            </div>
+            <div class="quality-option-row">
+              <button
+                class="quality-btn"
+                :class="{ active: outputFormat === 'png' }"
+                @click="outputFormat = 'png'"
+                :disabled="isExtracting"
+              >
+                <i class="fas fa-gem"></i>
+                Lossless (PNG)
+              </button>
+              <span
+                class="quality-help"
+                tabindex="0"
+                role="button"
+                aria-label="PNG format details"
+              >
+                <i class="fas fa-circle-question" aria-hidden="true"></i>
+                <span class="quality-help-tooltip">
+                  Maximum fidelity with no compression loss. Larger files and slower.
+                  Best when every frame needs pixel-perfect quality.
+                </span>
+              </span>
+            </div>
           </div>
-          <p class="quality-hint">JPEG is recommended for large extractions. Frames are processed in batches to save memory.</p>
         </div>
 
         <!-- Estimated Frames -->
         <div class="estimated-frames">
-          <i class="fas fa-layer-group"></i>
-          <span v-if="displayVideoInfo && clipDuration > 0">
-            Estimated frames: <strong>{{ estimatedFrameCount }}</strong>
-            from {{ formatTimestamp(trimStart) }}–{{ formatTimestamp(trimEnd) }}
-            <span class="batch-hint">({{ estimatedBatchCount }} batches)</span>
-          </span>
-          <span v-else-if="displayVideoInfo">
+          <template v-if="displayVideoInfo && clipDuration > 0">
+            <span class="estimated-frames-left">
+              <i class="fas fa-clock"></i>
+              {{ formatTimestamp(trimStart) }}–{{ formatTimestamp(trimEnd) }}
+            </span>
+            <span class="estimated-frames-right">
+              <i class="fas fa-layer-group"></i>
+              <strong>{{ estimatedFrameCount }}</strong> frames
+              <span class="batch-hint">· {{ estimatedBatchCount }} batches</span>
+            </span>
+          </template>
+          <span v-else-if="displayVideoInfo" class="estimated-frames-message">
             Adjust clip range to extract frames
           </span>
-          <span v-else>
+          <span v-else class="estimated-frames-message">
             Loading video info to estimate frame count...
           </span>
         </div>
@@ -619,32 +650,18 @@ onUnmounted(() => {
 .video-extractor {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 40px;
   width: 100%;
   max-width: 820px;
   margin: 0 auto;
-  padding: 0 24px 48px;
+  padding: 0 28px 64px;
   box-sizing: border-box;
 }
 
 .video-extractor-header {
   text-align: center;
+  margin-top: 28px;
   margin-bottom: 8px;
-}
-
-.video-extractor-header h1 {
-  margin: 0 0 8px;
-  font-size: 2.5rem;
-  background: linear-gradient(
-    135deg,
-    #d4af37 0%,
-    #ffd700 30%,
-    #ffffff 70%,
-    #ffffff 100%
-  );
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
 }
 
 .video-extractor-subtitle {
@@ -708,6 +725,9 @@ onUnmounted(() => {
   border-style: solid;
   border-color: rgba(255, 255, 255, 0.1);
   cursor: default;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
 }
 
 .video-dropzone.extracting {
@@ -720,8 +740,8 @@ onUnmounted(() => {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 12px;
-  padding: 48px 24px;
+  gap: 20px;
+  padding: 56px 32px;
   text-align: center;
 }
 
@@ -752,16 +772,17 @@ onUnmounted(() => {
 }
 
 .trim-section {
-  padding: 16px 16px 0;
+  padding: 28px 24px 12px;
+  margin-top: 8px;
   background: rgba(0, 0, 0, 0.35);
   border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .trim-export-progress {
-  padding: 0 16px 16px;
+  padding: 16px 0 8px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
 }
 
 .trim-export-message {
@@ -777,8 +798,10 @@ onUnmounted(() => {
 .video-preview-container {
   position: relative;
   width: 100%;
+  padding: 20px 20px 0;
   border-radius: 14px;
   overflow: hidden;
+  box-sizing: border-box;
 }
 
 .video-preview {
@@ -794,7 +817,7 @@ onUnmounted(() => {
   bottom: 0;
   left: 0;
   right: 0;
-  padding: 16px;
+  padding: 20px;
   background: linear-gradient(transparent, rgba(0, 0, 0, 0.8));
 }
 
@@ -802,7 +825,7 @@ onUnmounted(() => {
   font-size: 1rem;
   font-weight: 500;
   color: #fff;
-  margin-bottom: 8px;
+  margin-bottom: 12px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -810,7 +833,7 @@ onUnmounted(() => {
 
 .video-meta {
   display: flex;
-  gap: 16px;
+  gap: 20px;
 }
 
 .meta-item {
@@ -858,11 +881,14 @@ onUnmounted(() => {
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 16px;
-  padding: 24px;
+  padding: 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .extraction-options h3 {
-  margin: 0 0 20px 0;
+  margin: 0 0 28px 0;
   font-size: 1rem;
   color: rgba(255, 255, 255, 0.9);
   display: flex;
@@ -871,16 +897,20 @@ onUnmounted(() => {
 }
 
 .option-group {
-  margin-bottom: 24px;
+  margin-bottom: 32px;
+}
+
+.option-group:last-of-type {
+  margin-bottom: 16px;
 }
 
 .option-label {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   font-size: 0.9rem;
   color: rgba(255, 255, 255, 0.7);
-  margin-bottom: 12px;
+  margin-bottom: 18px;
 }
 
 .option-label i {
@@ -892,17 +922,17 @@ onUnmounted(() => {
 .interval-controls {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 20px;
 }
 
 .interval-presets {
   display: flex;
-  gap: 8px;
+  gap: 12px;
   flex-wrap: wrap;
 }
 
 .preset-btn {
-  padding: 8px 16px;
+  padding: 10px 18px;
   border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.15);
   background: rgba(255, 255, 255, 0.05);
@@ -931,7 +961,8 @@ onUnmounted(() => {
 .interval-slider-row {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 20px;
+  padding-top: 4px;
 }
 
 .interval-slider {
@@ -971,12 +1002,23 @@ onUnmounted(() => {
 /* Quality Options */
 .quality-options {
   display: flex;
-  gap: 12px;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding-top: 4px;
+}
+
+.quality-option-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 10px;
 }
 
 .quality-btn {
-  flex: 1;
-  padding: 12px 16px;
+  width: 220px;
+  height: 44px;
+  padding: 0 12px;
   border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.15);
   background: rgba(255, 255, 255, 0.05);
@@ -988,6 +1030,8 @@ onUnmounted(() => {
   justify-content: center;
   gap: 8px;
   font-size: 0.9rem;
+  text-align: center;
+  box-sizing: border-box;
 }
 
 .quality-btn:hover:not(:disabled) {
@@ -1006,15 +1050,66 @@ onUnmounted(() => {
   cursor: not-allowed;
 }
 
-.quality-hint {
-  margin: 8px 0 0;
-  font-size: 0.8rem;
+.quality-help {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-top: 4px;
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
   color: rgba(255, 255, 255, 0.45);
-  line-height: 1.4;
+  cursor: help;
+  transition: color 0.2s ease;
+  outline: none;
+}
+
+.quality-help i {
+  font-size: 0.65rem;
+}
+
+.quality-help:hover,
+.quality-help:focus-visible {
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.quality-help-tooltip {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  width: 240px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(18, 18, 26, 0.98);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.85);
+  text-align: left;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-4px);
+  transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s ease;
+  z-index: 20;
+}
+
+.quality-help:hover .quality-help-tooltip,
+.quality-help:focus-visible .quality-help-tooltip,
+.quality-help:focus-within .quality-help-tooltip {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
 }
 
 .batch-hint {
-  margin-left: 6px;
+  margin-left: 4px;
   color: rgba(255, 255, 255, 0.5);
   font-size: 0.85rem;
 }
@@ -1022,14 +1117,34 @@ onUnmounted(() => {
 /* Estimated Frames */
 .estimated-frames {
   display: flex;
+  justify-content: space-between;
   align-items: center;
-  gap: 10px;
-  padding: 12px 16px;
+  gap: 20px;
+  margin-top: 8px;
+  padding: 16px 20px;
   background: rgba(99, 102, 241, 0.1);
   border: 1px solid rgba(99, 102, 241, 0.2);
   border-radius: 10px;
   color: #a5b4fc;
   font-size: 0.9rem;
+}
+
+.estimated-frames-left,
+.estimated-frames-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.estimated-frames-right {
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.estimated-frames-message {
+  width: 100%;
+  text-align: center;
 }
 
 .estimated-frames i {
@@ -1046,22 +1161,22 @@ onUnmounted(() => {
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 16px;
-  padding: 20px;
+  padding: 28px;
 }
 
 .progress-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: 12px;
-  margin-bottom: 12px;
+  gap: 16px;
+  margin-bottom: 18px;
 }
 
 .progress-header-right {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 4px;
+  gap: 8px;
   flex-shrink: 0;
 }
 
@@ -1109,13 +1224,13 @@ onUnmounted(() => {
 }
 
 .progress-details {
-  margin-top: 10px;
+  margin-top: 16px;
   font-size: 0.85rem;
   color: rgba(255, 255, 255, 0.6);
 }
 
 .progress-frames {
-  margin-top: 6px;
+  margin-top: 10px;
   font-size: 0.85rem;
   color: rgba(255, 255, 255, 0.5);
 }
@@ -1124,8 +1239,8 @@ onUnmounted(() => {
 .error-message {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 14px 18px;
+  gap: 12px;
+  padding: 18px 22px;
   background: rgba(239, 68, 68, 0.1);
   border: 1px solid rgba(239, 68, 68, 0.3);
   border-radius: 10px;
@@ -1145,11 +1260,12 @@ onUnmounted(() => {
 .action-buttons {
   display: flex;
   justify-content: center;
-  gap: 16px;
+  gap: 20px;
   position: sticky;
   bottom: 24px;
   z-index: 2;
-  padding-top: 8px;
+  padding-top: 16px;
+  margin-top: 8px;
 }
 
 .extract-btn {
@@ -1212,16 +1328,16 @@ onUnmounted(() => {
   background: rgba(34, 197, 94, 0.05);
   border: 1px solid rgba(34, 197, 94, 0.2);
   border-radius: 16px;
-  padding: 20px;
+  padding: 28px;
 }
 
 .extracted-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 16px;
+  margin-bottom: 24px;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 16px;
 }
 
 .extracted-header h3 {
@@ -1257,7 +1373,7 @@ onUnmounted(() => {
 .frames-preview-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
-  gap: 12px;
+  gap: 16px;
 }
 
 .frames-preview-grid--expanded {
@@ -1369,20 +1485,20 @@ onUnmounted(() => {
 /* Responsive */
 @media (max-width: 768px) {
   .video-extractor {
-    padding: 0 16px 40px;
-    gap: 20px;
-  }
-
-  .video-extractor-header h1 {
-    font-size: 2rem;
+    padding: 0 20px 48px;
+    gap: 32px;
   }
 
   .extraction-options {
-    padding: 16px;
+    padding: 24px;
   }
 
-  .quality-options {
-    flex-direction: column;
+  .trim-section {
+    padding: 24px 20px 12px;
+  }
+
+  .video-preview-container {
+    padding: 16px 16px 0;
   }
 
   .interval-presets {
@@ -1401,12 +1517,8 @@ onUnmounted(() => {
 
 @media (max-width: 480px) {
   .video-extractor {
-    padding: 0 12px 32px;
-    gap: 16px;
-  }
-
-  .video-extractor-header h1 {
-    font-size: 1.5rem;
+    padding: 0 16px 40px;
+    gap: 28px;
   }
 
   .video-extractor-subtitle {
@@ -1422,7 +1534,11 @@ onUnmounted(() => {
   }
 
   .extraction-options {
-    padding: 12px;
+    padding: 20px;
+  }
+
+  .trim-section {
+    padding: 20px 16px 12px;
   }
 
   .preset-btn {
@@ -1432,11 +1548,17 @@ onUnmounted(() => {
 
   .action-buttons {
     flex-direction: column;
+    align-items: center;
   }
 
-  .extract-btn,
-  .cancel-btn {
-    width: 100%;
+  .estimated-frames {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .estimated-frames-right {
+    justify-content: flex-end;
   }
 }
 </style>

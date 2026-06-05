@@ -44,9 +44,8 @@ export function useVirtualScroll({
     let colCount = Math.floor((availableWidth + gapSize) / (minSize + gapSize));
     colCount = Math.max(1, colCount);
 
-    // Calculate actual item width (1fr)
-    // itemWidth = (availableWidth - (colCount - 1) * gap) / colCount
-    const itemWidth = (availableWidth - (colCount - 1) * gapSize) / colCount;
+    // Grid uses fixed pixel columns (repeat(auto-fill, Npx)), not 1fr stretch
+    const itemWidth = minSize;
     
     // Photos are usually square in the grid
     const rowHeight = itemWidth;
@@ -183,6 +182,7 @@ export function useVirtualScroll({
     spacerBeforeHeight,
     spacerAfterHeight,
     totalHeight,
-    colCount: computed(() => layout.value.colCount)
+    colCount: computed(() => layout.value.colCount),
+    itemWidth: computed(() => layout.value.itemWidth),
   };
 }
