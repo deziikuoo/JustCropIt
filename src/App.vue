@@ -1753,6 +1753,7 @@ onUnmounted(() => {
   width: 100%;
   display: flex;
   flex-direction: column;
+  padding-top: calc(72px + env(safe-area-inset-top, 0px));
 }
 
 .video-page {
@@ -1793,37 +1794,42 @@ onUnmounted(() => {
 /* Mode Tabs */
 .mode-tabs-container {
   position: fixed;
-  top: calc(20px + env(safe-area-inset-top, 0px));
+  top: calc(12px + env(safe-area-inset-top, 0px));
   left: 50%;
   transform: translateX(-50%);
-  z-index: 1001;
+  z-index: 1200;
+  pointer-events: auto;
 }
 
 .mode-tabs {
   display: flex;
-  gap: 4px;
-  padding: 4px;
-  background: rgba(24, 24, 32, 0.95);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+  gap: 6px;
+  padding: 6px;
+  background: rgba(18, 18, 26, 0.98);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-radius: 16px;
+  border: 1px solid rgba(212, 175, 55, 0.45);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.06),
+    0 8px 32px rgba(0, 0, 0, 0.55),
+    0 0 24px rgba(212, 175, 55, 0.15);
 }
 
 .mode-tab {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 20px;
-  border: none;
-  border-radius: 10px;
-  background: transparent;
-  color: rgba(255, 255, 255, 0.6);
+  padding: 10px 18px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.82);
   font-size: 0.9rem;
-  font-weight: 500;
+  font-weight: 600;
   cursor: pointer;
   transition: all 0.2s ease;
+  white-space: nowrap;
 }
 
 .mode-tab:hover {
@@ -1832,9 +1838,10 @@ onUnmounted(() => {
 }
 
 .mode-tab.active {
-  background: linear-gradient(135deg, rgba(212, 175, 55, 0.2) 0%, rgba(212, 175, 55, 0.1) 100%);
-  color: #ffd700;
-  box-shadow: 0 2px 8px rgba(212, 175, 55, 0.2);
+  background: linear-gradient(135deg, rgba(212, 175, 55, 0.35) 0%, rgba(212, 175, 55, 0.18) 100%);
+  color: #ffe566;
+  border-color: rgba(212, 175, 55, 0.55);
+  box-shadow: 0 2px 12px rgba(212, 175, 55, 0.35);
 }
 
 .mode-tab i {
@@ -1851,12 +1858,13 @@ onUnmounted(() => {
     font-size: 0.85rem;
   }
 
-  .mode-tab span {
-    display: none;
+  .mode-tab {
+    padding: 8px 12px;
+    font-size: 0.8rem;
   }
 
   .mode-tab i {
-    font-size: 1.1rem;
+    font-size: 1rem;
   }
 }
 
