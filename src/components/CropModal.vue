@@ -2,6 +2,15 @@
   <div v-if="show" class="modal-background" @click="$emit('close')">
     <div class="modal-content" @click.stop>
       <div class="cropper-wrapper" :class="{ dragging: isDragging }">
+        <div
+          v-if="suggestionLoading"
+          class="suggestion-overlay"
+          role="status"
+          aria-live="polite"
+        >
+          <i class="fas fa-spinner fa-spin" aria-hidden="true"></i>
+          <span>Finding subject...</span>
+        </div>
         <Cropper
           ref="cropper"
           :key="`cropper-${imageSrc}-${initialRotation || 0}`"
@@ -12,6 +21,12 @@
             scalable: true,
           }"
           @ready="onCropperReady"
+        />
+        <canvas
+          v-if="debugOverlayAvailable && showDebugOverlay && detectionDebug"
+          ref="debugCanvas"
+          class="detection-debug-canvas"
+          aria-hidden="true"
         />
         <!-- Arrow navigation buttons (show when there's more than one image) -->
         <button
@@ -46,6 +61,37 @@
         <button @click="undo" :disabled="cropHistory.length <= 1">Undo</button>
         <button @click="redo" :disabled="cropFuture.length === 0">Redo</button>
         <button @click="reset">Reset</button>
+        <button
+          v-if="detectionSupported"
+          type="button"
+          class="suggest-btn"
+          :disabled="suggestionLoading"
+          @click="$emit('request-suggest')"
+        >
+          <i class="fas fa-wand-magic-sparkles"></i>
+          Suggest crop
+        </button>
+        <p
+          v-if="suggestionError"
+          class="suggestion-message suggestion-message--error"
+          role="status"
+        >
+          {{ suggestionError }}
+        </p>
+        <p
+          v-else-if="suggestionNoSubject"
+          class="suggestion-message"
+          role="status"
+        >
+          No subject detected — adjust stencil manually.
+        </p>
+        <label
+          v-if="debugOverlayAvailable && detectionDebug"
+          class="debug-overlay-toggle"
+        >
+          <input v-model="showDebugOverlay" type="checkbox" />
+          Show detection landmarks
+        </label>
         <div class="actions">
           <button @click="cropImage">Done</button>
           <button @click="$emit('close')">Cancel</button>
@@ -59,6 +105,8 @@
 import { Cropper } from "vue-advanced-cropper";
 import { ref, onMounted, onUnmounted, watch, nextTick } from "vue";
 import "vue-advanced-cropper/dist/style.css";
+import { DETECTION_DEBUG_OVERLAY } from "../constants/optimization";
+import type { PortraitDebugOverlay } from "../types/detection";
 
 // Type alias to extend Cropper instance with custom methods and properties
 type CropperInstance = InstanceType<typeof Cropper> & {
@@ -97,17 +145,30 @@ type CropperInstance = InstanceType<typeof Cropper> & {
 const {
   show,
   imageSrc,
+  initialCrop,
   initialRotation,
+  suggestedCrop,
+  detectionDebug,
+  suggestionLoading,
+  suggestionError,
+  suggestionNoSubject,
+  detectionSupported,
   currentBatchIndex,
   totalBatchCount,
 } = defineProps<{
   show: boolean;
   imageSrc: string;
   initialCrop?: { x: number; y: number; width: number; height: number };
-  initialRotation?: number; // Rotation angle in degrees
-  batchMode?: boolean; // Whether in batch crop mode
-  currentBatchIndex?: number; // Current image index in batch (0-based)
-  totalBatchCount?: number; // Total number of images in batch
+  initialRotation?: number;
+  suggestedCrop?: { x: number; y: number; width: number; height: number } | null;
+  detectionDebug?: PortraitDebugOverlay | null;
+  suggestionLoading?: boolean;
+  suggestionError?: string | null;
+  suggestionNoSubject?: boolean;
+  detectionSupported?: boolean;
+  batchMode?: boolean;
+  currentBatchIndex?: number;
+  totalBatchCount?: number;
 }>();
 
 const emit = defineEmits<{
@@ -120,9 +181,14 @@ const emit = defineEmits<{
   (e: "close"): void;
   (e: "next-image"): void;
   (e: "previous-image"): void;
+  (e: "request-suggest"): void;
+  (e: "cancel-suggest"): void;
 }>();
 
 const cropper = ref<CropperInstance | null>(null);
+const debugCanvas = ref<HTMLCanvasElement | null>(null);
+const debugOverlayAvailable = DETECTION_DEBUG_OVERLAY;
+const showDebugOverlay = ref(true);
 const selectedAspectRatio = ref<number | null>(null);
 const currentImageSrc = ref<string>(imageSrc);
 const currentRotation = ref<number>(initialRotation || 0); // Track cumulative rotation
@@ -155,8 +221,6 @@ const applyRotationToCropper = (rotation: number) => {
     return;
   }
   
-  console.log("Applying rotation to cropper:", rotation);
-  
   // Reset cropper first to clear any existing rotation
   cropper.value.reset();
   cropper.value.updateBoundaries();
@@ -164,15 +228,12 @@ const applyRotationToCropper = (rotation: number) => {
   // Apply the rotation immediately
   const normalizedRotation = ((rotation % 360) + 360) % 360;
   const rotationSteps = Math.round(normalizedRotation / 90) % 4;
-  console.log("Normalized rotation:", normalizedRotation, "Steps:", rotationSteps);
-  
+
   for (let i = 0; i < rotationSteps; i++) {
     cropper.value.rotate(90);
   }
   cropper.value.updateBoundaries();
   currentRotation.value = normalizedRotation;
-  
-  console.log("Rotation applied, currentRotation:", currentRotation.value);
 };
 
 
@@ -192,10 +253,6 @@ watch(
             ) || cropHistory.value[cropHistory.value.length - 1];
           if (currentState) {
             cropper.value.setCoordinates(currentState.coordinates);
-            console.log(
-              "Reapplied coordinates for image:",
-              currentState.coordinates
-            );
           }
         }
       };
@@ -206,32 +263,13 @@ watch(
   }
 );
 
-// Debug modal visibility
-watch(
-  () => show,
-  (newShow) => {
-    console.log("CropModal show:", newShow);
-  },
-  { immediate: true }
-);
-
-// Debug isDragging state changes
-watch(
-  () => isDragging.value,
-  (newIsDragging) => {
-    console.log("CropModal: isDragging changed to:", newIsDragging);
-  }
-);
-
 const handleEsc = (event: KeyboardEvent) => {
   if (event.key === "Escape") {
-    console.log("Escape key pressed, emitting close");
     emit("close");
   }
 };
 
 onMounted(() => {
-  console.log("CropModal mounted, show:", show);
   window.addEventListener("keydown", handleEsc);
 });
 
@@ -241,6 +279,15 @@ onUnmounted(() => {
     dragListenerCleanup();
     dragListenerCleanup = null;
   }
+  if (readyTimeoutId) {
+    clearTimeout(readyTimeoutId);
+    readyTimeoutId = null;
+  }
+  if (historyTimeoutId) {
+    clearTimeout(historyTimeoutId);
+    historyTimeoutId = null;
+  }
+  emit("cancel-suggest");
   isDragging.value = false;
 });
 
@@ -255,14 +302,11 @@ const setupStencilDragListeners = () => {
     return null;
   }
 
-  console.log("CropModal: Setting up drag listeners");
-
   // Track if we're in a drag operation
   let dragStarted = false;
 
   // Track mouse/touch events on handlers (resize points)
-  const handleDragStart = (e: Event) => {
-    console.log("CropModal: Drag start detected (handler)", e.type);
+  const handleDragStart = (_e: Event) => {
     dragStarted = true;
     isDragging.value = true;
   };
@@ -278,28 +322,6 @@ const setupStencilDragListeners = () => {
     ".vue-simple-handler, .vue-handler-wrapper, .vue-handler"
   );
 
-  console.log("CropModal: Found stencil container:", stencilContainer);
-  console.log("CropModal: Found handlers:", handlers.length);
-
-  // Debug: Log the entire DOM structure to understand what elements exist
-  console.log("CropModal: Cropper element:", cropperElement);
-  console.log(
-    "CropModal: Cropper element HTML:",
-    cropperElement.innerHTML.substring(0, 500)
-  );
-
-  // Try to find all possible stencil-related elements
-  const allStencilElements = cropperElement.querySelectorAll(
-    "[class*='stencil'], [class*='handler'], [class*='area']"
-  );
-  console.log(
-    "CropModal: All stencil/handler/area elements found:",
-    allStencilElements.length
-  );
-  allStencilElements.forEach((el: Element, idx: number) => {
-    console.log(`CropModal: Element ${idx}:`, el.className, el);
-  });
-
   // Track mouse/touch down on stencil body to detect dragging
   const handleStencilMouseDown = (e: MouseEvent | TouchEvent) => {
     // Don't trigger if clicking on a handler (they have their own handler)
@@ -311,7 +333,6 @@ const setupStencilDragListeners = () => {
     ) {
       return;
     }
-    console.log("CropModal: Mouse/touch down on stencil body");
     dragStarted = true;
     isDragging.value = true;
   };
@@ -320,14 +341,6 @@ const setupStencilDragListeners = () => {
   // The stencil edges might be rendered outside the stencil container
   const handleCropperMouseDown = (e: MouseEvent | TouchEvent) => {
     const target = e.target as HTMLElement;
-    console.log(
-      "CropModal: handleCropperMouseDown - target:",
-      target,
-      "className:",
-      target?.className,
-      "tagName:",
-      target?.tagName
-    );
 
     // Check if clicking on handlers (exclude these)
     const handlerParent = target.closest(
@@ -355,19 +368,7 @@ const setupStencilDragListeners = () => {
       ".vue-preview, .vue-preview__wrapper, .vue-rectangle-stencil__preview"
     );
 
-    console.log(
-      "CropModal: handleCropperMouseDown - stencilParent:",
-      stencilParent,
-      "isLineWrapper:",
-      isLineWrapper,
-      "isInPreview:",
-      !!isInPreview
-    );
-
     if ((stencilParent || isLineWrapper || isInPreview) && !handlerParent) {
-      console.log(
-        "CropModal: Mouse/touch down on cropper area (within stencil/edge/preview, not handler)"
-      );
       if (!dragStarted) {
         dragStarted = true;
         isDragging.value = true;
@@ -378,16 +379,12 @@ const setupStencilDragListeners = () => {
   // Track mouse/touch move to detect when dragging actually starts on stencil body
   const handleMouseMove = () => {
     if (dragStarted && !isDragging.value) {
-      // Small movement detected - start dragging
-      console.log("CropModal: Mouse move detected, starting drag");
       isDragging.value = true;
     }
   };
 
   const handleTouchMove = () => {
     if (dragStarted && !isDragging.value) {
-      // Small movement detected - start dragging
-      console.log("CropModal: Touch move detected, starting drag");
       isDragging.value = true;
     }
   };
@@ -395,7 +392,6 @@ const setupStencilDragListeners = () => {
   // Listen for drag end on document
   const handleDocumentMouseUp = () => {
     if (dragStarted || isDragging.value) {
-      console.log("CropModal: Drag end detected (mouseup)");
       dragStarted = false;
       isDragging.value = false;
     }
@@ -403,7 +399,6 @@ const setupStencilDragListeners = () => {
 
   const handleDocumentTouchEnd = () => {
     if (dragStarted || isDragging.value) {
-      console.log("CropModal: Drag end detected (touchend)");
       dragStarted = false;
       isDragging.value = false;
     }
@@ -483,6 +478,291 @@ const setupStencilDragListeners = () => {
 };
 
 let dragListenerCleanup: (() => void) | null = null;
+let readyTimeoutId: ReturnType<typeof setTimeout> | null = null;
+let historyTimeoutId: ReturnType<typeof setTimeout> | null = null;
+
+type NaturalCrop = { x: number; y: number; width: number; height: number };
+
+function mapNaturalToCropperCoords(
+  natural: NaturalCrop,
+  cropperInstance: CropperInstance
+): NaturalCrop | null {
+  if (cropperInstance.visibleArea && cropperInstance.imageSize) {
+    const va = cropperInstance.visibleArea;
+    const img = cropperInstance.imageSize;
+    const scaleX = va.width / img.width;
+    const scaleY = va.height / img.height;
+    return {
+      x: va.left + natural.x * scaleX,
+      y: va.top + natural.y * scaleY,
+      width: natural.width * scaleX,
+      height: natural.height * scaleY,
+    };
+  }
+
+  if (cropperInstance.image) {
+    return { ...natural };
+  }
+
+  return null;
+}
+
+const DEBUG_POINT_COLORS: Record<
+  PortraitDebugOverlay["points"][number]["kind"],
+  string
+> = {
+  "face-ear": "#ff4444",
+  "face-cheek": "#ffcc00",
+  "face-eye": "#00ccff",
+  "pose-ear": "#44ff44",
+  bbox: "#ff44ff",
+};
+
+/**
+ * On-screen rectangle of the displayed image, relative to the overlay canvas.
+ * Using the actual <img> element's bounding box correctly accounts for
+ * letterboxing and fit-scaling (the cropper's internal image space does not
+ * map 1:1 to DOM pixels).
+ */
+function getImageScreenRect(): {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+} | null {
+  const instance = cropper.value as unknown as { $el?: HTMLElement } | null;
+  const canvas = debugCanvas.value;
+  const imgEl = instance?.$el?.querySelector(
+    ".vue-advanced-cropper__image"
+  ) as HTMLElement | null;
+  if (!imgEl || !canvas) return null;
+
+  const wrapper = canvas.parentElement;
+  if (!wrapper) return null;
+
+  const imgRect = imgEl.getBoundingClientRect();
+  const wrapRect = wrapper.getBoundingClientRect();
+  if (imgRect.width <= 0 || imgRect.height <= 0) return null;
+
+  return {
+    left: imgRect.left - wrapRect.left,
+    top: imgRect.top - wrapRect.top,
+    width: imgRect.width,
+    height: imgRect.height,
+  };
+}
+
+function drawDetectionDebugOverlay(): void {
+  const canvas = debugCanvas.value;
+  const overlay = detectionDebug;
+  if (!canvas || !overlay || !showDebugOverlay.value) return;
+
+  // Normalized → screen mapping breaks under rotation; skip to avoid confusion.
+  if (currentRotation.value !== 0) return;
+
+  const wrapper = canvas.parentElement;
+  if (!wrapper) return;
+
+  const width = wrapper.clientWidth;
+  const height = wrapper.clientHeight;
+  if (width <= 0 || height <= 0) return;
+
+  const imgRect = getImageScreenRect();
+  if (!imgRect) return;
+
+  const imgWidth = overlay.imageSize.width;
+  const imgHeight = overlay.imageSize.height;
+  if (imgWidth <= 0 || imgHeight <= 0) return;
+
+  const toScreen = (px: number, py: number): { x: number; y: number } => ({
+    x: imgRect.left + (px / imgWidth) * imgRect.width,
+    y: imgRect.top + (py / imgHeight) * imgRect.height,
+  });
+
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(width * dpr);
+  canvas.height = Math.round(height * dpr);
+  canvas.style.width = `${width}px`;
+  canvas.style.height = `${height}px`;
+
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+
+  for (const point of overlay.points) {
+    const mapped = toScreen(point.x, point.y);
+    const color = DEBUG_POINT_COLORS[point.kind];
+    ctx.beginPath();
+    ctx.fillStyle = color;
+    ctx.arc(mapped.x, mapped.y, 4, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.font = "10px sans-serif";
+    ctx.fillStyle = color;
+    ctx.fillText(point.label, mapped.x + 6, mapped.y - 6);
+  }
+
+  const drawRect = (
+    box: { x: number; y: number; width: number; height: number },
+    color: string,
+    dash: number[]
+  ) => {
+    const topLeft = toScreen(box.x, box.y);
+    const bottomRight = toScreen(
+      box.x + box.width,
+      box.y + box.height
+    );
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.setLineDash(dash);
+    ctx.strokeRect(
+      topLeft.x,
+      topLeft.y,
+      bottomRight.x - topLeft.x,
+      bottomRight.y - topLeft.y
+    );
+    ctx.setLineDash([]);
+  };
+
+  if (overlay.bbox) {
+    drawRect(overlay.bbox, DEBUG_POINT_COLORS.bbox, [6, 4]);
+  }
+
+  if (overlay.appliedCrop) {
+    drawRect(overlay.appliedCrop, "rgba(255, 255, 255, 0.95)", []);
+  }
+
+  const legend = [
+    overlay.widthSource ? `source: ${overlay.widthSource}` : null,
+    overlay.faceWidthPx != null
+      ? `face cap: ${Math.round(overlay.faceWidthPx)}px`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  if (legend) {
+    ctx.font = "11px sans-serif";
+    ctx.fillStyle = "rgba(255, 255, 255, 0.92)";
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.7)";
+    ctx.lineWidth = 3;
+    ctx.strokeText(legend, 10, height - 12);
+    ctx.fillText(legend, 10, height - 12);
+  }
+}
+
+function scheduleDebugOverlayDraw(): void {
+  if (!debugOverlayAvailable || !detectionDebug || !showDebugOverlay.value) {
+    return;
+  }
+  nextTick(() => {
+    requestAnimationFrame(() => drawDetectionDebugOverlay());
+  });
+}
+
+function resolveInitialNaturalCrop(): NaturalCrop | null {
+  if (suggestedCrop) return { ...suggestedCrop };
+  if (initialCrop) return { ...initialCrop };
+  return null;
+}
+
+function applyCoordinatesToCropper(
+  natural: NaturalCrop | null,
+  useFullFrameFallback: boolean
+): { left: number; top: number; width: number; height: number } | null {
+  if (!cropper.value) return null;
+
+  cropper.value.updateBoundaries();
+
+  if (natural) {
+    const mapped = mapNaturalToCropperCoords(natural, cropper.value);
+    if (mapped) {
+      const coordinates = {
+        left: mapped.x,
+        top: mapped.y,
+        width: mapped.width,
+        height: mapped.height,
+      };
+      cropper.value.setCoordinates(coordinates);
+      cropper.value.updateBoundaries();
+      return coordinates;
+    }
+  }
+
+  if (useFullFrameFallback && cropper.value.visibleArea) {
+    const visibleArea = cropper.value.visibleArea;
+    const coordinates = {
+      left: visibleArea.left,
+      top: visibleArea.top,
+      width: visibleArea.width,
+      height: visibleArea.height,
+    };
+    cropper.value.setCoordinates(coordinates);
+    cropper.value.updateBoundaries();
+    return coordinates;
+  }
+
+  if (useFullFrameFallback) {
+    cropper.value.reset();
+    cropper.value.updateBoundaries();
+    return cropper.value.stencilCoordinates;
+  }
+
+  return null;
+}
+
+function seedCropHistory(coordinates: {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}): void {
+  if (!cropper.value) return;
+
+  historyTimeoutId = setTimeout(() => {
+    if (!cropper.value) return;
+    const { canvas } = cropper.value.getResult();
+    if (canvas) {
+      canvas.toBlob((blob) => {
+        if (blob) {
+          cropHistory.value = [{ blob, coordinates }];
+          cropFuture.value = [];
+        }
+      }, "image/png");
+    }
+  }, 50);
+}
+
+const applyStencilFromProps = (useFullFrameFallback = true) => {
+  if (!cropper.value || !cropper.value.image) return;
+
+  const natural = resolveInitialNaturalCrop();
+  const coordinates = applyCoordinatesToCropper(natural, useFullFrameFallback);
+  if (coordinates) {
+    seedCropHistory(coordinates);
+  }
+};
+
+watch(
+  () => suggestedCrop,
+  (crop) => {
+    if (!crop || !cropper.value?.image) return;
+    const coordinates = applyCoordinatesToCropper({ ...crop }, false);
+    if (coordinates) {
+      seedCropHistory(coordinates);
+    }
+    scheduleDebugOverlayDraw();
+  }
+);
+
+watch(
+  () => [detectionDebug, suggestedCrop],
+  () => scheduleDebugOverlayDraw()
+);
+
+watch(showDebugOverlay, () => scheduleDebugOverlayDraw());
 
 const onCropperReady = () => {
   if (cropper.value && cropper.value.image) {
@@ -494,64 +774,13 @@ const onCropperReady = () => {
           dragListenerCleanup();
         }
         dragListenerCleanup = setupStencilDragListeners();
-        let coordinates: {
-          left: number;
-          top: number;
-          width: number;
-          height: number;
-        };
-
-        // Apply initial rotation if any
         if (initialRotation !== undefined && initialRotation !== 0) {
           applyRotationToCropper(initialRotation);
         }
 
-        // Always set to full image size when first opening the crop tool
-        // First update boundaries to ensure visibleArea is calculated
-        cropper.value.updateBoundaries();
-
-        // Wait a bit for boundaries to be fully updated, then set coordinates to cover full visible area
-        setTimeout(() => {
-          if (cropper.value) {
-            if (cropper.value.visibleArea) {
-              const visibleArea = cropper.value.visibleArea;
-              // Set coordinates to match the entire visible area
-              coordinates = {
-                left: visibleArea.left,
-                top: visibleArea.top,
-                width: visibleArea.width,
-                height: visibleArea.height,
-              };
-              console.log(
-                "Setting default crop coordinates to full visible area:",
-                coordinates
-              );
-              cropper.value.setCoordinates(coordinates);
-              cropper.value.updateBoundaries();
-            } else {
-              // Fallback: use reset if visibleArea not available
-              cropper.value.reset();
-              cropper.value.updateBoundaries();
-              coordinates = cropper.value.stencilCoordinates;
-            }
-
-            // Store in history for undo/redo - ensure canvas is ready
-            setTimeout(() => {
-              if (cropper.value) {
-                const { canvas } = cropper.value.getResult();
-                if (canvas) {
-                  canvas.toBlob((blob) => {
-                    if (blob) {
-                      cropHistory.value = [{ blob, coordinates }];
-                      console.log("Initial history:", cropHistory.value);
-                    }
-                  }, "image/png");
-                } else {
-                  console.warn("Canvas is undefined in onCropperReady");
-                }
-              }
-            }, 50);
-          }
+        readyTimeoutId = setTimeout(() => {
+          applyStencilFromProps(true);
+          scheduleDebugOverlayDraw();
         }, 50);
       }
     });
@@ -578,18 +807,6 @@ const cropImage = async () => {
         // Store stencil coordinates for internal history (used for undo/redo within cropper)
         cropHistory.value.push({ blob, coordinates: stencilCoords });
         cropFuture.value = [];
-        console.log("Crop history:", cropHistory.value);
-
-        console.log("=== CROP COORDINATE CONVERSION ===");
-        console.log("Stencil coordinates (cropper internal):", stencilCoords);
-        console.log(
-          "getResult() coordinates (natural image space):",
-          resultCoordinates
-        );
-        console.log("Cropped canvas dimensions (output):", {
-          width: canvas.width,
-          height: canvas.height,
-        });
 
         // Use coordinates from getResult() - they're already in natural image pixel space
         let naturalCoords;
@@ -600,9 +817,6 @@ const cropImage = async () => {
             width: Math.round(resultCoordinates.width),
             height: Math.round(resultCoordinates.height),
           };
-          console.log(
-            "Using getResult() coordinates (already in natural space)"
-          );
         } else {
           // Fallback to stencilCoordinates if getResult() doesn't provide coordinates
           console.warn(
@@ -615,9 +829,6 @@ const cropImage = async () => {
             height: Math.round(stencilCoords.height),
           };
         }
-        console.log("Final natural coordinates:", naturalCoords);
-        console.log("Rotation angle:", currentRotation.value);
-        console.log("=== END CROP COORDINATE CONVERSION ===");
 
         emit("cropped", blob, naturalCoords, currentRotation.value);
         emit("close");
@@ -643,15 +854,6 @@ const rotate = (angle: number) => {
       width: 0,
       height: 0,
     };
-
-    console.log("Before rotate:", {
-      imgWidth,
-      imgHeight,
-      left,
-      top,
-      width,
-      height,
-    });
 
     const centerX = (left + width / 2) / imgWidth - 0.5;
     const centerY = (top + height / 2) / imgHeight - 0.5;
@@ -687,8 +889,6 @@ const rotate = (angle: number) => {
     newLeft = Math.max(0, Math.min(newLeft, newImgWidth - newWidth));
     newTop = Math.max(0, Math.min(newTop, newImgHeight - newHeight));
 
-    console.log("After rotate:", { newLeft, newTop, newWidth, newHeight });
-
     const coordinates = {
       left: newLeft,
       top: newTop,
@@ -703,7 +903,6 @@ const rotate = (angle: number) => {
         if (blob) {
           cropHistory.value.push({ blob, coordinates });
           cropFuture.value = [];
-          console.log("Rotate history:", cropHistory.value);
         }
       }, "image/png");
     } else {
@@ -718,7 +917,6 @@ const undo = () => {
     if (lastState) {
       cropFuture.value.push(lastState);
       const currentState = cropHistory.value[cropHistory.value.length - 1];
-      console.log("Undoing to:", currentState);
       cropper.value.reset(); // Reset cropper to clear rotation state
       currentImageSrc.value = URL.createObjectURL(currentState.blob);
     }
@@ -730,7 +928,6 @@ const redo = () => {
     const nextState = cropFuture.value.pop();
     if (nextState) {
       cropHistory.value.push(nextState);
-      console.log("Redoing to:", nextState);
       cropper.value.reset(); // Reset cropper to clear rotation state
       currentImageSrc.value = URL.createObjectURL(nextState.blob);
     }
@@ -758,7 +955,6 @@ const reset = () => {
           canvas.toBlob((blob) => {
             if (blob) {
               cropHistory.value = [{ blob, coordinates }];
-              console.log("Reset history:", cropHistory.value);
             }
           }, "image/png");
         } else {
@@ -892,6 +1088,61 @@ const reset = () => {
 
 :deep(.vue-simple-line-wrapper) {
   border-color: white !important;
+}
+
+.cropper-wrapper {
+  position: relative;
+}
+
+.detection-debug-canvas {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  pointer-events: none;
+}
+
+.debug-overlay-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary, #666);
+  margin: 4px 0 0;
+  cursor: pointer;
+  user-select: none;
+}
+
+.suggestion-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: rgba(0, 0, 0, 0.45);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 13px;
+  pointer-events: none;
+}
+
+.suggest-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.suggestion-message {
+  width: 100%;
+  margin: 0;
+  text-align: center;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.65);
+}
+
+.suggestion-message--error {
+  color: #f87171;
 }
 
 .controls {

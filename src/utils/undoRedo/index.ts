@@ -17,3 +17,5 @@ export { CropCommand } from "./commands/CropCommand";
 export { PasteSettingsCommand } from "./commands/PasteSettingsCommand";
 export type { CopiedSettings } from "./commands/PasteSettingsCommand";
 export { BatchCommand } from "./commands/BatchCommand";
+export { BatchFlipCommand } from "./commands/BatchFlipCommand";
+export { BatchCropCommand } from "./commands/BatchCropCommand";

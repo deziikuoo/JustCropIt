@@ -5,8 +5,17 @@
  * Provides clean, readable output and export capabilities for performance analysis.
  */
 
+import type { ExportBatchStats } from '../types/export';
+import type { DetectionStageTimings } from '../types/detection';
+
+export interface IngestStageTimings {
+  decodeMs?: number;
+  normalizeMs?: number;
+  thumbnailMs?: number;
+}
+
 export interface PerformanceMetrics {
-  operationType: 'flip-horizontal' | 'flip-vertical' | 'crop' | 'paste' | 'download' | 'delete' | 'upload' | 'select-drag' | 'select-all' | 'revert' | 'video-extract';
+  operationType: 'flip-horizontal' | 'flip-vertical' | 'crop' | 'paste' | 'download' | 'delete' | 'upload' | 'upload-ingest' | 'select-drag' | 'select-all' | 'revert' | 'video-extract' | 'history-navigate' | 'crop-suggest';
   batchSize: number;
   totalTime: number; // Total operation time in milliseconds
   perImageTime: number; // Average time per image in milliseconds
@@ -29,6 +38,9 @@ class PerformanceLogger {
   private metrics: PerformanceMetrics[] = [];
   private activeMeasurements: Map<string, number> = new Map();
   private gridSnapshots: GridRuntimeSnapshot[] = [];
+  private ingestStageTimings: Map<string, IngestStageTimings[]> = new Map();
+  private detectionStageTimings: Map<string, DetectionStageTimings[]> = new Map();
+  private exportBatchStats: Map<string, ExportBatchStats> = new Map();
 
   /**
    * Start measuring an operation
@@ -36,7 +48,46 @@ class PerformanceLogger {
    */
   startMeasurement(operationId: string): void {
     this.activeMeasurements.set(operationId, performance.now());
+    this.ingestStageTimings.set(operationId, []);
+    this.detectionStageTimings.set(operationId, []);
+    this.exportBatchStats.delete(operationId);
     performance.mark(`${operationId}-start`);
+  }
+
+  /**
+   * Record export path breakdown for batch download operations.
+   */
+  recordExportBatchStats(
+    operationId: string,
+    stats: ExportBatchStats
+  ): void {
+    this.exportBatchStats.set(operationId, stats);
+  }
+
+  /**
+   * Record per-file ingest stage timings for upload-ingest operations.
+   */
+  recordIngestStageTimings(
+    operationId: string,
+    timings: IngestStageTimings
+  ): void {
+    const list = this.ingestStageTimings.get(operationId);
+    if (list) {
+      list.push(timings);
+    }
+  }
+
+  /**
+   * Record stage timings for crop-suggest / detection operations.
+   */
+  recordDetectionStageTimings(
+    operationId: string,
+    timings: DetectionStageTimings
+  ): void {
+    const list = this.detectionStageTimings.get(operationId);
+    if (list) {
+      list.push(timings);
+    }
   }
 
   /**
@@ -116,6 +167,41 @@ class PerformanceLogger {
 
     this.metrics.push(metric);
     this.activeMeasurements.delete(operationId);
+
+    const stages = this.ingestStageTimings.get(operationId);
+    if (stages && stages.length > 0 && import.meta.env.DEV) {
+      const totals = stages.reduce<{
+        decodeMs: number;
+        normalizeMs: number;
+        thumbnailMs: number;
+      }>(
+        (acc, s) => ({
+          decodeMs: acc.decodeMs + (s.decodeMs ?? 0),
+          normalizeMs: acc.normalizeMs + (s.normalizeMs ?? 0),
+          thumbnailMs: acc.thumbnailMs + (s.thumbnailMs ?? 0),
+        }),
+        { decodeMs: 0, normalizeMs: 0, thumbnailMs: 0 }
+      );
+      console.log(`   Ingest stages (${stages.length} files): decode=${totals.decodeMs}ms normalize=${totals.normalizeMs}ms thumb=${totals.thumbnailMs}ms`);
+    }
+    this.ingestStageTimings.delete(operationId);
+
+    const detectionStages = this.detectionStageTimings.get(operationId);
+    if (detectionStages && detectionStages.length > 0 && import.meta.env.DEV) {
+      const last = detectionStages[detectionStages.length - 1];
+      console.log(
+        `   Detection stages: downscale=${last.downscaleMs ?? 0}ms loadModel=${last.loadModelMs ?? 0}ms inference=${last.inferenceMs ?? 0}ms post=${last.postProcessMs ?? 0}ms`
+      );
+    }
+    this.detectionStageTimings.delete(operationId);
+
+    const exportStats = this.exportBatchStats.get(operationId);
+    if (exportStats && import.meta.env.DEV) {
+      console.log(
+        `   Export paths: pass=${exportStats.passThroughCount} fast=${exportStats.fastPathCount} slow=${exportStats.slowPathCount} worker=${exportStats.workerUsed}`
+      );
+    }
+    this.exportBatchStats.delete(operationId);
     
     // Clean up performance marks
     try {

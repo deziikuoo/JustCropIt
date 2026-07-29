@@ -34,7 +34,7 @@ export default defineConfig(({ mode }) => ({
   base: mode === "production" ? "/JustCropIt/" : "/",
   optimizeDeps: {
     // @ffmpeg/ffmpeg ships its own worker entry; pre-bundling breaks worker resolution
-    exclude: ["@ffmpeg/ffmpeg", "@ffmpeg/util"],
+    exclude: ["@ffmpeg/ffmpeg", "@ffmpeg/util", "@mediapipe/tasks-vision"],
   },
   worker: {
     format: "es",

@@ -3,60 +3,119 @@
  * Central manager for undo/redo operations using Command Pattern
  */
 
-import type { Command, HistoryEntry } from "./types";
-import { comparePhotoStates } from "./types";
+import type { HistoryPanelState } from '../../types/history';
+import { buildHistoryPanelState } from './historySnapshots';
+import type { Command, HistoryEntry } from './types';
+import { comparePhotoStates } from './types';
 
 export class UndoRedoManager {
   private undoStack: HistoryEntry[] = [];
   private redoStack: HistoryEntry[] = [];
   private maxHistorySize: number = 50;
+  private truncatedCount: number = 0;
+  private listeners = new Set<() => void>();
+  private isNavigating = false;
+
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  private notifyListeners(): void {
+    for (const listener of this.listeners) {
+      listener();
+    }
+  }
+
+  getHistoryPanelState(): HistoryPanelState {
+    return buildHistoryPanelState(
+      this.undoStack,
+      this.redoStack,
+      this.truncatedCount
+    );
+  }
+
+  getIsNavigating(): boolean {
+    return this.isNavigating;
+  }
+
+  /**
+   * Undo until undo stack length equals targetPointer.
+   * pointer 0 = no actions applied; pointer === undoStack.length = current state.
+   */
+  async undoTo(targetPointer: number): Promise<number> {
+    if (this.isNavigating) {
+      throw new Error('History navigation already in progress');
+    }
+
+    const clampedTarget = Math.max(
+      0,
+      Math.min(targetPointer, this.undoStack.length)
+    );
+
+    if (clampedTarget === this.undoStack.length) {
+      return 0;
+    }
+
+    this.isNavigating = true;
+    let stepsUndone = 0;
+
+    try {
+      while (this.undoStack.length > clampedTarget) {
+        const didUndo = await this.undo();
+        if (!didUndo) break;
+        stepsUndone++;
+      }
+      return stepsUndone;
+    } finally {
+      this.isNavigating = false;
+      this.notifyListeners();
+    }
+  }
 
   /**
    * Execute a command and add it to the undo stack
    */
   async executeCommand(command: Command): Promise<void> {
-    // Validate command before execution
     if (!command.validate()) {
-      throw new Error("Command validation failed");
+      throw new Error('Command validation failed');
     }
 
-    // Capture state before execution for comparison
     const beforeState = command.captureState?.();
 
     try {
-      // Execute the command
       await command.execute();
 
-      // Capture state after execution
       const afterState = command.captureState?.();
 
-      // Skip adding to history if state didn't change
       if (beforeState && afterState) {
         if (beforeState instanceof Map && afterState instanceof Map) {
-          // Multiple photos - check if any changed
           let hasChanges = false;
           for (const [photoId, beforePhotoState] of beforeState) {
             const afterPhotoState = afterState.get(photoId);
-            if (afterPhotoState && !comparePhotoStates(beforePhotoState, afterPhotoState)) {
+            if (
+              afterPhotoState &&
+              !comparePhotoStates(beforePhotoState, afterPhotoState)
+            ) {
               hasChanges = true;
               break;
             }
           }
           if (!hasChanges) {
-            return; // No changes, skip adding to history
+            return;
           }
         } else if (
           !(beforeState instanceof Map) &&
           !(afterState instanceof Map)
         ) {
-          // Single photo
           if (comparePhotoStates(beforeState, afterState)) {
-            return; // No changes, skip adding to history
+            return;
           }
         }
       }
 
-      // Add to undo stack
       const entry: HistoryEntry = {
         command,
         timestamp: Date.now(),
@@ -64,22 +123,22 @@ export class UndoRedoManager {
       };
 
       this.undoStack.push(entry);
-      this.redoStack = []; // Clear redo stack on new action
+      this.redoStack = [];
       this.enforceMaxSize();
+      this.notifyListeners();
     } catch (error) {
-      // Rollback attempt - try to undo if possible
       try {
         await command.undo();
       } catch (rollbackError) {
-        console.error("Rollback failed after command execution error:", rollbackError);
+        console.error(
+          'Rollback failed after command execution error:',
+          rollbackError
+        );
       }
-      throw error; // Re-throw original error
+      throw error;
     }
   }
 
-  /**
-   * Undo the last command
-   */
   async undo(): Promise<boolean> {
     if (this.undoStack.length === 0) {
       return false;
@@ -89,18 +148,17 @@ export class UndoRedoManager {
     try {
       await entry.command.undo();
       this.redoStack.push(entry);
+      if (!this.isNavigating) {
+        this.notifyListeners();
+      }
       return true;
     } catch (error) {
-      // If undo fails, put the entry back
       this.undoStack.push(entry);
-      console.error("Undo operation failed:", error);
+      console.error('Undo operation failed:', error);
       throw error;
     }
   }
 
-  /**
-   * Redo the last undone command
-   */
   async redo(): Promise<boolean> {
     if (this.redoStack.length === 0) {
       return false;
@@ -110,66 +168,50 @@ export class UndoRedoManager {
     try {
       await entry.command.execute();
       this.undoStack.push(entry);
+      this.notifyListeners();
       return true;
     } catch (error) {
-      // If redo fails, put the entry back
       this.redoStack.push(entry);
-      console.error("Redo operation failed:", error);
+      console.error('Redo operation failed:', error);
       throw error;
     }
   }
 
-  /**
-   * Check if undo is available
-   */
   canUndo(): boolean {
     return this.undoStack.length > 0;
   }
 
-  /**
-   * Check if redo is available
-   */
   canRedo(): boolean {
     return this.redoStack.length > 0;
   }
 
-  /**
-   * Clear all undo/redo history
-   */
   clear(): void {
     this.undoStack = [];
     this.redoStack = [];
+    this.truncatedCount = 0;
+    this.notifyListeners();
   }
 
-  /**
-   * Remove history entries for a deleted photo
-   */
   onPhotoDeleted(photoId: string): void {
-    // Remove from undo stack
     this.undoStack = this.undoStack.filter(
       (entry) => !entry.affectedPhotoIds.includes(photoId)
     );
 
-    // Remove from redo stack
     this.redoStack = this.redoStack.filter(
       (entry) => !entry.affectedPhotoIds.includes(photoId)
     );
+
+    this.notifyListeners();
   }
 
-  /**
-   * Enforce maximum history size
-   */
   private enforceMaxSize(): void {
     if (this.undoStack.length > this.maxHistorySize) {
-      // Remove oldest entries
       const removedCount = this.undoStack.length - this.maxHistorySize;
       this.undoStack.splice(0, removedCount);
+      this.truncatedCount += removedCount;
     }
   }
 
-  /**
-   * Get the current history size
-   */
   getHistorySize(): { undo: number; redo: number } {
     return {
       undo: this.undoStack.length,
@@ -177,11 +219,9 @@ export class UndoRedoManager {
     };
   }
 
-  /**
-   * Set the maximum history size
-   */
   setMaxHistorySize(size: number): void {
     this.maxHistorySize = Math.max(1, size);
     this.enforceMaxSize();
+    this.notifyListeners();
   }
 }

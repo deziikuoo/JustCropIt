@@ -65,7 +65,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onUnmounted, computed, withDefaults } from "vue";
+import { ref, watch, onUnmounted, computed } from "vue";
 
 interface Props {
   selectedCount: number;

@@ -14,6 +14,8 @@ export interface PhotoData {
     crop?: { x: number; y: number; width: number; height: number };
     rotation?: number; // Rotation angle in degrees (0, 90, 180, 270, etc.)
     thumbhash?: string;
+    sourceFormat?: string;
+    exifNormalized?: boolean;
   };
 }
 
@@ -155,6 +157,8 @@ export const savePhoto = async (
     crop?: { x: number; y: number; width: number; height: number };
     rotation?: number;
     thumbhash?: string;
+    sourceFormat?: string;
+    exifNormalized?: boolean;
   },
   thumbnail?: Blob
 ): Promise<string> => {

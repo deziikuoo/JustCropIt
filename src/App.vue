@@ -115,12 +115,25 @@
       @select="handleBatchCropImageSelect"
       @close="handleBatchCropSelectorClose"
     />
+    <OperationHistoryPanel v-if="appMode === 'photos'" />
     <CropModal
       v-if="showCropModal"
       :show="showCropModal"
       :imageSrc="cropImageSrc"
       :initialCrop="photos[cropIndex]?.crop"
       :initialRotation="photos[cropIndex]?.rotation"
+      :suggested-crop="suggestedCrop"
+      :detection-debug="detectionDebug"
+      :suggestion-loading="suggestionLoading"
+      :suggestion-error="suggestionError"
+      :suggestion-no-subject="
+        suggestionAttempted &&
+        !suggestionLoading &&
+        !suggestedCrop &&
+        !suggestionError &&
+        isDetectionSupported()
+      "
+      :detection-supported="isDetectionSupported()"
       :batchMode="isBatchCropMode"
       :currentBatchIndex="
         isBatchCropMode && batchCropIndices
@@ -136,6 +149,8 @@
       @close="handleCropModalClose"
       @next-image="handleNextBatchImage"
       @previous-image="handlePreviousBatchImage"
+      @request-suggest="handleRequestCropSuggest"
+      @cancel-suggest="cancelCropSuggestion"
     />
     <!-- Debug tools (disabled)
     <PerformanceDashboard />
@@ -146,7 +161,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch, provide } from "vue";
 import PhotoGrid from "./components/PhotoGrid.vue";
 import CropModal from "./components/CropModal.vue";
 import BatchCropSelector from "./components/BatchCropSelector.vue";
@@ -157,31 +172,42 @@ import DeletionNotification from "./components/DeletionNotification.vue";
 // import OptimizationCheckModal from "./components/OptimizationCheckModal.vue";
 // import CopyPasteVisualizer from "./components/CopyPasteVisualizer.vue";
 import VideoExtractor from "./components/VideoExtractor.vue";
+import OperationHistoryPanel from "./components/OperationHistoryPanel.vue";
 import JSZip from "jszip";
-import { DOWNLOAD_PARALLEL_BATCH_SIZE } from "./constants/optimization";
+import { getExportStripChunkSize, HISTORY_MAX_SIZE } from "./constants/optimization";
+import { UNDO_REDO_MANAGER_KEY } from "./types/history";
+import { useOperationHistory } from "./composables/useOperationHistory";
+import { useCropSuggestion } from "./composables/useCropSuggestion";
+import { scheduleIdleTask } from "./utils/scheduler";
+import { useExportSettings } from "./composables/useExportSettings";
+import { prepareExportFile } from "./utils/export/prepareExportBlob";
+import type { ExportBatchStats } from "./types/export";
 import { copyPasteLogger } from "./utils/copyPasteLogger";
 import { performanceLogger } from "./utils/performanceLogger";
 import {
   initDB,
-  savePhoto,
   updatePhoto,
   updatePhotosBatch,
   loadAllPhotos,
   deletePhoto,
   deletePhotos,
   cleanupExpiredPhotos,
-  canStorePhoto,
   getStorageStatus,
 } from "./utils/photoStorage";
-import { runBatchFlip, runBatchCropRemaining, runBatchPaste } from "./utils/batchImageOps";
-import { UndoRedoManager, FlipCommand } from "./utils/undoRedo";
+import { imageWorkerPool } from "./utils/imageWorkerPool";
+import {
+  UndoRedoManager,
+  FlipCommand,
+  CropCommand,
+  PasteSettingsCommand,
+  BatchFlipCommand,
+  BatchCropCommand,
+} from "./utils/undoRedo";
 import type { Photo } from "./types/photo";
 import { blobToFile } from "./utils/blobToFile";
-import { createThumbnailFromFile } from "./utils/thumbnailGenerator";
-import { createThumbhashFromBlob } from "./utils/thumbhashGenerator";
 import { scheduleThumbnailBackfill } from "./utils/thumbnailBackfill";
 import { applyDisplayInvalidation } from "./utils/thumbnailInvalidation";
-import { processInChunks } from "./utils/scheduler";
+import { ingestAndPersistPhotos } from "./utils/import/ingestAndPersist";
 
 const photoSizes = [
   { label: "XS", minSize: 180 },
@@ -198,6 +224,7 @@ interface CopiedSettings {
 }
 
 const photos = ref<Photo[]>([]);
+const { settings: exportSettings } = useExportSettings();
 const selectedPhotoSize = ref(2);
 const newPhotosCount = ref(0);
 const deletedPhotosCount = ref(0);
@@ -274,6 +301,21 @@ const handlePhotoThumbnailUpdated = (
 
 // Initialize UndoRedoManager
 const undoRedoManager = new UndoRedoManager();
+undoRedoManager.setMaxHistorySize(HISTORY_MAX_SIZE);
+provide(UNDO_REDO_MANAGER_KEY, undoRedoManager);
+const { undo: historyUndo, redo: historyRedo } =
+  useOperationHistory(undoRedoManager);
+const {
+  suggestedCrop,
+  detectionDebug,
+  loading: suggestionLoading,
+  error: suggestionError,
+  attempted: suggestionAttempted,
+  isSupported: isDetectionSupported,
+  suggestForPhotoImmediate,
+  cancel: cancelCropSuggestion,
+  reset: resetCropSuggestion,
+} = useCropSuggestion();
 const isBatchDeleting = ref(false);
 const showCropModal = ref(false);
 const showBatchCropSelector = ref(false);
@@ -343,8 +385,6 @@ const debounce = <T extends (...args: any[]) => void>(fn: T, delay: number) => {
     timeout = setTimeout(() => fn(...args), delay);
   };
 };
-
-const UPLOAD_THUMB_CHUNK_SIZE = 3;
 
 // Helper function to apply flips, rotation, and crop to an image
 // All transformations are applied starting from the original image
@@ -458,103 +498,6 @@ const applyFlipsRotationAndCrop = async (
   });
 };
 
-// Helper function to apply rotation and crop to an image
-// Crop coordinates are relative to the original (non-rotated) image
-const applyRotationAndCrop = async (
-  image: HTMLImageElement,
-  rotation: number,
-  crop: { x: number; y: number; width: number; height: number },
-  mimeType: string
-): Promise<Blob | null> => {
-  // Normalize rotation to 0-360 range
-  const normalizedRotation = ((rotation % 360) + 360) % 360;
-  const rotationRad = (normalizedRotation * Math.PI) / 180;
-
-  const imgWidth = image.naturalWidth;
-  const imgHeight = image.naturalHeight;
-
-  // Determine dimensions after rotation
-  let rotatedWidth: number;
-  let rotatedHeight: number;
-  let cropX: number;
-  let cropY: number;
-  let cropWidth: number;
-  let cropHeight: number;
-
-  // Transform crop coordinates based on rotation
-  // Crop coordinates are in original image space, need to transform to rotated space
-  if (normalizedRotation === 90) {
-    // 90 degrees clockwise: dimensions swap, coordinates transform
-    rotatedWidth = imgHeight;
-    rotatedHeight = imgWidth;
-    cropX = crop.y;
-    cropY = imgWidth - crop.x - crop.width;
-    cropWidth = crop.height;
-    cropHeight = crop.width;
-  } else if (normalizedRotation === 180) {
-    // 180 degrees: dimensions stay same, coordinates flip
-    rotatedWidth = imgWidth;
-    rotatedHeight = imgHeight;
-    cropX = imgWidth - crop.x - crop.width;
-    cropY = imgHeight - crop.y - crop.height;
-    cropWidth = crop.width;
-    cropHeight = crop.height;
-  } else if (normalizedRotation === 270) {
-    // 270 degrees (or -90): dimensions swap, coordinates transform
-    rotatedWidth = imgHeight;
-    rotatedHeight = imgWidth;
-    cropX = imgHeight - crop.y - crop.height;
-    cropY = crop.x;
-    cropWidth = crop.height;
-    cropHeight = crop.width;
-  } else {
-    // 0 degrees: no transformation
-    rotatedWidth = imgWidth;
-    rotatedHeight = imgHeight;
-    cropX = crop.x;
-    cropY = crop.y;
-    cropWidth = crop.width;
-    cropHeight = crop.height;
-  }
-
-  // Create canvas for the rotated full image
-  const rotatedCanvas = document.createElement("canvas");
-  rotatedCanvas.width = rotatedWidth;
-  rotatedCanvas.height = rotatedHeight;
-  const rotatedCtx = rotatedCanvas.getContext("2d")!;
-
-  // Apply rotation transformation
-  rotatedCtx.save();
-  rotatedCtx.translate(rotatedWidth / 2, rotatedHeight / 2);
-  rotatedCtx.rotate(rotationRad);
-  rotatedCtx.drawImage(image, -imgWidth / 2, -imgHeight / 2);
-  rotatedCtx.restore();
-
-  // Create canvas for the final cropped result
-  const canvas = document.createElement("canvas");
-  canvas.width = cropWidth;
-  canvas.height = cropHeight;
-  const ctx = canvas.getContext("2d")!;
-
-  // Crop from the rotated image
-  ctx.drawImage(
-    rotatedCanvas,
-    cropX,
-    cropY,
-    cropWidth,
-    cropHeight,
-    0,
-    0,
-    cropWidth,
-    cropHeight
-  );
-
-  // Convert to blob
-  return new Promise<Blob | null>((resolve) => {
-    canvas.toBlob(resolve, mimeType);
-  });
-};
-
 // Load photos from IndexedDB
 const loadPhotosFromStorage = async () => {
   try {
@@ -625,226 +568,59 @@ const loadPhotosFromStorage = async () => {
 
 const handleUpload = async (event: Event) => {
   const input = event.target as HTMLInputElement;
-  if (input.files) {
-    const validFiles = Array.from(input.files).filter((file) =>
-      file.type.startsWith("image/")
-    );
+  if (!input.files) return;
 
-    if (validFiles.length === 0) return;
-
-    // Check storage quota before uploading
-    const uploadPromises = validFiles.map(async (file) => {
-      const check = await canStorePhoto(file);
-      if (!check.canStore) {
-        showAlert(
-          "error",
-          "Storage Limit",
-          check.reason || "Cannot store photo",
-          5000
-        );
-        return null;
-      }
-      return file;
-    });
-
-    const checkedFiles = (await Promise.all(uploadPromises)).filter(
-      (f): f is File => f !== null
-    );
-
-    if (checkedFiles.length === 0) return;
-
-    // Check storage status for warnings
-    const status = await getStorageStatus();
-    if (status.shouldWarn) {
-      showAlert("warning", "Storage Warning", status.message || "", 6000);
+  const { photos: newPhotos } = await ingestAndPersistPhotos(
+    Array.from(input.files),
+    {
+      operationIdPrefix: "upload",
+      onError: (title, message) => showAlert("error", title, message, 5000),
+      onStorageWarning: (message) =>
+        showAlert("warning", "Storage Warning", message, 6000),
+      onPhotosAdded: trackPhotoAddition,
     }
+  );
 
-    // Start performance measurement
-    const operationId = `upload-${Date.now()}`;
-    performanceLogger.startMeasurement(operationId);
-
-    // Save to IndexedDB and add to photos array
-    const newPhotos: Photo[] = [];
-    const uploadResults = await processInChunks(
-      checkedFiles,
-      async (file) => {
-        try {
-          const thumbnailBlob = await createThumbnailFromFile(file);
-          const thumbhash = await createThumbhashFromBlob(thumbnailBlob);
-          const id = await savePhoto(
-            file,
-            file,
-            {
-              name: file.name,
-              flips: { horizontal: false, vertical: false },
-              ...(thumbhash ? { thumbhash } : {}),
-            },
-            thumbnailBlob
-          );
-          const thumbnailFile = blobToFile(
-            thumbnailBlob,
-            `thumb-${file.name}`,
-            "image/jpeg"
-          );
-          return { id, file, thumbnailFile, thumbhash };
-        } catch (error) {
-          console.error("Failed to save photo to storage:", error);
-          showAlert(
-            "error",
-            "Upload Error",
-            `Failed to save ${file.name}. Please try again.`,
-            5000
-          );
-          return null;
-        }
-      },
-      UPLOAD_THUMB_CHUNK_SIZE
-    );
-
-    for (const result of uploadResults) {
-      if (!result) continue;
-      newPhotos.push({
-        id: result.id,
-        original: result.file,
-        current: result.file,
-        thumbnail: result.thumbnailFile,
-        thumbhash: result.thumbhash,
-        thumbRevision: 0,
-        cropHistory: [],
-        cropFuture: [],
-        flips: { horizontal: false, vertical: false },
-        rotation: undefined,
-      });
-    }
-
+  if (newPhotos.length > 0) {
     photos.value.push(...newPhotos);
-
-    // End performance measurement
-    await performanceLogger.endMeasurement(
-      operationId,
-      "upload",
-      newPhotos.length,
-      false // Upload doesn't use workers
-    );
-    // Show notification for new photos
-    if (newPhotos.length > 0) {
-      trackPhotoAddition(newPhotos.length);
-    }
-
-    // Clear input
-    input.value = "";
   }
+
+  input.value = "";
 };
 
 // Handle video frames extracted from VideoExtractor
 const handleVideoFramesExtracted = async (files: File[]) => {
   if (files.length === 0) return;
 
-  // Switch to photos mode to show the results
   appMode.value = 'photos';
 
-  // Check storage quota before adding
-  const uploadPromises = files.map(async (file) => {
-    const check = await canStorePhoto(file);
-    if (!check.canStore) {
-      console.warn(`Cannot store frame ${file.name}: ${check.reason}`);
-      return null;
-    }
-    return file;
+  const { photos: newPhotos } = await ingestAndPersistPhotos(files, {
+    operationIdPrefix: "video-frames",
+    onError: (title, message) => showAlert("error", title, message, 5000),
+    onStorageWarning: (message) =>
+      showAlert("warning", "Storage Warning", message, 6000),
+    onPhotosAdded: (count) => {
+      trackPhotoAddition(count);
+      showAlert(
+        "info",
+        "Frames Added",
+        `${count} video frames have been added to your photos.`,
+        4000
+      );
+    },
   });
 
-  const checkedFiles = (await Promise.all(uploadPromises)).filter(
-    (f): f is File => f !== null
-  );
-
-  if (checkedFiles.length === 0) {
+  if (newPhotos.length === 0 && files.length > 0) {
     showAlert(
       "error",
-      "Storage Limit",
-      "Cannot store extracted frames due to storage limits.",
+      "Import Failed",
+      "No video frames could be imported. Check storage limits or file format.",
       5000
     );
     return;
   }
 
-  // Check storage status for warnings
-  const status = await getStorageStatus();
-  if (status.shouldWarn) {
-    showAlert("warning", "Storage Warning", status.message || "", 6000);
-  }
-
-  // Start performance measurement
-  const operationId = `video-frames-${Date.now()}`;
-  performanceLogger.startMeasurement(operationId);
-
-  // Save frames to IndexedDB and add to photos array
-  const newPhotos: Photo[] = [];
-  const uploadResults = await processInChunks(
-    checkedFiles,
-    async (file) => {
-      try {
-        const thumbnailBlob = await createThumbnailFromFile(file);
-        const thumbhash = await createThumbhashFromBlob(thumbnailBlob);
-        const id = await savePhoto(
-          file,
-          file,
-          {
-            name: file.name,
-            flips: { horizontal: false, vertical: false },
-            ...(thumbhash ? { thumbhash } : {}),
-          },
-          thumbnailBlob
-        );
-        const thumbnailFile = blobToFile(
-          thumbnailBlob,
-          `thumb-${file.name}`,
-          "image/jpeg"
-        );
-        return { id, file, thumbnailFile, thumbhash };
-      } catch (error) {
-        console.error("Failed to save video frame to storage:", error);
-        return null;
-      }
-    },
-    UPLOAD_THUMB_CHUNK_SIZE
-  );
-
-  for (const result of uploadResults) {
-    if (!result) continue;
-    newPhotos.push({
-      id: result.id,
-      original: result.file,
-      current: result.file,
-      thumbnail: result.thumbnailFile,
-      thumbhash: result.thumbhash,
-      thumbRevision: 0,
-      cropHistory: [],
-      cropFuture: [],
-      flips: { horizontal: false, vertical: false },
-      rotation: undefined,
-    });
-  }
-
   photos.value.push(...newPhotos);
-
-  // End performance measurement
-  await performanceLogger.endMeasurement(
-    operationId,
-    "video-extract",
-    newPhotos.length,
-    true // Uses worker
-  );
-
-  // Show notification for new photos
-  if (newPhotos.length > 0) {
-    trackPhotoAddition(newPhotos.length);
-    showAlert(
-      "info",
-      "Frames Added",
-      `${newPhotos.length} video frames have been added to your photos.`,
-      4000
-    );
-  }
 };
 
 const handleFlip = async (
@@ -872,75 +648,59 @@ const handleFlip = async (
   }
 };
 
+const startCropSuggestionForIndex = (index: number) => {
+  const photo = photos.value[index];
+  if (!photo) return;
+  resetCropSuggestion();
+  scheduleIdleTask(() => {
+    suggestForPhotoImmediate(photo);
+  }, { timeout: 500 });
+};
+
+const handleRequestCropSuggest = () => {
+  const photo = photos.value[cropIndex.value];
+  if (!photo) return;
+  suggestForPhotoImmediate(photo);
+};
+
 const openCropModal = (index: number) => {
-  console.log("Opening crop modal for index:", index);
-  // Clear batch crop mode for individual crops
   batchCropIndices.value = [];
   cropIndex.value = index;
-  // Revoke old URL if exists
   if (cropImageSrcURL) {
     URL.revokeObjectURL(cropImageSrcURL);
   }
-  // Always use original image for cropping - crop coordinates are relative to original
-  // The CropModal will apply rotation visually via initialRotation prop
-  // This prevents double-rotation and ensures crop coordinates work correctly
-  // Tier 2 full-res — not for grid
   cropImageSrcURL = URL.createObjectURL(photos.value[index].original);
   cropImageSrc.value = cropImageSrcURL;
   showCropModal.value = true;
+  startCropSuggestionForIndex(index);
 };
 
 const handleCrop = async (
-  blob: Blob,
+  _blob: Blob,
   crop: { x: number; y: number; width: number; height: number },
   rotation: number
 ) => {
-  console.log("=== HANDLE CROP ===");
-  console.log("Crop index:", cropIndex.value);
-  console.log("Received crop coordinates:", crop);
-  console.log("Received rotation angle:", rotation);
   const photo = photos.value[cropIndex.value];
-  console.log("Photo ID:", photo.id);
-  const newFile = new File([blob], photo.current.name, {
-    type: photo.current.type,
-  });
-  photos.value[cropIndex.value] = applyDisplayInvalidation(photo, {
-    current: newFile,
-    original: photo.original,
-    cropHistory: [...photo.cropHistory, await blobFromFile(photo.current)],
-    cropFuture: [],
-    crop,
-    rotation,
-  });
-
-  // Save to IndexedDB if photo has an ID
-  if (photo.id) {
-    try {
-      console.log(
-        "Saving to IndexedDB with crop:",
-        crop,
-        "rotation:",
-        rotation
-      );
-      await updatePhoto(photo.id, newFile, {
-        flips: photo.flips,
-        crop,
-        rotation,
-      });
-      console.log("Successfully saved to IndexedDB");
-    } catch (error) {
-      console.error("Failed to update photo in storage:", error);
-    }
-  } else {
-    console.warn("Photo does not have an ID - cannot save to IndexedDB");
+  if (!photo?.id) {
+    console.error("Photo must have an ID to crop");
+    showAlert("error", "Crop Failed", "Failed to crop photo. Please try again.");
+    return;
   }
 
-  console.log("Stored crop in photo:", photos.value[cropIndex.value].crop);
-  console.log(
-    "Stored rotation in photo:",
-    photos.value[cropIndex.value].rotation
-  );
-  console.log("=== END HANDLE CROP ===");
+  try {
+    const command = new CropCommand(
+      photo.id,
+      crop,
+      rotation,
+      photos,
+      updatePhoto,
+      applyFlipsRotationAndCrop
+    );
+    await undoRedoManager.executeCommand(command);
+  } catch (error) {
+    console.error("Failed to execute crop command:", error);
+    showAlert("error", "Crop Failed", "Failed to crop photo. Please try again.");
+  }
 };
 
 const handleCropModalCropped = async (
@@ -1032,18 +792,28 @@ const handleBatchFlip = async (direction: "horizontal" | "vertical") => {
   const operationId = `batch-flip-${direction}-${Date.now()}`;
   performanceLogger.startMeasurement(operationId);
 
-  let workerUsed = false;
+  const workerUsed = imageWorkerPool.shouldUseWorkers(
+    selectedIndices.value.length
+  );
 
   try {
-    const result = await runBatchFlip(
+    const command = new BatchFlipCommand(
       selectedIndices.value,
       direction,
       photos,
+      updatePhoto,
       updatePhotosBatch,
-      blobToFile,
-      (index, dir) => handleFlip(index, dir)
+      applyFlipsRotationAndCrop,
+      blobToFile
     );
-    workerUsed = result.workerUsed;
+    await undoRedoManager.executeCommand(command);
+  } catch (error) {
+    console.error("Failed to execute batch flip command:", error);
+    showAlert(
+      "error",
+      "Batch Flip Failed",
+      "Failed to flip selected photos. Please try again."
+    );
   } finally {
     await performanceLogger.endMeasurement(
       operationId,
@@ -1063,19 +833,15 @@ const handleBatchCrop = () => {
 };
 
 const handleBatchCropImageSelect = (index: number) => {
-  // User selected an image from the selector
   cropIndex.value = index;
-  // Revoke old URL if exists
   if (cropImageSrcURL) {
     URL.revokeObjectURL(cropImageSrcURL);
   }
-  // Always use original image for cropping - crop coordinates are relative to original
-  // Tier 2 full-res — not for grid
   cropImageSrcURL = URL.createObjectURL(photos.value[cropIndex.value].original);
   cropImageSrc.value = cropImageSrcURL;
-  // Close selector and open crop modal
   showBatchCropSelector.value = false;
   showCropModal.value = true;
+  startCropSuggestionForIndex(index);
 };
 
 const handleBatchCropSelectorClose = () => {
@@ -1085,138 +851,56 @@ const handleBatchCropSelectorClose = () => {
 };
 
 const handleBatchCropNext = async (
-  blob: Blob,
+  _blob: Blob,
   crop: { x: number; y: number; width: number; height: number },
   rotation: number
 ) => {
-  console.log("=== BATCH CROP NEXT ===");
-  console.log("Batch crop indices:", batchCropIndices.value);
-  console.log("Crop coordinates:", crop);
-
-  // Save the batch crop indices BEFORE any operations that might clear them
   const savedBatchCropIndices = [...batchCropIndices.value];
-  console.log("Saved batch crop indices:", savedBatchCropIndices);
-
-  // Start performance measurement for batch crop
   const operationId = `batch-crop-${Date.now()}`;
   performanceLogger.startMeasurement(operationId);
 
-  // Crop the first image (the one shown in the modal)
-  await handleCrop(blob, crop, rotation);
+  const workerUsed = imageWorkerPool.shouldUseWorkers(
+    savedBatchCropIndices.length
+  );
 
-  // Close the modal
   showCropModal.value = false;
 
-  // Get the remaining indices to crop (all except the first one we just cropped)
-  const remainingIndices = savedBatchCropIndices.slice(1);
-  console.log("Remaining indices to crop:", remainingIndices);
-
-  let workerUsed = false;
-
-  if (remainingIndices.length > 0) {
-    console.log(`Applying crop to ${remainingIndices.length} remaining images`);
-    
-    // Use worker helper
-    const result = await runBatchCropRemaining(
-      remainingIndices,
+  try {
+    const command = new BatchCropCommand(
+      savedBatchCropIndices,
       crop,
       rotation,
       photos,
+      updatePhoto,
       updatePhotosBatch,
+      applyFlipsRotationAndCrop,
       blobToFile,
-      blobFromFile,
-      async (index) => {
-        // Fallback logic (original main thread implementation)
-        console.log(`Batch cropping photo index ${index}`);
-        const photo = photos.value[index];
-
-        // Start with original image
-        const img = new Image();
-        img.src = URL.createObjectURL(photo.original);
-        await new Promise((resolve) => {
-          img.onload = resolve;
-        });
-
-        // Apply rotation and crop using helper function
-        const cropBlob = await applyRotationAndCrop(
-          img,
-          rotation,
-          crop,
-          photo.current.type
-        );
-
-        if (cropBlob) {
-          const newFile = new File([cropBlob], photo.current.name, {
-            type: photo.current.type,
-          });
-          photos.value[index] = applyDisplayInvalidation(photo, {
-            current: newFile,
-            crop: {
-              x: crop.x,
-              y: crop.y,
-              width: crop.width,
-              height: crop.height,
-            },
-            rotation,
-            cropHistory: [
-              ...photo.cropHistory,
-              await blobFromFile(photo.current),
-            ],
-            cropFuture: [],
-          });
-
-          // Save to IndexedDB if photo has an ID
-          if (photo.id) {
-            try {
-              await updatePhoto(photo.id, newFile, {
-                flips: photo.flips,
-                crop: {
-                  x: crop.x,
-                  y: crop.y,
-                  width: crop.width,
-                  height: crop.height,
-                },
-                rotation,
-              });
-            } catch (error) {
-              console.error(
-                `Failed to update photo ${index} in storage:`,
-                error
-              );
-            }
-          }
-
-          console.log(`Successfully batch cropped photo ${index}`);
-        } else {
-          console.warn(
-            `Failed to create blob for batch crop on photo ${index}`
-          );
-        }
-      }
+      blobFromFile
     );
-    workerUsed = result.workerUsed;
-    console.log("Finished batch cropping all remaining images");
-  } else {
-    console.log("No remaining indices to crop");
+    await undoRedoManager.executeCommand(command);
+  } catch (error) {
+    console.error("Failed to execute batch crop command:", error);
+    showAlert(
+      "error",
+      "Batch Crop Failed",
+      "Failed to crop selected photos. Please try again."
+    );
+  } finally {
+    await performanceLogger.endMeasurement(
+      operationId,
+      "crop",
+      savedBatchCropIndices.length,
+      workerUsed
+    );
+    batchCropIndices.value = [];
   }
-
-  // End performance measurement
-  await performanceLogger.endMeasurement(
-    operationId,
-    "crop",
-    savedBatchCropIndices.length,
-    workerUsed
-  );
-
-  // Clear the batch crop indices
-  batchCropIndices.value = [];
-  console.log("=== END BATCH CROP NEXT ===");
 };
 
 const handleCropModalClose = () => {
+  cancelCropSuggestion();
+  resetCropSuggestion();
   showCropModal.value = false;
   batchCropIndices.value = [];
-  // Clean up URL
   if (cropImageSrcURL) {
     URL.revokeObjectURL(cropImageSrcURL);
     cropImageSrcURL = null;
@@ -1245,6 +929,7 @@ const handleNextBatchImage = () => {
         photos.value[cropIndex.value].original
       );
       cropImageSrc.value = cropImageSrcURL;
+      startCropSuggestionForIndex(cropIndex.value);
     }
   } else {
     // Non-batch mode: navigate through all images
@@ -1258,6 +943,7 @@ const handleNextBatchImage = () => {
         photos.value[cropIndex.value].original
       );
       cropImageSrc.value = cropImageSrcURL;
+      startCropSuggestionForIndex(cropIndex.value);
     }
   }
 };
@@ -1280,6 +966,7 @@ const handlePreviousBatchImage = () => {
         photos.value[cropIndex.value].original
       );
       cropImageSrc.value = cropImageSrcURL;
+      startCropSuggestionForIndex(cropIndex.value);
     }
   } else {
     // Non-batch mode: navigate through all images
@@ -1293,6 +980,7 @@ const handlePreviousBatchImage = () => {
         photos.value[cropIndex.value].original
       );
       cropImageSrc.value = cropImageSrcURL;
+      startCropSuggestionForIndex(cropIndex.value);
     }
   }
 };
@@ -1305,30 +993,40 @@ const handleBatchDownload = async () => {
   const operationId = `batch-download-${Date.now()}`;
   performanceLogger.startMeasurement(operationId);
 
+  const batchStats: ExportBatchStats = {
+    passThroughCount: 0,
+    fastPathCount: 0,
+    slowPathCount: 0,
+    workerUsed: false,
+  };
+
   try {
     const zip = new JSZip();
     const indices = selectedIndices.value;
+    const chunkSize = getExportStripChunkSize();
+    const settings = exportSettings();
 
-    // Process in chunks to parallelize reads without OOM
-    for (let i = 0; i < indices.length; i += DOWNLOAD_PARALLEL_BATCH_SIZE) {
-      const chunk = indices.slice(i, i + DOWNLOAD_PARALLEL_BATCH_SIZE);
-      
+    for (let i = 0; i < indices.length; i += chunkSize) {
+      const chunk = indices.slice(i, i + chunkSize);
+
       const results = await Promise.all(
         chunk.map(async (index) => {
           const photo = photos.value[index];
-          // Read buffer in parallel
-          const buffer = await photo.current.arrayBuffer();
-          return { name: photo.current.name, buffer };
+          const prepared = await prepareExportFile(photo, settings);
+          return prepared;
         })
       );
 
-      // Add to zip (synchronous add, lightweight)
-      for (const result of results) {
-        zip.file(result.name, result.buffer);
+      for (const prepared of results) {
+        if (prepared.path === 'passthrough') batchStats.passThroughCount++;
+        else if (prepared.path === 'fast-path') batchStats.fastPathCount++;
+        else batchStats.slowPathCount++;
+        if (prepared.workerUsed) batchStats.workerUsed = true;
+
+        zip.file(prepared.fileName, prepared.buffer);
       }
     }
 
-    // Generate and download the ZIP file
     const blob = await zip.generateAsync({ type: "blob" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -1340,17 +1038,17 @@ const handleBatchDownload = async () => {
     URL.revokeObjectURL(url);
   } catch (error) {
     console.error("Error creating ZIP file:", error);
-    // Fallback to individual downloads if ZIP fails
     for (const index of selectedIndices.value) {
       await handleDownload(index);
       await new Promise((resolve) => setTimeout(resolve, 150));
     }
   } finally {
+    performanceLogger.recordExportBatchStats(operationId, batchStats);
     await performanceLogger.endMeasurement(
       operationId,
       "download",
       selectedIndices.value.length,
-      false
+      batchStats.workerUsed
     );
   }
 };
@@ -1439,13 +1137,18 @@ const handleBatchDelete = async () => {
 
 const handleDownload = async (index: number) => {
   const photo = photos.value[index];
-  // Tier 2 full-res — not for grid
-  const url = URL.createObjectURL(photo.current);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = photo.current.name;
-  a.click();
-  URL.revokeObjectURL(url);
+  const prepared = await prepareExportFile(photo, exportSettings());
+
+  const blob = new Blob([prepared.buffer], { type: prepared.mimeType });
+  const url = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = prepared.fileName;
+    a.click();
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 };
 
 const handleRevert = async (index: number) => {
@@ -1543,143 +1246,49 @@ const handleClearClipboard = () => {
 };
 
 const handlePasteSettings = async (singleIndex?: number) => {
-  console.log("=== PASTE SETTINGS ===");
   if (!copiedSettings.value) {
     console.warn("No copied settings to paste");
     return;
   }
-  const settings = copiedSettings.value;
-  console.log("Pasting settings:", settings);
 
-  // If singleIndex is provided, paste to just that photo; otherwise paste to all selected
   const indicesToPaste =
     singleIndex !== undefined ? [singleIndex] : selectedIndices.value;
-  console.log("Target indices:", indicesToPaste);
+  const photoIds = indicesToPaste
+    .map((index) => photos.value[index]?.id)
+    .filter((id): id is string => !!id);
+
+  if (photoIds.length === 0) {
+    console.warn("No valid photos to paste settings to");
+    return;
+  }
 
   const operationId = `batch-paste-${Date.now()}`;
   performanceLogger.startMeasurement(operationId);
 
-  let workerUsed = false;
-
   try {
-    const result = await runBatchPaste(
-      indicesToPaste,
-      settings,
+    const command = new PasteSettingsCommand(
+      photoIds,
+      copiedSettings.value,
       photos,
-      updatePhotosBatch,
-      blobToFile,
-      blobFromFile,
-      async (index) => {
-        // Fallback logic
-        console.log(`--- Processing photo index ${index} ---`);
-        const photo = photos.value[index];
-        
-        // Apply transformations starting from original image to ensure absolute values are applied
-        if (settings.crop) {
-          console.log("Applying crop with coordinates:", settings.crop);
-          const img = new Image();
-          img.src = URL.createObjectURL(photo.original);
-          await new Promise((resolve) => {
-            img.onload = resolve;
-          });
-
-          const rotationToApply = settings.rotation || 0;
-          const blob = await applyFlipsRotationAndCrop(
-            img,
-            settings.flips,
-            rotationToApply,
-            settings.crop,
-            photo.original.type
-          );
-          if (blob) {
-            const newFile = new File([blob], photo.original.name, {
-              type: photo.original.type,
-            });
-            const updatedCrop = {
-              x: settings.crop.x,
-              y: settings.crop.y,
-              width: settings.crop.width,
-              height: settings.crop.height,
-            };
-            photos.value[index] = applyDisplayInvalidation(photo, {
-              current: newFile,
-              flips: { ...settings.flips },
-              crop: updatedCrop,
-              rotation: rotationToApply,
-              cropHistory: [
-                ...photo.cropHistory,
-                await blobFromFile(photo.current),
-              ],
-              cropFuture: [],
-            });
-
-            if (photo.id) {
-              try {
-                await updatePhoto(photo.id, newFile, {
-                  flips: settings.flips,
-                  crop: updatedCrop,
-                  rotation: settings.rotation,
-                });
-              } catch (error) {
-                console.error(
-                  `Failed to update photo ${index} in storage:`,
-                  error
-                );
-              }
-            }
-            console.log(
-              `Photo ${index} crop applied successfully. Final crop:`,
-              photos.value[index].crop
-            );
-          } else {
-            console.warn("Failed to create blob in handlePasteSettings");
-          }
-        } else {
-          // No crop, but we may still need to apply flips
-          if (settings.flips.horizontal !== photo.flips.horizontal) {
-            console.log("Applying horizontal flip to match copied settings...");
-            await handleFlip(index, "horizontal");
-          }
-          if (settings.flips.vertical !== photo.flips.vertical) {
-            console.log("Applying vertical flip to match copied settings...");
-            await handleFlip(index, "vertical");
-          }
-          // Update rotation if provided (even without crop)
-          if (
-            settings.rotation !== undefined &&
-            settings.rotation !== photo.rotation
-          ) {
-            const updatedPhoto = photos.value[index];
-            photos.value[index] = {
-              ...updatedPhoto,
-              rotation: settings.rotation,
-            };
-          }
-        }
-        console.log(`--- Finished processing photo index ${index} ---`);
-      }
+      updatePhoto,
+      applyFlipsRotationAndCrop
     );
-    workerUsed = result.workerUsed;
-
-    // Log paste operation (simplified logging, original detailed logging was removed/simplified)
-    // The original code had complex logging logic inside the loop which gathered results.
-    // We lost that detailed gathering with runBatchPaste.
-    // But basic logging is fine. The logger utility might need updates if it depends on return value.
-    // copyPasteLogger.logPaste(...) requires detailed results.
-    // For now, we skip detailed paste logging or implement it later.
-    // Or we could return results from runBatchPaste?
-    // runBatchPaste returns { workerUsed }.
-    // Let's assume basic performance logging is sufficient for P0.
-    
+    await undoRedoManager.executeCommand(command);
+  } catch (error) {
+    console.error("Failed to execute paste settings command:", error);
+    showAlert(
+      "error",
+      "Paste Failed",
+      "Failed to paste settings. Please try again."
+    );
   } finally {
     await performanceLogger.endMeasurement(
       operationId,
       "paste",
-      indicesToPaste.length,
-      workerUsed
+      photoIds.length,
+      false
     );
   }
-  console.log("=== END PASTE SETTINGS ===");
 };
 
 const blobFromFile = async (file: File): Promise<Blob> => {
@@ -1702,7 +1311,7 @@ onMounted(async () => {
       // Ctrl+Z (Cmd+Z on Mac) for undo
       if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
         e.preventDefault();
-        undoRedoManager.undo().catch((error) => {
+        historyUndo().catch((error) => {
           console.error("Undo failed:", error);
         });
       }
@@ -1712,7 +1321,7 @@ onMounted(async () => {
         (e.key === "y" || (e.key === "z" && e.shiftKey))
       ) {
         e.preventDefault();
-        undoRedoManager.redo().catch((error) => {
+        historyRedo().catch((error) => {
           console.error("Redo failed:", error);
         });
       }

@@ -62,3 +62,102 @@ export function getThumbnailCacheKey(
 ): string {
   return `${photoId}:${thumbRevision}`;
 }
+
+// Upload ingest pipeline (Phase 1)
+export const UPLOAD_INGEST_CHUNK_SIZE = 1;
+export const UPLOAD_INGEST_CHUNK_SIZE_FAST = 3;
+export const UPLOAD_DECODE_JPEG_QUALITY = 0.92;
+export const UPLOAD_HEIC_MAX_CONCURRENT = 1;
+export const UPLOAD_WORKER_POOL_MAX = 2;
+
+interface NavigatorWithMemory extends Navigator {
+  deviceMemory?: number;
+}
+
+/**
+ * Pick chunk size for upload ingest based on batch composition and device memory.
+ */
+export function getUploadIngestChunkSize(
+  hasSlowPathCandidate: boolean
+): number {
+  const nav = navigator as NavigatorWithMemory;
+  const memory = nav.deviceMemory ?? 4;
+
+  if (hasSlowPathCandidate || memory <= 4) {
+    return UPLOAD_INGEST_CHUNK_SIZE;
+  }
+
+  return UPLOAD_INGEST_CHUNK_SIZE_FAST;
+}
+
+// Export strip pipeline (Phase 2)
+export const EXPORT_STRIP_JPEG_QUALITY = 0.92;
+export const EXPORT_STRIP_DEFAULT = false;
+export const EXPORT_SETTINGS_SESSION_KEY = 'justcropit-strip-exif-on-export';
+export const EXPORT_STRIP_CHUNK_SIZE_LOW_MEMORY = 5;
+
+/**
+ * Chunk size for parallel export strip in batch ZIP downloads.
+ */
+// Operation history panel (Phase 3)
+export const HISTORY_MAX_SIZE = 50;
+export const UNDO_TO_NAV_DEBOUNCE_MS = 300;
+export const HISTORY_PANEL_MOBILE_BREAKPOINT_PX = 480;
+
+// Subject-aware crop suggest (Phase 4)
+export const DETECTION_WORKER_POOL_MAX = 1;
+export const DETECTION_INPUT_MAX_EDGE_PX = 640;
+export const DETECTION_BBOX_PADDING_RATIO = 0.01;
+/** Min landmark visibility for pose-driven portrait crops. */
+export const DETECTION_LANDMARK_MIN_VISIBILITY = 0.4;
+/** Lower visibility threshold for pose ear landmarks (often partially occluded). */
+export const DETECTION_EAR_MIN_VISIBILITY = 0.1;
+/** Expand each detected ear landmark outward toward the outer ear edge (× ear-to-ear span per side). */
+export const DETECTION_EAR_OUTWARD_PAD_RATIO = 0.04;
+/** Horizontal pad after ear bounds are resolved (× ear-to-ear span per side). */
+export const DETECTION_EAR_HORIZONTAL_PAD_RATIO = 0.02;
+/** Reject pose ear spans that are clearly wider than a portrait head crop. */
+export const DETECTION_EAR_MAX_IMAGE_WIDTH_RATIO = 0.42;
+/** Cap landmark-based horizontal crop against face side span. */
+export const DETECTION_HEAD_MAX_FACE_WIDTH_RATIO = 1.55;
+/** Face-landmark fallback: expand cheek bounds outward for outer ear (× head width per side). */
+export const DETECTION_FACE_EAR_OUTWARD_PAD_RATIO = 0.06;
+/** Expand the ear-side line outward toward the outer ear edge (× span per side). */
+export const DETECTION_FACE_OVAL_EAR_PAD_RATIO = 0.05;
+/** Expand inner-cheek bounds outward to reach outer ear (× inter-cheek span per side). */
+export const DETECTION_CHEEKBONE_EAR_OFFSET_RATIO = 0.05;
+/** Max crop width relative to inter-cheek distance (landmark 123 ↔ 352). */
+export const DETECTION_FACE_WIDTH_CHEEK_MULTIPLIER = 1.12;
+/** Max crop width relative to outer-eye distance (landmark 33 ↔ 263). */
+export const DETECTION_FACE_WIDTH_EYE_MULTIPLIER = 1.22;
+/** When one ear is occluded, mirror visible half-span across the face center. */
+export const DETECTION_PROFILE_MIRROR_RATIO = 1;
+/** Show landmark debug overlay in crop modal (dev builds only by default). */
+export const DETECTION_DEBUG_OVERLAY = import.meta.env.DEV;
+/** Pad below shoulder landmarks toward upper chest (× portrait height). */
+export const DETECTION_PORTRAIT_SHOULDER_PAD_RATIO = 0.05;
+/** Extend above forehead toward crown / hair (× chin-to-forehead face height). */
+export const DETECTION_FACE_TOP_EXTEND_RATIO = 0.32;
+/** Extend below chin landmark toward collarbone when pose shoulders missing. */
+export const DETECTION_FACE_BOTTOM_EXTEND_RATIO = 0.4;
+/** Face-detector fallback: extend beside face for ears (× face width per side). */
+export const DETECTION_FACE_SIDE_EXTEND_RATIO = 0.12;
+export const DETECTION_SUGGEST_DEBOUNCE_MS = 300;
+export const DETECTION_IDLE_TERMINATE_MS = 5 * 60 * 1000;
+
+export function getDetectionConcurrency(): number {
+  const nav = navigator as NavigatorWithMemory;
+  const memory = nav.deviceMemory ?? 4;
+  return memory < 4 ? 1 : 1;
+}
+
+export function getExportStripChunkSize(): number {
+  const nav = navigator as NavigatorWithMemory;
+  const memory = nav.deviceMemory ?? 4;
+
+  if (memory <= 4) {
+    return EXPORT_STRIP_CHUNK_SIZE_LOW_MEMORY;
+  }
+
+  return DOWNLOAD_PARALLEL_BATCH_SIZE;
+}

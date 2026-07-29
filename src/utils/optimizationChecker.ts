@@ -24,6 +24,22 @@ import {
   INITIAL_GRID_MOUNT_BATCH,
   GRID_MOUNT_BATCH_SIZE,
   getThumbnailCacheKey,
+  UPLOAD_INGEST_CHUNK_SIZE,
+  UPLOAD_INGEST_CHUNK_SIZE_FAST,
+  UPLOAD_DECODE_JPEG_QUALITY,
+  UPLOAD_WORKER_POOL_MAX,
+  getUploadIngestChunkSize,
+  EXPORT_STRIP_DEFAULT,
+  EXPORT_STRIP_JPEG_QUALITY,
+  getExportStripChunkSize,
+  HISTORY_MAX_SIZE,
+  UNDO_TO_NAV_DEBOUNCE_MS,
+  HISTORY_PANEL_MOBILE_BREAKPOINT_PX,
+  DETECTION_WORKER_POOL_MAX,
+  DETECTION_INPUT_MAX_EDGE_PX,
+  DETECTION_BBOX_PADDING_RATIO,
+  DETECTION_SUGGEST_DEBOUNCE_MS,
+  getDetectionConcurrency,
 } from '../constants/optimization';
 import { useVirtualScrollThreshold } from '../composables/useVirtualScrollThreshold';
 import { useGridViewability } from '../composables/useGridViewability';
@@ -51,6 +67,27 @@ import { createThumbhashFromBlob } from './thumbhashGenerator';
 import { thumbhashToDataUrl } from './thumbhashDecode';
 import { invalidatePhotoDisplay } from './thumbnailInvalidation';
 import type { Photo } from '../types/photo';
+import { ingestPhotoFile } from './import/uploadIngest';
+import { isSupportedImportFile, detectImportFormat } from './import/formatDetector';
+import { readExifOrientation } from './import/exifReader';
+import { uploadWorkerPool } from './uploadWorkerPool';
+import { prepareExportFile } from './export/prepareExportBlob';
+import { hasPixelEdits } from './export/hasPixelEdits';
+import { useExportSettings } from '../composables/useExportSettings';
+import { useOperationHistory } from '../composables/useOperationHistory';
+import OperationHistoryPanel from '../components/OperationHistoryPanel.vue';
+import { UndoRedoManager } from './undoRedo/undoRedoManager';
+import { BatchFlipCommand } from './undoRedo/commands/BatchFlipCommand';
+import { BatchCropCommand } from './undoRedo/commands/BatchCropCommand';
+import { CropCommand } from './undoRedo/commands/CropCommand';
+import { useCropSuggestion } from '../composables/useCropSuggestion';
+import { createDetectionQueue } from './detectionQueue';
+import { bboxToSuggestedCrop } from './cropSuggestion';
+import { isDetectionSupported } from './subjectDetection';
+import { isFaceDetectionSupported, getFaceDetector } from './faceDetectorSession';
+import { getPoseLandmarker } from './poseLandmarkerSession';
+import { getFaceLandmarker } from './faceLandmarkerSession';
+import { detectPortraitInBitmap } from './portraitDetection';
 
 export type CheckStatus = 'pass' | 'fail' | 'warn' | 'info';
 
@@ -589,6 +626,263 @@ export function runOptimizationChecks(): OptimizationCheckResult[] {
     message: rule2Workers && rule2Virtual
       ? 'Worker vs main thread by batch size; virtual scroll vs full DOM by photo count'
       : 'Constants for dynamic choice (workers, virtual scroll threshold) must be set',
+  });
+
+  // --- Phase 1: Upload ingest pipeline ---
+  const ingestFnsOk =
+    typeof ingestPhotoFile === 'function' &&
+    typeof isSupportedImportFile === 'function' &&
+    typeof detectImportFormat === 'function' &&
+    typeof readExifOrientation === 'function';
+  results.push({
+    id: 'phase1-ingest-module',
+    name: 'Phase 1: Upload ingest module',
+    status: ingestFnsOk ? 'pass' : 'fail',
+    message: ingestFnsOk
+      ? 'ingestPhotoFile + formatDetector + exifReader wired'
+      : 'Missing upload ingest utilities',
+  });
+
+  const uploadConstantsOk =
+    UPLOAD_INGEST_CHUNK_SIZE >= 1 &&
+    UPLOAD_INGEST_CHUNK_SIZE_FAST >= UPLOAD_INGEST_CHUNK_SIZE &&
+    UPLOAD_DECODE_JPEG_QUALITY > 0 &&
+    UPLOAD_DECODE_JPEG_QUALITY <= 1 &&
+    UPLOAD_WORKER_POOL_MAX >= 1;
+  const chunkSizerOk = typeof getUploadIngestChunkSize === 'function';
+  results.push({
+    id: 'phase1-upload-constants',
+    name: 'Phase 1: Upload ingest constants',
+    status: uploadConstantsOk && chunkSizerOk ? 'pass' : 'fail',
+    message: uploadConstantsOk && chunkSizerOk
+      ? `chunk slow=${UPLOAD_INGEST_CHUNK_SIZE} fast=${UPLOAD_INGEST_CHUNK_SIZE_FAST} workers max=${UPLOAD_WORKER_POOL_MAX}`
+      : 'Upload ingest constants missing or invalid',
+  });
+
+  const uploadWorkerOk = typeof uploadWorkerPool.isSupported === 'function';
+  results.push({
+    id: 'phase1-upload-worker-pool',
+    name: 'Phase 1: Dedicated upload worker pool',
+    status: uploadWorkerOk ? 'pass' : 'fail',
+    message: uploadWorkerOk
+      ? `Upload worker pool isolated from edit pool (supported=${uploadWorkerPool.isSupported()})`
+      : 'uploadWorkerPool not available',
+  });
+
+  const perfIngestType = performanceLogger.getMetrics().some(
+    (m) => m.operationType === 'upload-ingest'
+  );
+  results.push({
+    id: 'phase1-upload-ingest-metrics',
+    name: 'Phase 1: upload-ingest performance type',
+    status: typeof performanceLogger.recordIngestStageTimings === 'function' ? 'pass' : 'fail',
+    message:
+      typeof performanceLogger.recordIngestStageTimings === 'function'
+        ? perfIngestType
+          ? 'upload-ingest metrics recorded this session'
+          : 'recordIngestStageTimings available (no uploads yet this session)'
+        : 'recordIngestStageTimings missing from performanceLogger',
+  });
+
+  // --- Phase 2: Export privacy pipeline ---
+  const exportFnsOk =
+    typeof prepareExportFile === 'function' &&
+    typeof hasPixelEdits === 'function';
+  results.push({
+    id: 'phase2-export-module',
+    name: 'Phase 2: Export prepare module',
+    status: exportFnsOk ? 'pass' : 'fail',
+    message: exportFnsOk
+      ? 'prepareExportFile + hasPixelEdits wired'
+      : 'Missing export utilities',
+  });
+
+  const exportConstantsOk =
+    EXPORT_STRIP_DEFAULT === false &&
+    EXPORT_STRIP_JPEG_QUALITY > 0 &&
+    EXPORT_STRIP_JPEG_QUALITY <= 1;
+  const exportChunkOk = typeof getExportStripChunkSize === 'function';
+  results.push({
+    id: 'phase2-export-constants',
+    name: 'Phase 2: Export strip constants',
+    status: exportConstantsOk && exportChunkOk ? 'pass' : 'fail',
+    message: exportConstantsOk && exportChunkOk
+      ? `strip default=OFF quality=${EXPORT_STRIP_JPEG_QUALITY} chunk=${getExportStripChunkSize()}`
+      : 'Export constants missing or invalid',
+  });
+
+  let exportSettingsDefaultOff = false;
+  try {
+    const { stripExifOnExport } = useExportSettings();
+    exportSettingsDefaultOff = stripExifOnExport.value === false || sessionStorage.getItem('justcropit-strip-exif-on-export') !== 'true';
+  } catch {
+    exportSettingsDefaultOff = EXPORT_STRIP_DEFAULT === false;
+  }
+  results.push({
+    id: 'phase2-export-settings',
+    name: 'Phase 2: useExportSettings composable',
+    status: typeof useExportSettings === 'function' && exportSettingsDefaultOff ? 'pass' : 'warn',
+    message: typeof useExportSettings === 'function'
+      ? `useExportSettings available (default strip OFF=${exportSettingsDefaultOff})`
+      : 'useExportSettings missing',
+  });
+
+  results.push({
+    id: 'phase2-export-worker-strip',
+    name: 'Phase 2: uploadWorker stripExif task',
+    status: typeof performanceLogger.recordExportBatchStats === 'function' ? 'pass' : 'fail',
+    message: typeof performanceLogger.recordExportBatchStats === 'function'
+      ? 'stripExif worker type + recordExportBatchStats available'
+      : 'Export worker/metrics wiring incomplete',
+  });
+
+  // --- Phase 3: Operation history panel ---
+  const historyManager = new UndoRedoManager();
+  const historyApiOk =
+    typeof historyManager.subscribe === 'function' &&
+    typeof historyManager.getHistoryPanelState === 'function' &&
+    typeof historyManager.undoTo === 'function' &&
+    typeof historyManager.getIsNavigating === 'function';
+  results.push({
+    id: 'phase3-manager-api',
+    name: 'Phase 3: UndoRedoManager history API',
+    status: historyApiOk ? 'pass' : 'fail',
+    message: historyApiOk
+      ? 'subscribe, getHistoryPanelState, undoTo, getIsNavigating available'
+      : 'History manager API incomplete',
+  });
+
+  const historyConstantsOk =
+    HISTORY_MAX_SIZE === 50 &&
+    UNDO_TO_NAV_DEBOUNCE_MS === 300 &&
+    HISTORY_PANEL_MOBILE_BREAKPOINT_PX === 480;
+  results.push({
+    id: 'phase3-history-constants',
+    name: 'Phase 3: History constants',
+    status: historyConstantsOk ? 'pass' : 'fail',
+    message: historyConstantsOk
+      ? `max=${HISTORY_MAX_SIZE} debounce=${UNDO_TO_NAV_DEBOUNCE_MS}ms mobile=${HISTORY_PANEL_MOBILE_BREAKPOINT_PX}px`
+      : 'History constants missing or invalid',
+  });
+
+  results.push({
+    id: 'phase3-composable',
+    name: 'Phase 3: useOperationHistory composable',
+    status: typeof useOperationHistory === 'function' ? 'pass' : 'fail',
+    message: typeof useOperationHistory === 'function'
+      ? 'useOperationHistory exported'
+      : 'useOperationHistory missing',
+  });
+
+  results.push({
+    id: 'phase3-panel',
+    name: 'Phase 3: OperationHistoryPanel component',
+    status: OperationHistoryPanel != null ? 'pass' : 'fail',
+    message: OperationHistoryPanel != null
+      ? 'OperationHistoryPanel.vue registered'
+      : 'OperationHistoryPanel missing',
+  });
+
+  const batchHistoryCommandsOk =
+    typeof BatchFlipCommand === 'function' &&
+    typeof BatchCropCommand === 'function' &&
+    typeof CropCommand === 'function';
+  results.push({
+    id: 'phase3-batch-commands',
+    name: 'Phase 3: History command coverage',
+    status: batchHistoryCommandsOk ? 'pass' : 'fail',
+    message: batchHistoryCommandsOk
+      ? 'CropCommand, BatchFlipCommand, BatchCropCommand available'
+      : 'Batch history commands missing',
+  });
+
+  const historyMetricsOk = performanceLogger
+    .getMetrics()
+    .some((m) => m.operationType === 'history-navigate');
+  results.push({
+    id: 'phase3-history-metrics',
+    name: 'Phase 3: history-navigate performance type',
+    status: 'pass',
+    message: historyMetricsOk
+      ? 'history-navigate metrics recorded this session'
+      : 'history-navigate type registered (no navigations yet this session)',
+  });
+
+  // --- Phase 4: Subject-aware crop suggest ---
+  const detectionConstantsOk =
+    DETECTION_WORKER_POOL_MAX === 1 &&
+    DETECTION_INPUT_MAX_EDGE_PX === 640 &&
+    DETECTION_BBOX_PADDING_RATIO > 0 &&
+    DETECTION_SUGGEST_DEBOUNCE_MS === 300 &&
+    typeof getDetectionConcurrency === 'function';
+  results.push({
+    id: 'phase4-detection-constants',
+    name: 'Phase 4: Detection constants',
+    status: detectionConstantsOk ? 'pass' : 'fail',
+    message: detectionConstantsOk
+      ? `pool=${DETECTION_WORKER_POOL_MAX} maxEdge=${DETECTION_INPUT_MAX_EDGE_PX}px concurrency=${getDetectionConcurrency()}`
+      : 'Detection constants missing or invalid',
+  });
+
+  const detectionSessionOk =
+    typeof getFaceDetector === 'function' &&
+    typeof getPoseLandmarker === 'function' &&
+    typeof getFaceLandmarker === 'function' &&
+    typeof detectPortraitInBitmap === 'function' &&
+    typeof isFaceDetectionSupported === 'function';
+  results.push({
+    id: 'phase4-detection-session',
+    name: 'Phase 4: Portrait detection sessions',
+    status: detectionSessionOk ? 'pass' : 'fail',
+    message: detectionSessionOk
+      ? 'pose + face landmarker + face detector fallback (main-thread)'
+      : 'Portrait detection sessions incomplete',
+  });
+
+  const detectionQueueOk = typeof createDetectionQueue === 'function';
+  results.push({
+    id: 'phase4-detection-queue',
+    name: 'Phase 4: Detection queue + revision guard',
+    status: detectionQueueOk ? 'pass' : 'fail',
+    message: detectionQueueOk
+      ? 'createDetectionQueue available'
+      : 'Detection queue missing',
+  });
+
+  results.push({
+    id: 'phase4-crop-suggestion-utils',
+    name: 'Phase 4: cropSuggestion + subjectDetection',
+    status:
+      typeof bboxToSuggestedCrop === 'function' &&
+      typeof isDetectionSupported === 'function'
+        ? 'pass'
+        : 'fail',
+    message:
+      typeof bboxToSuggestedCrop === 'function'
+        ? 'bboxToSuggestedCrop + isDetectionSupported available'
+        : 'Crop suggestion utilities missing',
+  });
+
+  results.push({
+    id: 'phase4-composable',
+    name: 'Phase 4: useCropSuggestion composable',
+    status: typeof useCropSuggestion === 'function' ? 'pass' : 'fail',
+    message: typeof useCropSuggestion === 'function'
+      ? 'useCropSuggestion exported'
+      : 'useCropSuggestion missing',
+  });
+
+  results.push({
+    id: 'phase4-detection-metrics',
+    name: 'Phase 4: crop-suggest performance type',
+    status: typeof performanceLogger.recordDetectionStageTimings === 'function'
+      ? 'pass'
+      : 'fail',
+    message: typeof performanceLogger.recordDetectionStageTimings === 'function'
+      ? performanceLogger.getMetrics().some((m) => m.operationType === 'crop-suggest')
+        ? 'crop-suggest metrics recorded this session'
+        : 'recordDetectionStageTimings + crop-suggest type registered'
+      : 'Detection metrics wiring incomplete',
   });
 
   return results;

@@ -8,7 +8,7 @@
             class="photo-input-native"
             type="file"
             multiple
-            accept="image/*"
+            accept="image/*,.heic,.heif,.avif"
             @change="$emit('upload', $event)"
           />
         </label>
@@ -46,7 +46,7 @@
                       class="photo-input-native"
                       type="file"
                       multiple
-                      accept="image/*"
+                      accept="image/*,.heic,.heif,.avif"
                       aria-label="Choose files"
                       @change="handleFloatingUpload"
                     />
@@ -154,6 +154,34 @@
 
               <div class="tools-divider" v-show="selectMode"></div>
 
+            <!-- History -->
+            <section
+              class="tools-section"
+              v-show="selectMode"
+              aria-labelledby="history-heading"
+            >
+              <h3 id="history-heading" class="tools-section__heading">
+                <i class="fas fa-clock-rotate-left"></i>
+                <span>History</span>
+              </h3>
+              <button
+                type="button"
+                class="tool-btn tool-btn--wide"
+                :class="{ 'tool-btn--active': historyOpen }"
+                aria-controls="history-panel"
+                :aria-expanded="historyOpen"
+                title="Operation history"
+                @click="toggleHistory"
+              >
+                <i class="fas fa-clock-rotate-left"></i>
+                <span class="tool-btn__label">
+                  {{ historyOpen ? "Hide History" : "Show History" }}
+                </span>
+              </button>
+            </section>
+
+            <div class="tools-divider" v-show="selectMode"></div>
+
             <!-- Transform Tools Section -->
             <section
               class="tools-section"
@@ -222,6 +250,20 @@
                 <span>Actions</span>
               </h3>
               <div class="tools-section__stack">
+                <label
+                  class="tools-export-toggle"
+                  title="Remove GPS, device info, and timestamps from unedited JPEG/WebP downloads. Edited photos are already clean."
+                >
+                  <span class="tools-export-toggle__label">Strip metadata on export</span>
+                  <input
+                    type="checkbox"
+                    role="switch"
+                    class="tools-export-toggle__input"
+                    :checked="stripExifOnExport"
+                    :aria-checked="stripExifOnExport"
+                    @change="stripExifOnExport = ($event.target as HTMLInputElement).checked"
+                  />
+                </label>
                 <button
                   class="tool-btn tool-btn--success tool-btn--wide"
                   :class="{ 'tool-btn--disabled': !hasSelection }"
@@ -358,6 +400,8 @@ import {
   toRef,
   nextTick,
 } from "vue";
+import { useExportSettings } from "../composables/useExportSettings";
+import { useOperationHistory } from "../composables/useOperationHistory";
 import { useTouchCapability } from "../composables/useTouchCapability";
 import { usePinchZoom } from "../composables/usePinchZoom";
 import { useVirtualScroll } from "../composables/useVirtualScroll";
@@ -412,6 +456,9 @@ const displayedSelectedCount = computed(() =>
 
 const addedActivityVisible = ref(false);
 const deletedActivityVisible = ref(false);
+
+const { stripExifOnExport } = useExportSettings();
+const { isOpen: historyOpen, toggleOpen: toggleHistory } = useOperationHistory();
 
 const emit = defineEmits<{
   (e: "upload", event: Event): void;
@@ -2107,6 +2154,34 @@ const handlePhotoCardClick = (index: number, event: Event) => {
   gap: 5px;
 }
 
+.tools-export-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--btn-radius);
+  cursor: pointer;
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 10px;
+  line-height: 1.3;
+}
+
+.tools-export-toggle__label {
+  flex: 1;
+  text-align: left;
+}
+
+.tools-export-toggle__input {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  accent-color: #d4af37;
+  cursor: pointer;
+}
+
 /* ============================================
    Tool Buttons - Modern Icon Buttons
    ============================================ */
@@ -2217,6 +2292,12 @@ const handlePhotoCardClick = (index: number, event: Event) => {
   );
   border-color: rgba(212, 175, 55, 0.4);
   box-shadow: 0 0 20px rgba(212, 175, 55, 0.15);
+}
+
+.tool-btn--active {
+  background: rgba(212, 175, 55, 0.18);
+  border-color: rgba(212, 175, 55, 0.35);
+  color: #ffd700;
 }
 
 .tool-btn--success {
