@@ -59,12 +59,43 @@ async function getDB(): Promise<IDBPDatabase<VideoSessionDB>> {
   return db;
 }
 
+/** Copy blob bytes so Vue proxies / File wrappers are not passed to IndexedDB. */
+function toStorableBlob(blob: Blob): Blob {
+  return blob.slice(0, blob.size, blob.type);
+}
+
+function toPlainVideoInfo(info: VideoInfo | null): VideoInfo | null {
+  if (!info) return null;
+  return {
+    duration: info.duration,
+    width: info.width,
+    height: info.height,
+    ...(info.frameRate != null ? { frameRate: info.frameRate } : {}),
+    ...(info.codec != null ? { codec: info.codec } : {}),
+  };
+}
+
 export async function saveVideoSession(data: Omit<VideoSessionData, 'id' | 'savedAt'>): Promise<void> {
   const database = await getDB();
   const record: VideoSessionData = {
-    ...data,
     id: SESSION_KEY,
     savedAt: Date.now(),
+    video: toStorableBlob(data.video),
+    videoName: data.videoName,
+    videoType: data.videoType,
+    videoInfo: toPlainVideoInfo(data.videoInfo),
+    intervalMs: data.intervalMs,
+    outputFormat: data.outputFormat,
+    quality: data.quality,
+    trimStart: data.trimStart,
+    trimEnd: data.trimEnd,
+    extractedFrames: data.extractedFrames.map((frame) => ({
+      index: frame.index,
+      timestamp: frame.timestamp,
+      blob: toStorableBlob(frame.blob),
+      fileName: frame.fileName,
+      mimeType: frame.mimeType,
+    })),
   };
   await database.put(STORE_NAME, record);
 }
