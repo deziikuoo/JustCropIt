@@ -5,14 +5,27 @@
       <i class="fas fa-exclamation-triangle"></i>
       <h3>Browser Not Supported</h3>
       <p>
-        Video frame extraction requires Web Workers, which are not available in this environment.
+        Video frame extraction requires WebCodecs (hardware decode) and Web Workers.
         Please use a modern browser like Chrome, Edge, or Firefox.
       </p>
     </div>
 
     <template v-else>
       <header class="video-extractor-header">
-        <p class="video-extractor-subtitle">Extract high-quality frames from video</p>
+        <div class="video-extractor-header-row">
+          <p class="video-extractor-subtitle">Extract high-quality frames from video</p>
+          <button
+            v-if="videoFile"
+            type="button"
+            class="frame-action-btn frame-action-btn--danger"
+            :disabled="isExtracting || isExportingTrim || isDownloading || isAddingToPhotos"
+            title="Clear the entire video page (video, frames, and saved session)"
+            @click="clearVideoPage"
+          >
+            <i class="fas fa-trash-alt"></i>
+            Clear
+          </button>
+        </div>
       </header>
 
       <!-- Video Input Area -->
@@ -81,9 +94,9 @@
 
             <button 
               class="clear-video-btn"
-              @click.stop="clearVideo"
-              :disabled="isExtracting"
-              title="Remove video"
+              @click.stop="clearVideoPage"
+              :disabled="isExtracting || isExportingTrim || isDownloading || isAddingToPhotos"
+              title="Clear the entire video page"
             >
               <i class="fas fa-times"></i>
             </button>
@@ -220,7 +233,9 @@
             <span class="estimated-frames-right">
               <i class="fas fa-layer-group"></i>
               <strong>{{ estimatedFrameCount }}</strong> frames
-              <span class="batch-hint">· {{ estimatedBatchCount }} batches</span>
+              <span class="hw-hint" title="Uses WebCodecs with hardware decode when available">
+                · GPU decode
+              </span>
             </span>
           </template>
           <span v-else-if="displayVideoInfo" class="estimated-frames-message">
@@ -291,23 +306,144 @@
           <h3>
             <i class="fas fa-check-circle"></i>
             {{ extractedFrames.length }} Frames Extracted
+            <span v-if="isSelectMode && selectedCount > 0" class="selection-count">
+              · {{ selectedCount }} selected
+            </span>
           </h3>
-          <button class="add-to-grid-btn" @click="handleAddToGrid">
-            <i class="fas fa-plus"></i>
-            Add to Photos
-          </button>
+          <div class="extracted-actions">
+            <template v-if="!isSelectMode">
+              <button
+                class="frame-action-btn"
+                type="button"
+                :disabled="isDownloading || isAddingToPhotos"
+                title="Download all extracted frames as a ZIP"
+                @click="handleDownloadAll"
+              >
+                <i :class="isDownloading ? 'fas fa-spinner fa-spin' : 'fas fa-download'"></i>
+                Download All
+              </button>
+              <button
+                class="frame-action-btn"
+                type="button"
+                :disabled="isDownloading || isAddingToPhotos"
+                title="Select frames to download or delete"
+                @click="enterSelectMode"
+              >
+                <i class="fas fa-check-double"></i>
+                Select
+              </button>
+              <button
+                class="frame-action-btn frame-action-btn--danger"
+                type="button"
+                :disabled="isDownloading || isAddingToPhotos"
+                title="Delete all extracted frames (keeps the video)"
+                @click="handleDeleteAllFrames"
+              >
+                <i class="fas fa-trash"></i>
+                Delete All
+              </button>
+              <button
+                class="add-to-grid-btn"
+                type="button"
+                :disabled="isDownloading || isAddingToPhotos"
+                @click="handleAddToGrid"
+              >
+                <i :class="isAddingToPhotos ? 'fas fa-spinner fa-spin' : 'fas fa-plus'"></i>
+                {{ isAddingToPhotos ? 'Adding to Photos…' : 'Add to Photos' }}
+              </button>
+            </template>
+            <template v-else>
+              <button
+                class="frame-action-btn"
+                type="button"
+                :disabled="isDownloading || selectedCount === extractedFrames.length"
+                @click="selectAllFrames"
+              >
+                <i class="fas fa-check-square"></i>
+                Select All
+              </button>
+              <button
+                class="frame-action-btn"
+                type="button"
+                :disabled="isDownloading || selectedCount === 0"
+                title="Deselect all frames"
+                @click="clearFrameSelection"
+              >
+                <i class="fas fa-square"></i>
+                Deselect
+              </button>
+              <button
+                class="frame-action-btn frame-action-btn--danger"
+                type="button"
+                :disabled="isDownloading || selectedCount === 0"
+                :title="selectedCount === 0 ? 'Select frames first' : `Delete ${selectedCount} frame(s)`"
+                @click="handleDeleteSelectedFrames"
+              >
+                <i class="fas fa-trash"></i>
+                Delete{{ selectedCount > 0 ? ` (${selectedCount})` : '' }}
+              </button>
+              <button
+                class="frame-action-btn frame-action-btn--primary"
+                type="button"
+                :disabled="isDownloading || selectedCount === 0"
+                :title="selectedCount === 0 ? 'Select frames first' : `Download ${selectedCount} frame(s)`"
+                @click="handleDownloadSelected"
+              >
+                <i :class="isDownloading ? 'fas fa-spinner fa-spin' : 'fas fa-download'"></i>
+                Download{{ selectedCount > 0 ? ` (${selectedCount})` : '' }}
+              </button>
+              <button
+                class="frame-action-btn"
+                type="button"
+                :disabled="isDownloading"
+                @click="exitSelectMode"
+              >
+                <i class="fas fa-times"></i>
+                Done
+              </button>
+            </template>
+          </div>
         </div>
+
+        <div class="download-progress" v-if="isDownloading && downloadProgress">
+          <div class="download-progress-row">
+            <div class="progress-bar-container compact">
+              <div
+                class="progress-bar-fill"
+                :style="{ width: `${downloadProgress.percent}%` }"
+              ></div>
+            </div>
+            <button
+              type="button"
+              class="cancel-download-btn"
+              title="Cancel download"
+              @click="cancelDownload"
+            >
+              <i class="fas fa-stop"></i>
+              Cancel
+            </button>
+          </div>
+          <span class="download-progress-message">{{ downloadProgress.message }}</span>
+        </div>
+
         <div
           class="frames-preview-grid"
-          :class="{ 'frames-preview-grid--expanded': showAllPreviewFrames }"
+          :class="{
+            'frames-preview-grid--expanded': showAllPreviewFrames || isSelectMode,
+            'frames-preview-grid--selecting': isSelectMode,
+          }"
         >
           <button
             v-for="frame in previewFrames"
             :key="frame.index"
             type="button"
             class="preview-frame"
-            :aria-label="`Preview frame at ${formatTimestamp(frame.timestamp)}`"
-            @click="openFramePreview(frame.index)"
+            :class="{ 'preview-frame--selected': selectedFrameIndices.has(frame.index) }"
+            :aria-label="isSelectMode
+              ? `${selectedFrameIndices.has(frame.index) ? 'Deselect' : 'Select'} frame at ${formatTimestamp(frame.timestamp)}`
+              : `Preview frame at ${formatTimestamp(frame.timestamp)}`"
+            :aria-pressed="isSelectMode ? selectedFrameIndices.has(frame.index) : undefined"
+            @click="handleFrameClick(frame.index)"
           >
             <img
               :src="getFramePreviewUrl(frame)"
@@ -316,10 +452,18 @@
               decoding="async"
               draggable="false"
             />
+            <span
+              v-if="isSelectMode"
+              class="frame-check"
+              :class="{ 'frame-check--on': selectedFrameIndices.has(frame.index) }"
+              aria-hidden="true"
+            >
+              <i class="fas fa-check"></i>
+            </span>
             <span class="frame-time">{{ formatTimestamp(frame.timestamp) }}</span>
           </button>
           <button
-            v-if="hiddenPreviewCount > 0 && !showAllPreviewFrames"
+            v-if="hiddenPreviewCount > 0 && !showAllPreviewFrames && !isSelectMode"
             type="button"
             class="more-frames"
             :aria-label="`Show ${hiddenPreviewCount} more frames`"
@@ -329,7 +473,7 @@
           </button>
         </div>
         <button
-          v-if="showAllPreviewFrames && hiddenPreviewCount > 0"
+          v-if="showAllPreviewFrames && hiddenPreviewCount > 0 && !isSelectMode"
           type="button"
           class="show-less-frames"
           @click="showAllPreviewFrames = false"
@@ -356,13 +500,10 @@ import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue';
 import { useVideoExtraction, type ExtractedFrameFile } from '../composables/useVideoExtraction';
 import ExtractedFramePreviewModal from './ExtractedFramePreviewModal.vue';
 import VideoTrimmer from './VideoTrimmer.vue';
-import {
-  VIDEO_EXTRACTION_CHUNK_SIZE,
-  VIDEO_EXTRACTION_CHUNK_SIZE_PNG,
-} from '../constants/optimization';
+import { createStreamingZip } from '../utils/export/streamingZip';
 
-const emit = defineEmits<{
-  (e: 'frames-extracted', frames: File[]): void;
+const props = defineProps<{
+  addToPhotos: (files: File[]) => Promise<void>;
 }>();
 
 const {
@@ -389,6 +530,10 @@ const {
   downloadTrimmedVideo,
   reset,
   restoreSession,
+  prepareForPhotoImport,
+  finishPhotoImport,
+  removeFramesByIndices,
+  clearExtractedFrames,
   formatDuration,
   extractionEtaLabel,
 } = useVideoExtraction();
@@ -401,6 +546,13 @@ const previewFrameIndex = ref<number | null>(null);
 const showAllPreviewFrames = ref(false);
 const isPreviewingClip = ref(false);
 
+const isSelectMode = ref(false);
+const selectedFrameIndices = ref<Set<number>>(new Set());
+const isDownloading = ref(false);
+const downloadCancelled = ref(false);
+const downloadProgress = ref<{ percent: number; message: string } | null>(null);
+const isAddingToPhotos = ref(false);
+
 const displayVideoInfo = computed(() => {
   if (videoInfo.value && videoInfo.value.duration > 0) {
     return videoInfo.value;
@@ -410,14 +562,6 @@ const displayVideoInfo = computed(() => {
 
 const canGenerate = computed(() => {
   return Boolean(displayVideoInfo.value && estimatedFrameCount.value > 0);
-});
-
-const estimatedBatchCount = computed(() => {
-  if (estimatedFrameCount.value <= 0) return 0;
-  const chunkSize = outputFormat.value === 'jpeg'
-    ? VIDEO_EXTRACTION_CHUNK_SIZE
-    : VIDEO_EXTRACTION_CHUNK_SIZE_PNG;
-  return Math.ceil(estimatedFrameCount.value / chunkSize);
 });
 
 const PREVIEW_FRAME_LIMIT = 6;
@@ -431,8 +575,10 @@ const intervalPresets = [
   { label: '3s', value: 3000 }
 ];
 
+const selectedCount = computed(() => selectedFrameIndices.value.size);
+
 const previewFrames = computed(() => {
-  if (showAllPreviewFrames.value) {
+  if (showAllPreviewFrames.value || isSelectMode.value) {
     return extractedFrames.value;
   }
   return extractedFrames.value.slice(0, PREVIEW_FRAME_LIMIT);
@@ -440,6 +586,14 @@ const previewFrames = computed(() => {
 
 const hiddenPreviewCount = computed(() => {
   return Math.max(0, extractedFrames.value.length - PREVIEW_FRAME_LIMIT);
+});
+
+watch(extractedFrames, () => {
+  // New extraction / restore — drop stale selection
+  selectedFrameIndices.value = new Set();
+  if (extractedFrames.value.length === 0) {
+    isSelectMode.value = false;
+  }
 });
 
 async function loadSelectedVideo(file: File) {
@@ -568,12 +722,67 @@ function onVideoTimeUpdate(): void {
   }
 }
 
-function clearVideo() {
+function clearVideoPage() {
+  if (isExtracting.value || isExportingTrim.value || isDownloading.value || isAddingToPhotos.value) {
+    return;
+  }
+  const confirmed = window.confirm(
+    'Clear the entire video page? This removes the video, all extracted frames, and the saved video session. Photos are not affected.'
+  );
+  if (!confirmed) return;
+
   stopClipPreview();
   closeFramePreview();
   clearFramePreviewUrls();
   showAllPreviewFrames.value = false;
+  exitSelectMode();
   void reset();
+}
+
+function revokeFramePreviewUrls(indices: Iterable<number>): void {
+  for (const index of indices) {
+    const url = framePreviewUrls.value.get(index);
+    if (url) {
+      URL.revokeObjectURL(url);
+      framePreviewUrls.value.delete(index);
+    }
+  }
+}
+
+function handleDeleteSelectedFrames(): void {
+  if (isDownloading.value || selectedCount.value === 0) return;
+  const confirmed = window.confirm(
+    `Delete ${selectedCount.value} selected frame(s)? This cannot be undone.`
+  );
+  if (!confirmed) return;
+
+  const indices = [...selectedFrameIndices.value];
+  if (previewFrameIndex.value !== null && indices.includes(previewFrameIndex.value)) {
+    closeFramePreview();
+  }
+  revokeFramePreviewUrls(indices);
+  removeFramesByIndices(indices);
+  clearFrameSelection();
+  if (extractedFrames.value.length === 0) {
+    exitSelectMode();
+    showAllPreviewFrames.value = false;
+  }
+}
+
+function handleDeleteAllFrames(): void {
+  if (isDownloading.value || isAddingToPhotos.value || extractedFrames.value.length === 0) {
+    return;
+  }
+  const confirmed = window.confirm(
+    `Delete all ${extractedFrames.value.length} extracted frame(s)? The video stays loaded. This cannot be undone.`
+  );
+  if (!confirmed) return;
+
+  closeFramePreview();
+  clearFramePreviewUrls();
+  clearExtractedFrames();
+  exitSelectMode();
+  showAllPreviewFrames.value = false;
 }
 
 async function handleDownloadTrim(): Promise<void> {
@@ -607,27 +816,237 @@ function formatTimestamp(seconds: number): string {
 
 function getPhaseLabel(phase: string): string {
   switch (phase) {
-    case 'loading': return 'Loading FFmpeg...';
-    case 'extracting': return 'Extracting Frames...';
-    case 'processing': return 'Processing...';
+    case 'loading': return 'Preparing Decoder...';
+    case 'extracting': return 'Decoding Frames...';
+    case 'processing': return 'Capturing Frames...';
     case 'complete': return 'Complete';
     case 'error': return 'Error';
     default: return phase;
   }
 }
 
-function handleAddToGrid() {
-  const files = extractedFrames.value.map(frame => frame.file);
-  emit('frames-extracted', files);
+function handleFrameClick(index: number) {
+  if (isSelectMode.value) {
+    toggleFrameSelection(index);
+    return;
+  }
+  openFramePreview(index);
+}
 
+function enterSelectMode() {
+  isSelectMode.value = true;
+  showAllPreviewFrames.value = true;
+  closeFramePreview();
+}
+
+function exitSelectMode() {
+  isSelectMode.value = false;
+  selectedFrameIndices.value = new Set();
+}
+
+function toggleFrameSelection(index: number) {
+  const next = new Set(selectedFrameIndices.value);
+  if (next.has(index)) {
+    next.delete(index);
+  } else {
+    next.add(index);
+  }
+  selectedFrameIndices.value = next;
+}
+
+function selectAllFrames() {
+  selectedFrameIndices.value = new Set(
+    extractedFrames.value.map((frame) => frame.index)
+  );
+}
+
+function clearFrameSelection() {
+  selectedFrameIndices.value = new Set();
+}
+
+function downloadBlob(blob: Blob, fileName: string): void {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  // Large archives can still be streaming when the click returns; revoking
+  // immediately makes Chrome fail the download.
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+function buildZipBaseName(): string {
+  const raw = videoFile.value?.name?.replace(/\.[^.]+$/, '') || 'video';
+  const safe = raw.replace(/[^\w\-]+/g, '_').slice(0, 40) || 'video';
+  return `${safe}-frames`;
+}
+
+async function downloadFramesAsZip(
+  frames: ExtractedFrameFile[],
+  zipName: string
+): Promise<void> {
+  if (frames.length === 0 || isDownloading.value) return;
+
+  isDownloading.value = true;
+  downloadCancelled.value = false;
+  downloadProgress.value = {
+    percent: 0,
+    message: 'Preparing download...',
+  };
+
+  try {
+    if (frames.length === 1) {
+      if (downloadCancelled.value) {
+        downloadProgress.value = { percent: 0, message: 'Download cancelled' };
+        return;
+      }
+      downloadBlob(frames[0].file, frames[0].file.name);
+      downloadProgress.value = {
+        percent: 100,
+        message: 'Download started',
+      };
+      return;
+    }
+
+    const zip = createStreamingZip();
+    const total = frames.length;
+
+    // One frame is read at a time so the archive never lives in the JS heap.
+    for (let i = 0; i < frames.length; i++) {
+      if (downloadCancelled.value) {
+        downloadProgress.value = { percent: 0, message: 'Download cancelled' };
+        return;
+      }
+
+      const frame = frames[i];
+      zip.add(frame.file.name, await frame.file.arrayBuffer());
+
+      const done = i + 1;
+      downloadProgress.value = {
+        percent: Math.round((done / total) * 90),
+        message: `Packing frame ${done} of ${total}...`,
+      };
+    }
+
+    if (downloadCancelled.value) {
+      downloadProgress.value = { percent: 0, message: 'Download cancelled' };
+      return;
+    }
+
+    downloadProgress.value = {
+      percent: 95,
+      message: 'Building ZIP file...',
+    };
+
+    const blob = await zip.finish();
+
+    if (downloadCancelled.value) {
+      downloadProgress.value = { percent: 0, message: 'Download cancelled' };
+      return;
+    }
+
+    downloadBlob(blob, zipName);
+    downloadProgress.value = {
+      percent: 100,
+      message: `Downloaded ${total} frames`,
+    };
+  } catch (err) {
+    if (downloadCancelled.value) {
+      downloadProgress.value = { percent: 0, message: 'Download cancelled' };
+      return;
+    }
+    console.error('Frame download failed:', err);
+    error.value = `Download failed: ${err instanceof Error ? err.message : String(err)}`;
+  } finally {
+    isDownloading.value = false;
+    downloadCancelled.value = false;
+    window.setTimeout(() => {
+      if (!isDownloading.value) {
+        downloadProgress.value = null;
+      }
+    }, 2000);
+  }
+}
+
+function cancelDownload() {
+  if (!isDownloading.value) return;
+  downloadCancelled.value = true;
+  downloadProgress.value = {
+    percent: downloadProgress.value?.percent ?? 0,
+    message: 'Cancelling…',
+  };
+}
+
+async function handleDownloadAll() {
+  await downloadFramesAsZip(
+    extractedFrames.value,
+    `${buildZipBaseName()}-${extractedFrames.value.length}.zip`
+  );
+}
+
+async function handleDownloadSelected() {
+  if (selectedCount.value === 0) return;
+
+  const selected = extractedFrames.value.filter((frame) =>
+    selectedFrameIndices.value.has(frame.index)
+  );
+
+  await downloadFramesAsZip(
+    selected,
+    `${buildZipBaseName()}-selected-${selected.length}.zip`
+  );
+}
+
+async function handleAddToGrid() {
+  if (isDownloading.value || isAddingToPhotos.value) return;
+  if (extractedFrames.value.length === 0) return;
+
+  const files = extractedFrames.value.map((frame) => frame.file);
+  isAddingToPhotos.value = true;
+  closeFramePreview();
+  exitSelectMode();
+
+  console.warn('[Import] Add to Photos started', {
+    frameCount: files.length,
+    totalBytes: files.reduce((sum, f) => sum + f.size, 0),
+  });
+
+  try {
+    prepareForPhotoImport();
+    await props.addToPhotos(files);
+    console.warn('[Import] Add to Photos completed — video gallery kept');
+  } catch (err) {
+    console.error('[Import] Add to Photos failed — keeping video frames', err);
+    error.value =
+      err instanceof Error
+        ? err.message
+        : 'Failed to add frames to Photos. Your extracted frames are still here.';
+  } finally {
+    await finishPhotoImport();
+    isAddingToPhotos.value = false;
+  }
+}
+
+async function onVideoSessionExpiredExternally(): Promise<void> {
+  if (!videoFile.value && extractedFrames.value.length === 0) return;
+  stopClipPreview();
   closeFramePreview();
   clearFramePreviewUrls();
   showAllPreviewFrames.value = false;
-
-  void reset();
+  exitSelectMode();
+  await reset();
+  error.value =
+    'Video session expired after 24 hours and was cleared. Photos are unaffected.';
 }
 
 onMounted(async () => {
+  window.addEventListener(
+    'justcropit:video-session-expired',
+    onVideoSessionExpiredExternally
+  );
+
   const restored = await restoreSession();
   if (restored) {
     await nextTick();
@@ -636,6 +1055,10 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  window.removeEventListener(
+    'justcropit:video-session-expired',
+    onVideoSessionExpiredExternally
+  );
   stopClipPreview();
   if (metadataRetryTimer) {
     clearTimeout(metadataRetryTimer);
@@ -659,9 +1082,16 @@ onUnmounted(() => {
 }
 
 .video-extractor-header {
-  text-align: center;
   margin-top: 28px;
   margin-bottom: 8px;
+}
+
+.video-extractor-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  flex-wrap: wrap;
 }
 
 .video-extractor-subtitle {
@@ -1108,6 +1538,11 @@ onUnmounted(() => {
   transform: translateY(0);
 }
 
+.hw-hint {
+  opacity: 0.7;
+  font-size: 0.85em;
+}
+
 .batch-hint {
   margin-left: 4px;
   color: rgba(255, 255, 255, 0.5);
@@ -1347,6 +1782,68 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+}
+
+.selection-count {
+  color: rgba(212, 175, 55, 0.95);
+  font-weight: 500;
+}
+
+.extracted-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.frame-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.85);
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+}
+
+.frame-action-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.25);
+  transform: translateY(-1px);
+}
+
+.frame-action-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.frame-action-btn--primary {
+  background: rgba(212, 175, 55, 0.18);
+  border-color: rgba(212, 175, 55, 0.4);
+  color: #e8c96a;
+}
+
+.frame-action-btn--primary:hover:not(:disabled) {
+  background: rgba(212, 175, 55, 0.28);
+  border-color: rgba(212, 175, 55, 0.55);
+}
+
+.frame-action-btn--danger {
+  background: rgba(239, 68, 68, 0.14);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #f87171;
+}
+
+.frame-action-btn--danger:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.24);
+  border-color: rgba(239, 68, 68, 0.55);
 }
 
 .add-to-grid-btn {
@@ -1364,10 +1861,60 @@ onUnmounted(() => {
   transition: all 0.2s ease;
 }
 
-.add-to-grid-btn:hover {
+.add-to-grid-btn:hover:not(:disabled) {
   background: rgba(34, 197, 94, 0.3);
   border-color: rgba(34, 197, 94, 0.6);
   transform: translateY(-1px);
+}
+
+.add-to-grid-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.download-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.download-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.download-progress-row .progress-bar-container {
+  flex: 1;
+  min-width: 0;
+}
+
+.cancel-download-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.cancel-download-btn:hover {
+  background: rgba(239, 68, 68, 0.25);
+  border-color: rgba(239, 68, 68, 0.65);
+}
+
+.download-progress-message {
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.65);
 }
 
 .frames-preview-grid {
@@ -1381,6 +1928,10 @@ onUnmounted(() => {
   overflow-y: auto;
   padding-right: 4px;
   scrollbar-gutter: stable;
+}
+
+.frames-preview-grid--selecting .preview-frame {
+  cursor: pointer;
 }
 
 .frames-preview-grid--expanded::-webkit-scrollbar {
@@ -1436,6 +1987,37 @@ onUnmounted(() => {
 .preview-frame:focus-visible {
   outline: 2px solid rgba(212, 175, 55, 0.8);
   outline-offset: 2px;
+}
+
+.preview-frame--selected {
+  box-shadow: 0 0 0 2px rgba(212, 175, 55, 0.85), 0 6px 20px rgba(0, 0, 0, 0.35);
+}
+
+.preview-frame--selected img {
+  opacity: 0.92;
+}
+
+.frame-check {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1.5px solid rgba(255, 255, 255, 0.55);
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: transparent;
+  font-size: 0.7rem;
+  z-index: 1;
+}
+
+.frame-check--on {
+  background: rgba(212, 175, 55, 0.95);
+  border-color: rgba(212, 175, 55, 1);
+  color: #1a1a1a;
 }
 
 .preview-frame img {
@@ -1510,6 +2092,12 @@ onUnmounted(() => {
     align-items: stretch;
   }
 
+  .extracted-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .frame-action-btn,
   .add-to-grid-btn {
     justify-content: center;
   }

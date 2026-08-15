@@ -58,6 +58,14 @@ class RobustImageWorkerPool {
     return this.isWorkerSupported() && batchSize >= MIN_BATCH_FOR_WORKERS;
   }
 
+  /**
+   * Number of tasks worth keeping in flight. Queuing more than this only piles
+   * up source buffers in memory, which starves the decoders inside the workers.
+   */
+  getPoolSize(): number {
+    return this.maxWorkers;
+  }
+
   private initWorkers() {
     if (this.initialized) return;
     

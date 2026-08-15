@@ -101,8 +101,7 @@ async function createThumbnailViaResizeBitmap(
 
 async function createThumbnailViaImageElement(
   file: File,
-  width: number,
-  height: number,
+  maxEdge: number,
   quality: number
 ): Promise<Blob> {
   const url = URL.createObjectURL(file);
@@ -113,7 +112,12 @@ async function createThumbnailViaImageElement(
       img.onerror = () => reject(new Error('Failed to load image for thumbnail'));
       img.src = url;
     });
-    return encodeThumbnailFromBitmap(image, width, height, quality);
+    const { width, height } = computeThumbnailDimensions(
+      image.naturalWidth,
+      image.naturalHeight,
+      maxEdge
+    );
+    return await encodeThumbnailFromBitmap(image, width, height, quality);
   } finally {
     URL.revokeObjectURL(url);
   }
@@ -128,17 +132,18 @@ export async function createThumbnailFromFile(
     throw new Error(`Unsupported file type for thumbnail: ${file.type || 'unknown'}`);
   }
 
-  const { width: sourceWidth, height: sourceHeight } =
-    await readImageDimensions(file);
-  const { width, height } = computeThumbnailDimensions(
-    sourceWidth,
-    sourceHeight,
-    maxEdge
-  );
-
   try {
+    const { width: sourceWidth, height: sourceHeight } =
+      await readImageDimensions(file);
+    const { width, height } = computeThumbnailDimensions(
+      sourceWidth,
+      sourceHeight,
+      maxEdge
+    );
     return await createThumbnailViaResizeBitmap(file, width, height, quality);
   } catch {
-    return createThumbnailViaImageElement(file, width, height, quality);
+    // `createImageBitmap` also fails on allocation pressure, not just bad bytes;
+    // the <img> decoder is a separate path and usually still succeeds.
+    return createThumbnailViaImageElement(file, maxEdge, quality);
   }
 }

@@ -8,6 +8,9 @@ import type { BlobToFileFn } from './blobToFile';
 
 const BACKFILL_CHUNK_SIZE = 3;
 
+/** Photos whose bytes cannot be decoded — retrying every backfill pass only spams the console. */
+const undecodablePhotoIds = new Set<string>();
+
 export interface GeneratedThumbnailResult {
   thumbnailFile: File;
   thumbhash: string | null;
@@ -17,7 +20,7 @@ export async function generateAndPersistThumbnail(
   photo: Photo,
   blobToFile: BlobToFileFn
 ): Promise<GeneratedThumbnailResult | null> {
-  if (!photo.id) {
+  if (!photo.id || undecodablePhotoIds.has(photo.id)) {
     return null;
   }
 
@@ -33,9 +36,18 @@ export async function generateAndPersistThumbnail(
       thumbhash,
     };
   } catch (error) {
-    console.warn(`Failed to generate thumbnail for photo ${photo.id}:`, error);
+    undecodablePhotoIds.add(photo.id);
+    console.warn(
+      `Failed to generate thumbnail for photo ${photo.id} (${photo.current.type || 'unknown type'}, ${photo.current.size} bytes) — skipping future retries:`,
+      error
+    );
     return null;
   }
+}
+
+/** Allow a photo to be retried once its bytes have been rewritten (crop, revert, undo). */
+export function clearThumbnailBackfillFailure(photoId: string): void {
+  undecodablePhotoIds.delete(photoId);
 }
 
 export function scheduleThumbnailBackfill(

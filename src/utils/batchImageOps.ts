@@ -12,6 +12,9 @@ import { MAIN_THREAD_CHUNK_SIZE } from '../constants/optimization';
 import type { FlipParams, CropParams, PasteParams, WorkerRequest } from '../types/worker';
 import type { Photo } from '../types/photo';
 import { applyDisplayInvalidation } from './thumbnailInvalidation';
+import type { BatchProgressCallback } from './batchEditProgress';
+import { isBatchAborted } from './batchEditProgress';
+import { forEachWithConcurrency } from './concurrency';
 
 export type { Photo };
 
@@ -48,9 +51,17 @@ export async function runBatchFlip(
   photos: Ref<Photo[]>,
   updatePhotosBatch: UpdatePhotosBatchFn,
   blobToFile: BlobToFileFn,
-  mainThreadFallback: HandleFlipFn
-): Promise<{ workerUsed: boolean }> {
-  
+  mainThreadFallback: HandleFlipFn,
+  onProgress?: BatchProgressCallback,
+  signal?: AbortSignal
+): Promise<{ workerUsed: boolean; cancelled: boolean }> {
+  const total = indices.length;
+  let completed = 0;
+  const report = () => {
+    completed += 1;
+    onProgress?.(completed, total);
+  };
+
   if (imageWorkerPool.shouldUseWorkers(indices.length)) {
     console.log(`[BatchFlip] Using Web Workers for ${indices.length} images`);
     
@@ -64,10 +75,20 @@ export async function runBatchFlip(
       };
     }> = [];
 
-    await Promise.all(indices.map(async (index) => {
+    await forEachWithConcurrency(indices, imageWorkerPool.getPoolSize(), async (index) => {
+      if (isBatchAborted(signal)) {
+        report();
+        return;
+      }
+
       const photo = photos.value[index];
       // Use current image for flip (incremental)
       const buffer = await photo.current.arrayBuffer();
+      if (isBatchAborted(signal)) {
+        report();
+        return;
+      }
+
       const params: FlipParams = { direction };
       
       const request: WorkerRequest = {
@@ -80,6 +101,9 @@ export async function runBatchFlip(
 
       try {
         const response = await imageWorkerPool.submitTask(request, [buffer]);
+        if (isBatchAborted(signal)) {
+          return;
+        }
         
         if (response.success && response.result) {
           const newFile = blobToFile(
@@ -113,26 +137,33 @@ export async function runBatchFlip(
           throw new Error(response.error || 'Worker returned failure');
         }
       } catch (err) {
+        if (isBatchAborted(signal)) {
+          return;
+        }
         console.error(`[BatchFlip] Worker failed for index ${index}, falling back to main thread`, err);
-        // Fallback for this single item
         await mainThreadFallback(index, direction);
+      } finally {
+        report();
       }
-    }));
+    });
 
-    // Save all successful worker updates in one batch
-    if (batchUpdates.length > 0) {
+    if (!isBatchAborted(signal) && batchUpdates.length > 0) {
       await updatePhotosBatch(batchUpdates);
     }
 
-    return { workerUsed: true };
+    return { workerUsed: true, cancelled: isBatchAborted(signal) };
   } else {
     console.log(`[BatchFlip] Using Main Thread for ${indices.length} images`);
     await processInChunks(
       indices,
-      (index) => mainThreadFallback(index, direction),
+      async (index) => {
+        if (isBatchAborted(signal)) return;
+        await mainThreadFallback(index, direction);
+        report();
+      },
       MAIN_THREAD_CHUNK_SIZE
     );
-    return { workerUsed: false };
+    return { workerUsed: false, cancelled: isBatchAborted(signal) };
   }
 }
 
@@ -147,8 +178,16 @@ export async function runBatchCropRemaining(
   updatePhotosBatch: UpdatePhotosBatchFn,
   blobToFile: BlobToFileFn,
   blobFromFile: BlobFromFileFn,
-  mainThreadFallback: FallbackFn
-): Promise<{ workerUsed: boolean }> {
+  mainThreadFallback: FallbackFn,
+  onProgress?: BatchProgressCallback,
+  signal?: AbortSignal
+): Promise<{ workerUsed: boolean; cancelled: boolean }> {
+  const total = indices.length;
+  let completed = 0;
+  const report = () => {
+    completed += 1;
+    onProgress?.(completed, total);
+  };
 
   if (imageWorkerPool.shouldUseWorkers(indices.length)) {
     console.log(`[BatchCrop] Using Web Workers for ${indices.length} images`);
@@ -163,10 +202,19 @@ export async function runBatchCropRemaining(
       };
     }> = [];
 
-    await Promise.all(indices.map(async (index) => {
+    await forEachWithConcurrency(indices, imageWorkerPool.getPoolSize(), async (index) => {
+      if (isBatchAborted(signal)) {
+        report();
+        return;
+      }
+
       const photo = photos.value[index];
-      // Use original image for crop (absolute)
       const buffer = await photo.original.arrayBuffer();
+      if (isBatchAborted(signal)) {
+        report();
+        return;
+      }
+
       const params: CropParams = { crop, rotation };
 
       const request: WorkerRequest = {
@@ -179,6 +227,9 @@ export async function runBatchCropRemaining(
 
       try {
         const response = await imageWorkerPool.submitTask(request, [buffer]);
+        if (isBatchAborted(signal)) {
+          return;
+        }
 
         if (response.success && response.result) {
           const newFile = blobToFile(
@@ -187,7 +238,6 @@ export async function runBatchCropRemaining(
             photo.current.type
           );
 
-          // Update crop history if needed (App.vue does it)
           const historyBlob = await blobFromFile(photo.current);
 
           photos.value[index] = applyDisplayInvalidation(photo, {
@@ -213,24 +263,33 @@ export async function runBatchCropRemaining(
           throw new Error(response.error || 'Worker returned failure');
         }
       } catch (err) {
+        if (isBatchAborted(signal)) {
+          return;
+        }
         console.error(`[BatchCrop] Worker failed for index ${index}`, err);
         await mainThreadFallback(index);
+      } finally {
+        report();
       }
-    }));
+    });
 
-    if (batchUpdates.length > 0) {
+    if (!isBatchAborted(signal) && batchUpdates.length > 0) {
       await updatePhotosBatch(batchUpdates);
     }
 
-    return { workerUsed: true };
+    return { workerUsed: true, cancelled: isBatchAborted(signal) };
   } else {
     console.log(`[BatchCrop] Using Main Thread for ${indices.length} images`);
     await processInChunks(
       indices,
-      (index) => mainThreadFallback(index),
+      async (index) => {
+        if (isBatchAborted(signal)) return;
+        await mainThreadFallback(index);
+        report();
+      },
       MAIN_THREAD_CHUNK_SIZE
     );
-    return { workerUsed: false };
+    return { workerUsed: false, cancelled: isBatchAborted(signal) };
   }
 }
 
@@ -260,7 +319,7 @@ export async function runBatchPaste(
       };
     }> = [];
 
-    await Promise.all(indicesToPaste.map(async (index) => {
+    await forEachWithConcurrency(indicesToPaste, imageWorkerPool.getPoolSize(), async (index) => {
       const photo = photos.value[index];
       
       // Check crop logic (same as original file)
@@ -324,7 +383,7 @@ export async function runBatchPaste(
         console.error(`[BatchPaste] Worker failed for index ${index}`, err);
         await mainThreadFallback(index);
       }
-    }));
+    });
 
     if (batchUpdates.length > 0) {
       await updatePhotosBatch(batchUpdates);

@@ -9,6 +9,90 @@
       :auto-dismiss="alert.autoDismiss"
       @dismiss="alert.show = false"
     />
+    <div
+      v-if="importProgress"
+      class="import-progress-banner"
+      role="status"
+      aria-live="polite"
+    >
+      <div class="import-progress-banner__row">
+        <div class="import-progress-banner__meta">
+          <i
+            class="fas"
+            :class="importCancelling ? 'fa-circle-notch fa-spin' : 'fa-spinner fa-spin'"
+            aria-hidden="true"
+          ></i>
+          <span>
+            {{
+              importCancelling
+                ? `Cancelling… ${importProgress.current} / ${importProgress.total}`
+                : `Importing ${importProgress.label} ${importProgress.current} / ${importProgress.total}`
+            }}
+          </span>
+        </div>
+        <button
+          type="button"
+          class="import-progress-banner__cancel"
+          :disabled="importCancelling"
+          title="Cancel import"
+          @click="cancelImport"
+        >
+          <i class="fas fa-times" aria-hidden="true"></i>
+          Cancel
+        </button>
+      </div>
+      <div class="import-progress-banner__track">
+        <div
+          class="import-progress-banner__fill"
+          :style="{ width: `${importProgressPercent}%` }"
+        ></div>
+      </div>
+    </div>
+    <div
+      v-else-if="batchEditProgress"
+      class="import-progress-banner"
+      role="status"
+      aria-live="polite"
+    >
+      <div class="import-progress-banner__row">
+        <div class="import-progress-banner__meta">
+          <i
+            class="fas"
+            :class="batchEditCancelling ? 'fa-circle-notch fa-spin' : 'fa-spinner fa-spin'"
+            aria-hidden="true"
+          ></i>
+          <span>
+            {{
+              batchEditCancelling
+                ? `Cancelling… ${batchEditProgress.current} / ${batchEditProgress.total}`
+                : `${batchEditProgress.label} ${batchEditProgress.current} / ${batchEditProgress.total}`
+            }}
+          </span>
+          <span
+            v-if="!batchEditCancelling && batchEditEtaLabel"
+            class="import-progress-banner__eta"
+          >
+            · {{ batchEditEtaLabel }}
+          </span>
+        </div>
+        <button
+          type="button"
+          class="import-progress-banner__cancel"
+          :disabled="batchEditCancelling"
+          title="Cancel batch edit"
+          @click="cancelBatchEdit"
+        >
+          <i class="fas fa-times" aria-hidden="true"></i>
+          Cancel
+        </button>
+      </div>
+      <div class="import-progress-banner__track">
+        <div
+          class="import-progress-banner__fill"
+          :style="{ width: `${batchEditProgressPercent}%` }"
+        ></div>
+      </div>
+    </div>
     <div class="app-top-controls">
       <div class="app-top-controls__left">
         <div class="app-brand" aria-label="JustCropIt">JustCropIt</div>
@@ -104,7 +188,7 @@
       </div>
 
       <div v-show="appMode === 'video'" class="video-page">
-        <VideoExtractor @frames-extracted="handleVideoFramesExtracted" />
+        <VideoExtractor :add-to-photos="handleVideoFramesExtracted" />
       </div>
     </main>
     <BatchCropSelector
@@ -161,7 +245,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, provide } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch, provide, nextTick } from "vue";
 import PhotoGrid from "./components/PhotoGrid.vue";
 import CropModal from "./components/CropModal.vue";
 import BatchCropSelector from "./components/BatchCropSelector.vue";
@@ -173,7 +257,6 @@ import DeletionNotification from "./components/DeletionNotification.vue";
 // import CopyPasteVisualizer from "./components/CopyPasteVisualizer.vue";
 import VideoExtractor from "./components/VideoExtractor.vue";
 import OperationHistoryPanel from "./components/OperationHistoryPanel.vue";
-import JSZip from "jszip";
 import { getExportStripChunkSize, HISTORY_MAX_SIZE } from "./constants/optimization";
 import { UNDO_REDO_MANAGER_KEY } from "./types/history";
 import { useOperationHistory } from "./composables/useOperationHistory";
@@ -181,6 +264,10 @@ import { useCropSuggestion } from "./composables/useCropSuggestion";
 import { scheduleIdleTask } from "./utils/scheduler";
 import { useExportSettings } from "./composables/useExportSettings";
 import { prepareExportFile } from "./utils/export/prepareExportBlob";
+import {
+  createStreamingZip,
+  type StreamingZipWriter,
+} from "./utils/export/streamingZip";
 import type { ExportBatchStats } from "./types/export";
 import { copyPasteLogger } from "./utils/copyPasteLogger";
 import { performanceLogger } from "./utils/performanceLogger";
@@ -193,7 +280,9 @@ import {
   deletePhotos,
   cleanupExpiredPhotos,
   getStorageStatus,
+  updatePhotoMetadata,
 } from "./utils/photoStorage";
+import { cleanupExpiredVideoSession } from "./utils/videoSessionStorage";
 import { imageWorkerPool } from "./utils/imageWorkerPool";
 import {
   UndoRedoManager,
@@ -208,6 +297,7 @@ import { blobToFile } from "./utils/blobToFile";
 import { scheduleThumbnailBackfill } from "./utils/thumbnailBackfill";
 import { applyDisplayInvalidation } from "./utils/thumbnailInvalidation";
 import { ingestAndPersistPhotos } from "./utils/import/ingestAndPersist";
+import { formatBatchEta, isBatchAborted } from "./utils/batchEditProgress";
 
 const photoSizes = [
   { label: "XS", minSize: 180 },
@@ -228,6 +318,116 @@ const { settings: exportSettings } = useExportSettings();
 const selectedPhotoSize = ref(2);
 const newPhotosCount = ref(0);
 const deletedPhotosCount = ref(0);
+const importProgress = ref<{
+  current: number;
+  total: number;
+  label: string;
+} | null>(null);
+const importCancelling = ref(false);
+let importAbortController: AbortController | null = null;
+
+const importProgressPercent = computed(() => {
+  if (!importProgress.value || importProgress.value.total <= 0) return 0;
+  return Math.min(
+    100,
+    Math.round(
+      (importProgress.value.current / importProgress.value.total) * 100
+    )
+  );
+});
+
+const cancelImport = () => {
+  if (!importAbortController || importCancelling.value) return;
+  importCancelling.value = true;
+  console.warn("[Import][UI] Cancel requested");
+  importAbortController.abort();
+};
+
+const clearImportUiState = () => {
+  importProgress.value = null;
+  importCancelling.value = false;
+  importAbortController = null;
+};
+
+const batchEditProgress = ref<{
+  current: number;
+  total: number;
+  label: string;
+  startedAt: number;
+} | null>(null);
+const batchEditCancelling = ref(false);
+let batchEditAbortController: AbortController | null = null;
+
+const batchEditProgressPercent = computed(() => {
+  if (!batchEditProgress.value || batchEditProgress.value.total <= 0) return 0;
+  return Math.min(
+    100,
+    Math.round(
+      (batchEditProgress.value.current / batchEditProgress.value.total) * 100
+    )
+  );
+});
+
+const batchEditEtaLabel = computed(() => {
+  if (!batchEditProgress.value) return null;
+  return formatBatchEta(
+    batchEditProgress.value.startedAt,
+    batchEditProgress.value.current,
+    batchEditProgress.value.total
+  );
+});
+
+const cancelBatchEdit = () => {
+  if (!batchEditAbortController || batchEditCancelling.value) return;
+  batchEditCancelling.value = true;
+  console.warn("[BatchEdit] Cancel requested");
+  batchEditAbortController.abort();
+};
+
+const beginBatchEditProgress = (label: string, total: number) => {
+  if (total <= 0) return;
+  batchEditAbortController = new AbortController();
+  batchEditCancelling.value = false;
+  batchEditProgress.value = {
+    current: 0,
+    total,
+    label,
+    startedAt: Date.now(),
+  };
+};
+
+const updateBatchEditProgress = (current: number, total?: number) => {
+  if (!batchEditProgress.value) return;
+  batchEditProgress.value = {
+    ...batchEditProgress.value,
+    current: Math.min(current, total ?? batchEditProgress.value.total),
+    ...(total != null ? { total } : {}),
+  };
+};
+
+const endBatchEditProgress = () => {
+  const wasCancelled = batchEditCancelling.value;
+  const snapshot = batchEditProgress.value;
+  batchEditProgress.value = null;
+  batchEditCancelling.value = false;
+  batchEditAbortController = null;
+  return { wasCancelled, snapshot };
+};
+
+const notifyBatchCancelled = (
+  label: string,
+  completed: number,
+  total: number
+) => {
+  showAlert(
+    "info",
+    "Batch Cancelled",
+    completed > 0
+      ? `Stopped ${label.toLowerCase()} after ${completed} of ${total}. Already-applied changes can be undone.`
+      : `Cancelled ${label.toLowerCase()} before any changes were applied.`,
+    5000
+  );
+};
 let addedCountResetTimer: ReturnType<typeof setTimeout> | null = null;
 let deletedCountResetTimer: ReturnType<typeof setTimeout> | null = null;
 const ACTIVITY_COUNT_PERSIST_MS = 7000;
@@ -570,57 +770,174 @@ const handleUpload = async (event: Event) => {
   const input = event.target as HTMLInputElement;
   if (!input.files) return;
 
-  const { photos: newPhotos } = await ingestAndPersistPhotos(
-    Array.from(input.files),
-    {
+  const files = Array.from(input.files);
+  importAbortController = new AbortController();
+  importCancelling.value = false;
+  importProgress.value = {
+    current: 0,
+    total: files.length,
+    label: "photos",
+  };
+  await nextTick();
+
+  try {
+    const result = await ingestAndPersistPhotos(files, {
       operationIdPrefix: "upload",
-      onError: (title, message) => showAlert("error", title, message, 5000),
+      signal: importAbortController.signal,
+      onError: (title, message) => {
+        console.error(`[Import][UI] ${title}: ${message}`);
+        showAlert("error", title, message, 5000);
+      },
       onStorageWarning: (message) =>
         showAlert("warning", "Storage Warning", message, 6000),
+      onProgress: (current, total) => {
+        if (importProgress.value) {
+          importProgress.value = { ...importProgress.value, current, total };
+        }
+      },
+      onPhotosPersisted: (batch) => {
+        photos.value.push(...batch);
+      },
       onPhotosAdded: trackPhotoAddition,
-    }
-  );
+    });
 
-  if (newPhotos.length > 0) {
-    photos.value.push(...newPhotos);
-  }
-
-  input.value = "";
-};
-
-// Handle video frames extracted from VideoExtractor
-const handleVideoFramesExtracted = async (files: File[]) => {
-  if (files.length === 0) return;
-
-  appMode.value = 'photos';
-
-  const { photos: newPhotos } = await ingestAndPersistPhotos(files, {
-    operationIdPrefix: "video-frames",
-    onError: (title, message) => showAlert("error", title, message, 5000),
-    onStorageWarning: (message) =>
-      showAlert("warning", "Storage Warning", message, 6000),
-    onPhotosAdded: (count) => {
-      trackPhotoAddition(count);
+    if (result.cancelled) {
+      console.warn("[Import][UI] Upload cancelled", result);
       showAlert(
         "info",
-        "Frames Added",
-        `${count} video frames have been added to your photos.`,
-        4000
+        "Import Cancelled",
+        result.photos.length > 0
+          ? `Kept ${result.photos.length} of ${files.length} photo(s) imported before cancel.`
+          : "Import cancelled. No photos were added.",
+        5000
       );
-    },
-  });
+      return;
+    }
 
-  if (newPhotos.length === 0 && files.length > 0) {
-    showAlert(
-      "error",
-      "Import Failed",
-      "No video frames could be imported. Check storage limits or file format.",
-      5000
-    );
-    return;
+    if (result.stoppedEarly || result.failedCount > 0) {
+      console.error("[Import][UI] Upload finished incomplete", result);
+      showAlert(
+        "warning",
+        "Import Incomplete",
+        `Imported ${result.photos.length} of ${files.length}. ${
+          result.stoppedEarly
+            ? "Stopped early due to storage limits."
+            : `${result.failedCount} file(s) failed.`
+        }`,
+        7000
+      );
+    }
+  } catch (error) {
+    console.error("[Import][UI] Upload threw", error);
+    throw error;
+  } finally {
+    clearImportUiState();
+    input.value = "";
+  }
+};
+
+// Handle video frames extracted from VideoExtractor (awaitable; video gallery is kept)
+const handleVideoFramesExtracted = async (files: File[]) => {
+  if (files.length === 0) {
+    console.error("[Import][UI] No frames to import");
+    throw new Error("No frames to import");
   }
 
-  photos.value.push(...newPhotos);
+  appMode.value = "photos";
+  importAbortController = new AbortController();
+  importCancelling.value = false;
+  importProgress.value = {
+    current: 0,
+    total: files.length,
+    label: "frames",
+  };
+  // Let the banner paint before heavy ingest work
+  await nextTick();
+
+  try {
+    const result = await ingestAndPersistPhotos(files, {
+      operationIdPrefix: "video-frames",
+      preferLargerChunks: true,
+      signal: importAbortController.signal,
+      onError: (title, message) => {
+        console.error(`[Import][UI] ${title}: ${message}`);
+        showAlert("error", title, message, 6000);
+      },
+      onStorageWarning: (message) =>
+        showAlert("warning", "Storage Warning", message, 6000),
+      onProgress: (current, total) => {
+        if (importProgress.value) {
+          importProgress.value = { ...importProgress.value, current, total };
+        }
+      },
+      onPhotosPersisted: (batch) => {
+        photos.value.push(...batch);
+      },
+      onPhotosAdded: trackPhotoAddition,
+    });
+
+    if (result.cancelled) {
+      console.warn("[Import][UI] Video-frame import cancelled", result);
+      showAlert(
+        "info",
+        "Import Cancelled",
+        result.photos.length > 0
+          ? `Kept ${result.photos.length} of ${files.length} frame(s). Remaining frames are still on the Video tab.`
+          : "Import cancelled. No frames were added. Your Video tab is unchanged.",
+        6000
+      );
+      // Soft-complete: keep video gallery; do not throw a failure error
+      return;
+    }
+
+    const complete =
+      result.photos.length === files.length &&
+      !result.stoppedEarly &&
+      result.failedCount === 0;
+
+    if (result.photos.length === 0) {
+      console.error("[Import][UI] Video-frame import imported 0 frames", result);
+      showAlert(
+        "error",
+        "Import Failed",
+        "No video frames could be imported. Check storage limits (DevTools → Application → Storage) or the browser console for [Import] logs.",
+        8000
+      );
+      throw new Error("No video frames imported");
+    }
+
+    if (!complete) {
+      console.error(
+        "[Import][UI] Video-frame import incomplete — keeping Video tab frames",
+        result
+      );
+      showAlert(
+        "warning",
+        "Import Incomplete",
+        `Only ${result.photos.length} of ${files.length} frames were added${
+          result.stoppedEarly ? " (storage limit reached)" : ""
+        }${
+          result.failedCount > 0 ? ` (${result.failedCount} failed)` : ""
+        }. Your remaining frames are still on the Video tab.`,
+        9000
+      );
+      throw new Error(
+        `Incomplete import: ${result.photos.length}/${files.length} frames`
+      );
+    }
+
+    showAlert(
+      "info",
+      "Frames Added",
+      `${result.photos.length} video frames have been added to your photos.`,
+      4000
+    );
+  } catch (error) {
+    console.error("[Import][UI] Video-frame import error", error);
+    throw error;
+  } finally {
+    clearImportUiState();
+  }
 };
 
 const handleFlip = async (
@@ -792,9 +1109,11 @@ const handleBatchFlip = async (direction: "horizontal" | "vertical") => {
   const operationId = `batch-flip-${direction}-${Date.now()}`;
   performanceLogger.startMeasurement(operationId);
 
-  const workerUsed = imageWorkerPool.shouldUseWorkers(
-    selectedIndices.value.length
-  );
+  const total = selectedIndices.value.length;
+  const workerUsed = imageWorkerPool.shouldUseWorkers(total);
+  const label =
+    direction === "horizontal" ? "Flipping horizontally" : "Flipping vertically";
+  beginBatchEditProgress(label, total);
 
   try {
     const command = new BatchFlipCommand(
@@ -804,7 +1123,10 @@ const handleBatchFlip = async (direction: "horizontal" | "vertical") => {
       updatePhoto,
       updatePhotosBatch,
       applyFlipsRotationAndCrop,
-      blobToFile
+      blobToFile,
+      (current, progressTotal) =>
+        updateBatchEditProgress(current, progressTotal),
+      batchEditAbortController?.signal
     );
     await undoRedoManager.executeCommand(command);
   } catch (error) {
@@ -815,6 +1137,10 @@ const handleBatchFlip = async (direction: "horizontal" | "vertical") => {
       "Failed to flip selected photos. Please try again."
     );
   } finally {
+    const { wasCancelled, snapshot } = endBatchEditProgress();
+    if (wasCancelled && snapshot) {
+      notifyBatchCancelled(label, snapshot.current, snapshot.total);
+    }
     await performanceLogger.endMeasurement(
       operationId,
       operationType,
@@ -865,6 +1191,8 @@ const handleBatchCropNext = async (
 
   showCropModal.value = false;
 
+  beginBatchEditProgress("Cropping", savedBatchCropIndices.length);
+
   try {
     const command = new BatchCropCommand(
       savedBatchCropIndices,
@@ -875,7 +1203,10 @@ const handleBatchCropNext = async (
       updatePhotosBatch,
       applyFlipsRotationAndCrop,
       blobToFile,
-      blobFromFile
+      blobFromFile,
+      (current, progressTotal) =>
+        updateBatchEditProgress(current, progressTotal),
+      batchEditAbortController?.signal
     );
     await undoRedoManager.executeCommand(command);
   } catch (error) {
@@ -886,6 +1217,10 @@ const handleBatchCropNext = async (
       "Failed to crop selected photos. Please try again."
     );
   } finally {
+    const { wasCancelled, snapshot } = endBatchEditProgress();
+    if (wasCancelled && snapshot) {
+      notifyBatchCancelled("Cropping", snapshot.current, snapshot.total);
+    }
     await performanceLogger.endMeasurement(
       operationId,
       "crop",
@@ -985,6 +1320,20 @@ const handlePreviousBatchImage = () => {
   }
 };
 
+const downloadZip = async (zip: StreamingZipWriter, fileName: string) => {
+  const blob = await zip.finish();
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  // Give Chrome time to read the blob before the URL is released.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+};
+
 const handleBatchDownload = async () => {
   if (selectedIndices.value.length === 0) {
     return;
@@ -1000,49 +1349,71 @@ const handleBatchDownload = async () => {
     workerUsed: false,
   };
 
+  const indices = selectedIndices.value;
+  beginBatchEditProgress("Preparing download", indices.length);
+
   try {
-    const zip = new JSZip();
-    const indices = selectedIndices.value;
+    const zip = createStreamingZip();
     const chunkSize = getExportStripChunkSize();
     const settings = exportSettings();
+    let completed = 0;
+    const signal = batchEditAbortController?.signal;
 
     for (let i = 0; i < indices.length; i += chunkSize) {
+      if (isBatchAborted(signal)) break;
+
       const chunk = indices.slice(i, i + chunkSize);
 
       const results = await Promise.all(
         chunk.map(async (index) => {
+          if (isBatchAborted(signal)) return null;
           const photo = photos.value[index];
           const prepared = await prepareExportFile(photo, settings);
+          if (isBatchAborted(signal)) return null;
+          completed += 1;
+          updateBatchEditProgress(completed, indices.length);
           return prepared;
         })
       );
 
       for (const prepared of results) {
+        if (!prepared) continue;
         if (prepared.path === 'passthrough') batchStats.passThroughCount++;
         else if (prepared.path === 'fast-path') batchStats.fastPathCount++;
         else batchStats.slowPathCount++;
         if (prepared.workerUsed) batchStats.workerUsed = true;
 
-        zip.file(prepared.fileName, prepared.buffer);
+        zip.add(prepared.fileName, prepared.buffer);
       }
     }
 
-    const blob = await zip.generateAsync({ type: "blob" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `photos-${selectedIndices.value.length}-files.zip`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    if (isBatchAborted(signal)) {
+      // Still offer whatever was prepared
+      if (completed > 0) {
+        await downloadZip(zip, `photos-${completed}-files.zip`);
+      }
+      return;
+    }
+
+    updateBatchEditProgress(indices.length, indices.length);
+    batchEditProgress.value = batchEditProgress.value
+      ? { ...batchEditProgress.value, label: "Zipping" }
+      : null;
+
+    await downloadZip(zip, `photos-${indices.length}-files.zip`);
   } catch (error) {
     console.error("Error creating ZIP file:", error);
-    for (const index of selectedIndices.value) {
-      await handleDownload(index);
-      await new Promise((resolve) => setTimeout(resolve, 150));
+    if (!isBatchAborted(batchEditAbortController?.signal)) {
+      for (const index of selectedIndices.value) {
+        await handleDownload(index);
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      }
     }
   } finally {
+    const { wasCancelled, snapshot } = endBatchEditProgress();
+    if (wasCancelled && snapshot) {
+      notifyBatchCancelled("Preparing download", snapshot.current, snapshot.total);
+    }
     performanceLogger.recordExportBatchStats(operationId, batchStats);
     await performanceLogger.endMeasurement(
       operationId,
@@ -1057,11 +1428,25 @@ const handleBatchRevert = async () => {
   const operationId = `batch-revert-${Date.now()}`;
   performanceLogger.startMeasurement(operationId);
 
+  const indices = [...selectedIndices.value];
+  beginBatchEditProgress("Reverting", indices.length);
+
   try {
+    let completed = 0;
+    const signal = batchEditAbortController?.signal;
     await Promise.all(
-      selectedIndices.value.map((index) => handleRevert(index))
+      indices.map(async (index) => {
+        if (isBatchAborted(signal)) return;
+        await handleRevert(index);
+        completed += 1;
+        updateBatchEditProgress(completed, indices.length);
+      })
     );
   } finally {
+    const { wasCancelled, snapshot } = endBatchEditProgress();
+    if (wasCancelled && snapshot) {
+      notifyBatchCancelled("Reverting", snapshot.current, snapshot.total);
+    }
     await performanceLogger.endMeasurement(
       operationId,
       "revert",
@@ -1079,27 +1464,38 @@ const handleBatchDelete = async () => {
   performanceLogger.startMeasurement(operationId);
 
   isBatchDeleting.value = true;
+  beginBatchEditProgress("Deleting", deleteCount);
 
   try {
     const idsToDelete: string[] = [];
+    const signal = batchEditAbortController?.signal;
 
-    // 1. Collect IDs and notify UndoRedo
+    // 1. Collect IDs first (don't touch undo until delete succeeds)
     for (const index of indices) {
+      if (isBatchAborted(signal)) break;
       const photo = photos.value[index];
       if (photo && photo.id) {
         idsToDelete.push(photo.id);
-        undoRedoManager.onPhotoDeleted(photo.id);
       }
     }
+    updateBatchEditProgress(Math.max(1, Math.floor(deleteCount * 0.2)), deleteCount);
 
-    // 2. Batch DB delete
-    if (idsToDelete.length > 0) {
-      await deletePhotos(idsToDelete);
+    if (isBatchAborted(signal)) {
+      return;
     }
 
+    // 2. Batch DB delete, then notify undo
+    if (idsToDelete.length > 0) {
+      await deletePhotos(idsToDelete);
+      for (const id of idsToDelete) {
+        undoRedoManager.onPhotoDeleted(id);
+      }
+    }
+    updateBatchEditProgress(Math.max(1, Math.floor(deleteCount * 0.6)), deleteCount);
+
     // 3. UI updates (loop backwards to handle splices safely)
+    let removed = 0;
     for (const index of indices) {
-      // Replicate UI cleanup logic from handleDelete
       if (cropIndex.value === index && showCropModal.value) {
         showCropModal.value = false;
         if (cropImageSrcURL) {
@@ -1109,20 +1505,32 @@ const handleBatchDelete = async () => {
         cropImageSrc.value = "";
         cropIndex.value = 0;
       }
-      // Adjust cropIndex if needed
       if (cropIndex.value > index) {
         cropIndex.value--;
       }
       
-      // Remove from array
       photos.value.splice(index, 1);
+      removed += 1;
+      updateBatchEditProgress(
+        Math.min(
+          deleteCount,
+          Math.floor(deleteCount * 0.6) + removed
+        ),
+        deleteCount
+      );
     }
+    updateBatchEditProgress(deleteCount, deleteCount);
+    trackPhotoDeletion(deleteCount);
   } catch (error) {
     console.error("Batch delete failed:", error);
     showAlert("error", "Delete Failed", "Failed to delete photos. Please try again.");
   } finally {
     isBatchDeleting.value = false;
     selectedIndices.value = [];
+    const { wasCancelled, snapshot } = endBatchEditProgress();
+    if (wasCancelled && snapshot) {
+      notifyBatchCancelled("Deleting", snapshot.current, snapshot.total);
+    }
 
     await performanceLogger.endMeasurement(
       operationId,
@@ -1130,8 +1538,6 @@ const handleBatchDelete = async () => {
       deleteCount,
       false 
     );
-
-    trackPhotoDeletion(deleteCount);
   }
 };
 
@@ -1153,6 +1559,33 @@ const handleDownload = async (index: number) => {
 
 const handleRevert = async (index: number) => {
   const photo = photos.value[index];
+
+  // Deferred flips only: reset metadata without rewriting blobs / regenerating thumbs
+  if (
+    !photo.crop &&
+    !photo.rotation &&
+    (photo.flips.horizontal || photo.flips.vertical)
+  ) {
+    photos.value[index] = {
+      ...photo,
+      flips: { horizontal: false, vertical: false },
+      crop: undefined,
+      rotation: undefined,
+    };
+    if (photo.id) {
+      try {
+        await updatePhotoMetadata(photo.id, {
+          flips: { horizontal: false, vertical: false },
+          crop: undefined,
+          rotation: undefined,
+        });
+      } catch (error) {
+        console.error("Failed to update photo metadata:", error);
+      }
+    }
+    return;
+  }
+
   photos.value[index] = applyDisplayInvalidation(photo, {
     current: photo.original,
     cropHistory: [],
@@ -1264,6 +1697,7 @@ const handlePasteSettings = async (singleIndex?: number) => {
 
   const operationId = `batch-paste-${Date.now()}`;
   performanceLogger.startMeasurement(operationId);
+  beginBatchEditProgress("Pasting settings", photoIds.length);
 
   try {
     const command = new PasteSettingsCommand(
@@ -1271,7 +1705,10 @@ const handlePasteSettings = async (singleIndex?: number) => {
       copiedSettings.value,
       photos,
       updatePhoto,
-      applyFlipsRotationAndCrop
+      applyFlipsRotationAndCrop,
+      (current, progressTotal) =>
+        updateBatchEditProgress(current, progressTotal),
+      batchEditAbortController?.signal
     );
     await undoRedoManager.executeCommand(command);
   } catch (error) {
@@ -1282,6 +1719,10 @@ const handlePasteSettings = async (singleIndex?: number) => {
       "Failed to paste settings. Please try again."
     );
   } finally {
+    const { wasCancelled, snapshot } = endBatchEditProgress();
+    if (wasCancelled && snapshot) {
+      notifyBatchCancelled("Pasting settings", snapshot.current, snapshot.total);
+    }
     await performanceLogger.endMeasurement(
       operationId,
       "paste",
@@ -1306,6 +1747,13 @@ onMounted(async () => {
     // Load photos from storage
     await loadPhotosFromStorage();
 
+    // Video session has its own 24h timer (independent of photo expiresAt)
+    try {
+      await cleanupExpiredVideoSession();
+    } catch (error) {
+      console.error("Video session cleanup error:", error);
+    }
+
     // Keyboard shortcuts for undo/redo
     keyboardHandler = (e: KeyboardEvent) => {
       // Ctrl+Z (Cmd+Z on Mac) for undo
@@ -1329,7 +1777,7 @@ onMounted(async () => {
 
     document.addEventListener("keydown", keyboardHandler);
 
-    // Set up cleanup interval (run every hour)
+    // Set up cleanup interval (run every hour) — photos and video timers are separate
     cleanupInterval = setInterval(async () => {
       try {
         const deleted = await cleanupExpiredPhotos();
@@ -1344,7 +1792,24 @@ onMounted(async () => {
           );
         }
       } catch (error) {
-        console.error("Cleanup error:", error);
+        console.error("Photo cleanup error:", error);
+      }
+
+      try {
+        const videoCleared = await cleanupExpiredVideoSession();
+        if (videoCleared) {
+          window.dispatchEvent(
+            new CustomEvent("justcropit:video-session-expired")
+          );
+          showAlert(
+            "info",
+            "Video Session Expired",
+            "Your saved video session expired after 24 hours and was cleared. Photos were not affected.",
+            5000
+          );
+        }
+      } catch (error) {
+        console.error("Video session cleanup error:", error);
       }
     }, 60 * 60 * 1000); // 1 hour
 
@@ -1367,6 +1832,12 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  if (importAbortController) {
+    importAbortController.abort();
+    importAbortController = null;
+  }
+  importProgress.value = null;
+  importCancelling.value = false;
   if (cleanupInterval) {
     clearInterval(cleanupInterval);
     cleanupInterval = null;
@@ -1394,6 +1865,94 @@ onUnmounted(() => {
   width: 100%;
   display: flex;
   flex-direction: column;
+}
+
+.import-progress-banner {
+  position: fixed;
+  top: calc(72px + env(safe-area-inset-top, 0px));
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(560px, calc(100vw - 32px));
+  z-index: 1400;
+  margin: 0;
+  padding: 12px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(212, 175, 55, 0.45);
+  background: rgba(18, 18, 20, 0.92);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(12px);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: auto;
+}
+
+.import-progress-banner__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.import-progress-banner__meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.85);
+  min-width: 0;
+}
+
+.import-progress-banner__meta i {
+  color: #e8c96a;
+  flex-shrink: 0;
+}
+
+.import-progress-banner__eta {
+  color: rgba(255, 255, 255, 0.55);
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.import-progress-banner__cancel {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.import-progress-banner__cancel:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.18);
+  border-color: rgba(239, 68, 68, 0.45);
+  color: #fca5a5;
+}
+
+.import-progress-banner__cancel:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.import-progress-banner__track {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.import-progress-banner__fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #c9a227, #e8c96a);
+  transition: width 0.2s ease;
 }
 
 .photos-page {

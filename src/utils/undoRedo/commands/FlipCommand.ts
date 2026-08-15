@@ -34,16 +34,23 @@ export class FlipCommand extends BaseCommand {
       throw new Error("Photo must have an ID to flip");
     }
 
-    // Capture previous state
     this.previousState = this.capturePhotoState(photo);
 
-    // Calculate new flips state
     const newFlips = {
       ...photo.flips,
       [this.direction]: !photo.flips[this.direction],
     };
 
-    // Get current crop and rotation (or defaults)
+    // Deferred path: metadata + CSS only (no re-encode / thumb regen)
+    if (this.canUseDeferredFlipPath(photo)) {
+      await this.updateFlipsMetadataOnly(this.photoId, {
+        flips: newFlips,
+        crop: undefined,
+        rotation: undefined,
+      });
+      return;
+    }
+
     const img = new Image();
     img.src = URL.createObjectURL(photo.original);
 
@@ -62,17 +69,13 @@ export class FlipCommand extends BaseCommand {
 
     URL.revokeObjectURL(img.src);
 
-    // Create new state
     const newState: PhotoState = {
       flips: newFlips,
       crop,
       rotation,
     };
 
-    // Regenerate photo from original + new state
     const newCurrent = await this.regeneratePhotoFromState(photo, newState);
-
-    // Update photo
     await this.updatePhotoState(this.photoId, newCurrent, newState);
   }
 
@@ -89,13 +92,16 @@ export class FlipCommand extends BaseCommand {
       throw new Error("Photo must have an ID to undo flip");
     }
 
-    // Regenerate photo from original + previous state
+    if (this.canUseDeferredFlipPath(photo, this.previousState)) {
+      await this.updateFlipsMetadataOnly(this.photoId, this.previousState);
+      return;
+    }
+
     const newCurrent = await this.regeneratePhotoFromState(
       photo,
       this.previousState
     );
 
-    // Update photo
     await this.updatePhotoState(this.photoId, newCurrent, this.previousState);
   }
 

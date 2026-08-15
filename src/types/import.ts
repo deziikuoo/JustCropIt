@@ -28,7 +28,7 @@ export interface IngestResult {
   timings: IngestTimings;
 }
 
-export type UploadWorkerTaskType = 'ingest' | 'stripExif' | 'ping';
+export type UploadWorkerTaskType = 'ingest' | 'thumbnail' | 'stripExif' | 'ping';
 
 export interface UploadWorkerRequest {
   id: string;

@@ -12,6 +12,8 @@ import {
   saveVideoSession,
   loadVideoSession,
   clearVideoSession,
+  cleanupExpiredVideoSession,
+  VIDEO_SESSION_TTL_MS,
 } from '../utils/videoSessionStorage';
 import type {
   ExtractionOptions,
@@ -50,7 +52,13 @@ export function useVideoExtraction() {
   const error = ref<string | null>(null);
 
   const isRestoringSession = ref(false);
+  /** While true, skip IDB session writes (e.g. during Add to Photos import). */
+  const suspendSessionPersistence = ref(false);
+  /** Independent 24h clock for this video session (not tied to photo expiresAt). */
+  const sessionCreatedAt = ref<number | null>(null);
+  const sessionExpiresAt = ref<number | null>(null);
   let persistTimer: ReturnType<typeof setTimeout> | null = null;
+  let expiryTimer: ReturnType<typeof setTimeout> | null = null;
 
   // ETA tracking
   const extractionStartedAt = ref<number | null>(null);
@@ -161,7 +169,15 @@ export function useVideoExtraction() {
   });
 
   function schedulePersist(): void {
-    if (isRestoringSession.value || isExtracting.value || isExportingTrim.value || !videoFile.value) return;
+    if (
+      isRestoringSession.value ||
+      suspendSessionPersistence.value ||
+      isExtracting.value ||
+      isExportingTrim.value ||
+      !videoFile.value
+    ) {
+      return;
+    }
     if (persistTimer) clearTimeout(persistTimer);
     persistTimer = setTimeout(() => {
       persistTimer = null;
@@ -181,8 +197,40 @@ export function useVideoExtraction() {
     }
   });
 
+  function clearExpiryTimer(): void {
+    if (expiryTimer) {
+      clearTimeout(expiryTimer);
+      expiryTimer = null;
+    }
+  }
+
+  function beginNewSessionClock(): void {
+    const now = Date.now();
+    sessionCreatedAt.value = now;
+    sessionExpiresAt.value = now + VIDEO_SESSION_TTL_MS;
+    scheduleExpiryTimer();
+  }
+
+  function scheduleExpiryTimer(): void {
+    clearExpiryTimer();
+    if (sessionExpiresAt.value == null) return;
+    const delay = Math.max(0, sessionExpiresAt.value - Date.now());
+    expiryTimer = setTimeout(() => {
+      void (async () => {
+        console.warn('[VideoSession] 24h timer elapsed — clearing video page');
+        await reset();
+        error.value =
+          'Video session expired after 24 hours and was cleared. Photos are unaffected.';
+      })();
+    }, delay);
+  }
+
   async function persistSession(): Promise<void> {
-    if (!videoFile.value) return;
+    if (!videoFile.value || suspendSessionPersistence.value) return;
+
+    if (sessionCreatedAt.value == null || sessionExpiresAt.value == null) {
+      beginNewSessionClock();
+    }
 
     try {
       await saveVideoSession({
@@ -195,6 +243,8 @@ export function useVideoExtraction() {
         quality: quality.value,
         trimStart: trimStart.value,
         trimEnd: trimEnd.value,
+        createdAt: sessionCreatedAt.value!,
+        expiresAt: sessionExpiresAt.value!,
         extractedFrames: extractedFrames.value.map((frame) => ({
           index: frame.index,
           timestamp: frame.timestamp,
@@ -208,8 +258,40 @@ export function useVideoExtraction() {
     }
   }
 
+  /** Pause session writes while Add to Photos runs (gallery stays in memory). */
+  function prepareForPhotoImport(): void {
+    suspendSessionPersistence.value = true;
+    if (persistTimer) {
+      clearTimeout(persistTimer);
+      persistTimer = null;
+    }
+  }
+
+  /** Resume persistence after Add to Photos (success or failure). */
+  async function finishPhotoImport(): Promise<void> {
+    suspendSessionPersistence.value = false;
+    try {
+      await persistSession();
+    } catch (err) {
+      console.warn('[Import] Failed to persist video session after import:', err);
+    }
+  }
+
+  function removeFramesByIndices(indices: number[]): void {
+    if (indices.length === 0) return;
+    const remove = new Set(indices);
+    extractedFrames.value = extractedFrames.value.filter(
+      (frame) => !remove.has(frame.index)
+    );
+  }
+
+  function clearExtractedFrames(): void {
+    extractedFrames.value = [];
+  }
+
   async function restoreSession(): Promise<boolean> {
     try {
+      await cleanupExpiredVideoSession();
       const session = await loadVideoSession();
       if (!session) return false;
 
@@ -221,6 +303,9 @@ export function useVideoExtraction() {
       trimStart.value = session.trimStart;
       trimEnd.value = session.trimEnd;
       videoInfo.value = session.videoInfo;
+      sessionCreatedAt.value = session.createdAt;
+      sessionExpiresAt.value = session.expiresAt;
+      scheduleExpiryTimer();
 
       const file = new File([session.video], session.videoName, {
         type: session.videoType || 'video/mp4',
@@ -273,9 +358,17 @@ export function useVideoExtraction() {
 
   async function loadVideo(file: File): Promise<void> {
     if (!isSupported.value) {
-      error.value = 'Video processing is not supported in this browser. Web Workers are required.';
+      error.value = 'Video processing is not supported in this browser. WebCodecs and Web Workers are required.';
       return;
     }
+
+    // New video starts a fresh 24h session clock (separate from Photos).
+    try {
+      await clearVideoSession();
+    } catch (err) {
+      console.warn('Failed to clear previous video session:', err);
+    }
+    beginNewSessionClock();
 
     videoFile.value = file;
     error.value = null;
@@ -472,6 +565,10 @@ export function useVideoExtraction() {
       clearTimeout(persistTimer);
       persistTimer = null;
     }
+    clearExpiryTimer();
+    suspendSessionPersistence.value = false;
+    sessionCreatedAt.value = null;
+    sessionExpiresAt.value = null;
     videoFile.value = null;
     videoInfo.value = null;
     extractedFrames.value = [];
@@ -532,6 +629,7 @@ export function useVideoExtraction() {
       clearTimeout(persistTimer);
       persistTimer = null;
     }
+    clearExpiryTimer();
     stopEtaTimer();
     cancelExtraction();
   });
@@ -557,6 +655,7 @@ export function useVideoExtraction() {
     estimatedFrameCount,
     options,
     extractionEtaLabel,
+    sessionExpiresAt,
     loadVideo,
     applyVideoMetadata,
     startExtraction,
@@ -564,6 +663,10 @@ export function useVideoExtraction() {
     downloadTrimmedVideo,
     reset,
     restoreSession,
+    prepareForPhotoImport,
+    finishPhotoImport,
+    removeFramesByIndices,
+    clearExtractedFrames,
     formatDuration,
     formatExtractionEta,
   };

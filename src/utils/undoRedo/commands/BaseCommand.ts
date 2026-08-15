@@ -6,8 +6,9 @@
 import type { Ref } from "vue";
 import type { Command, PhotoState } from "../types";
 import type { Photo } from "../../../types/photo";
-import { updatePhoto } from "../../photoStorage";
+import { updatePhoto, updatePhotoMetadata } from "../../photoStorage";
 import { applyDisplayInvalidation } from "../../thumbnailInvalidation";
+import { usesDeferredFlips } from "../../editTransform";
 
 export type { Photo };
 
@@ -160,5 +161,52 @@ export abstract class BaseCommand implements Command {
       this.photos.value[photoIndex] = photo;
       throw error;
     }
+  }
+
+  /**
+   * Persist flips/crop/rotation without rewriting blobs or invalidating thumbs.
+   * Used when usesDeferredFlips is true.
+   */
+  protected async updateFlipsMetadataOnly(
+    photoId: string,
+    newState: PhotoState
+  ): Promise<void> {
+    const photoIndex = this.findPhotoIndexById(photoId);
+    if (photoIndex === -1) {
+      throw new Error(`Photo with ID ${photoId} not found`);
+    }
+
+    const photo = this.photos.value[photoIndex];
+    if (!photo.id) {
+      throw new Error("Photo must have an ID to update");
+    }
+
+    this.photos.value[photoIndex] = {
+      ...photo,
+      flips: { ...newState.flips },
+      crop: newState.crop ? { ...newState.crop } : undefined,
+      rotation: newState.rotation,
+    };
+
+    try {
+      await updatePhotoMetadata(photo.id, {
+        flips: newState.flips,
+        crop: newState.crop,
+        rotation: newState.rotation,
+      });
+    } catch (error) {
+      console.error("Failed to update photo metadata:", error);
+      this.photos.value[photoIndex] = photo;
+      throw error;
+    }
+  }
+
+  protected canUseDeferredFlipPath(
+    photo: Photo,
+    state?: PhotoState
+  ): boolean {
+    if (!usesDeferredFlips(photo)) return false;
+    if (!state) return true;
+    return !state.crop && !state.rotation;
   }
 }

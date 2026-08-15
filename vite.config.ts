@@ -34,7 +34,7 @@ export default defineConfig(({ mode }) => ({
   base: mode === "production" ? "/JustCropIt/" : "/",
   optimizeDeps: {
     // @ffmpeg/ffmpeg ships its own worker entry; pre-bundling breaks worker resolution
-    exclude: ["@ffmpeg/ffmpeg", "@ffmpeg/util", "@mediapipe/tasks-vision"],
+    exclude: ["@ffmpeg/ffmpeg", "@ffmpeg/util", "@mediapipe/tasks-vision", "web-demuxer"],
   },
   worker: {
     format: "es",
@@ -48,12 +48,17 @@ export default defineConfig(({ mode }) => ({
       // COOP/COEP enable SharedArrayBuffer if we switch to @ffmpeg/core-mt later
       "Cross-Origin-Opener-Policy": "same-origin",
       "Cross-Origin-Embedder-Policy": "require-corp",
+      // web-demuxer loads WASM from an opaque data: worker — needs CORS + CORP
+      "Cross-Origin-Resource-Policy": "cross-origin",
+      "Access-Control-Allow-Origin": "*",
     },
   },
   preview: {
     headers: {
       "Cross-Origin-Opener-Policy": "same-origin",
       "Cross-Origin-Embedder-Policy": "require-corp",
+      "Cross-Origin-Resource-Policy": "cross-origin",
+      "Access-Control-Allow-Origin": "*",
     },
   },
 }));
@@ -62,6 +67,13 @@ function openChromeOnStart() {
   return {
     name: "open-chrome-on-start",
     configureServer(server: ViteDevServer) {
+      // Ensure every response (including public/ WASM) is readable by opaque workers
+      server.middlewares.use((_req, res, next) => {
+        res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+        res.setHeader("Access-Control-Allow-Origin", "*");
+        next();
+      });
+
       const httpServer = server.httpServer;
       if (!httpServer) {
         return;

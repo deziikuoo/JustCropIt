@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+/// <reference types="dom-webcodecs" />
 
 declare module 'heic2any' {
   interface Heic2AnyOptions {

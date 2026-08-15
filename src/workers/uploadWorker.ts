@@ -36,6 +36,41 @@ function outputMimeType(sourceMime: string): string {
   return 'image/jpeg';
 }
 
+async function processThumbnail(
+  imageData: ArrayBuffer,
+  mimeType: string,
+  thumbnailMaxEdge: number,
+  thumbnailQuality: number
+): Promise<{ thumbnailBuffer: ArrayBuffer; width: number; height: number }> {
+  const bitmap = await createImageBitmap(new Blob([imageData], { type: mimeType }), {
+    premultiplyAlpha: 'none',
+    colorSpaceConversion: 'none',
+  });
+
+  try {
+    const thumbDims = computeThumbDimensions(
+      bitmap.width,
+      bitmap.height,
+      thumbnailMaxEdge
+    );
+    const thumbCanvas = new OffscreenCanvas(thumbDims.width, thumbDims.height);
+    const thumbCtx = thumbCanvas.getContext('2d');
+    if (!thumbCtx) throw new Error('Failed to get thumbnail context');
+
+    thumbCtx.drawImage(bitmap, 0, 0, thumbDims.width, thumbDims.height);
+    const thumbnailBlob = await canvasToJpeg(thumbCanvas, thumbnailQuality);
+    const thumbnailBuffer = await thumbnailBlob.arrayBuffer();
+
+    return {
+      thumbnailBuffer,
+      width: thumbDims.width,
+      height: thumbDims.height,
+    };
+  } finally {
+    bitmap.close();
+  }
+}
+
 async function processStripExif(
   imageData: ArrayBuffer,
   mimeType: string,
@@ -195,6 +230,27 @@ ctx.onmessage = async (event: MessageEvent<UploadWorkerRequest>) => {
       };
 
       ctx.postMessage(response, [strippedBuffer]);
+      return;
+    }
+
+    if (type === 'thumbnail') {
+      const result = await processThumbnail(
+        imageData,
+        mimeType,
+        thumbnailMaxEdge,
+        thumbnailQuality
+      );
+
+      const response: UploadWorkerResponse = {
+        id,
+        type: 'thumbnail',
+        success: true,
+        thumbnailBuffer: result.thumbnailBuffer,
+        width: result.width,
+        height: result.height,
+      };
+
+      ctx.postMessage(response, [result.thumbnailBuffer]);
       return;
     }
 

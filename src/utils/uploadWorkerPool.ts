@@ -33,11 +33,19 @@ class UploadWorkerPool {
     const cpuCores = navigator.hardwareConcurrency || 4;
     const memory = nav.deviceMemory || 4;
 
-    let count = Math.min(2, Math.max(1, cpuCores - 1));
     if (memory < 4) {
-      count = 1;
+      return 1;
     }
-    return Math.min(count, UPLOAD_WORKER_POOL_MAX);
+
+    if (memory < 8) {
+      return Math.min(2, UPLOAD_WORKER_POOL_MAX);
+    }
+
+    const count = Math.min(
+      UPLOAD_WORKER_POOL_MAX,
+      Math.max(2, cpuCores - 1)
+    );
+    return count;
   }
 
   isSupported(): boolean {

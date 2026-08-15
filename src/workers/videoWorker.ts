@@ -1,7 +1,12 @@
 /**
- * Video Processing Web Worker
+ * Video Processing Web Worker (FFmpeg.trim only)
  *
- * Uses FFmpeg.wasm with chunked, single-frame extraction to stay within WASM memory limits.
+ * Active path: trim export via FFmpeg.wasm.
+ * Probe + frame extraction moved to webCodecsWorker.ts (WebCodecs + web-demuxer).
+ *
+ * To re-enable FFmpeg probe/extract:
+ * 1. Uncomment the LEGACY_FFMPEG_EXTRACTION block below
+ * 2. Route probe/extract back to this worker in videoWorkerPool.ts
  */
 
 /// <reference lib="webworker" />
@@ -12,21 +17,13 @@ import type {
   VideoWorkerRequest,
   VideoWorkerResponse,
   ExtractionProgress,
-  ExtractionOptions,
   TrimExportOptions,
 } from '../types/video';
-import {
-  VIDEO_EXTRACTION_CHUNK_SIZE,
-  VIDEO_EXTRACTION_CHUNK_SIZE_PNG,
-} from '../constants/optimization';
 
 const FFMPEG_CORE_VERSION = '0.12.6';
-const SINGLE_FRAME_OUTPUT = 'frame_out';
 
 // Timing constants for memory management
 const DELAY_AFTER_TERMINATE_MS = 100;
-const DELAY_AFTER_FRAME_MS = 10;
-const DELAY_BETWEEN_BATCHES_MS = 150;
 
 const ctx: DedicatedWorkerGlobalScope = self as unknown as DedicatedWorkerGlobalScope;
 
@@ -57,25 +54,6 @@ function copyBuffer(source: ArrayBuffer | Uint8Array): Uint8Array {
 
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-async function pngToJpeg(pngBytes: Uint8Array, quality: number): Promise<Uint8Array> {
-  const pngBlob = new Blob([pngBytes], { type: 'image/png' });
-  const bitmap = await createImageBitmap(pngBlob);
-  try {
-    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
-    const c2d = canvas.getContext('2d');
-    if (!c2d) {
-      throw new Error('OffscreenCanvas 2D context unavailable');
-    }
-    c2d.drawImage(bitmap, 0, 0);
-    const clampedQuality = Math.min(1, Math.max(0.1, quality));
-    const jpegBlob = await canvas.convertToBlob({ type: 'image/jpeg', quality: clampedQuality });
-    const buf = await jpegBlob.arrayBuffer();
-    return new Uint8Array(buf);
-  } finally {
-    bitmap.close();
-  }
 }
 
 async function resetFFmpeg(): Promise<void> {
@@ -142,51 +120,6 @@ async function deleteFileIfExists(name: string): Promise<void> {
 async function writeInputVideo(inputName: string, videoBytes: Uint8Array): Promise<void> {
   if (!ffmpeg) throw new Error('FFmpeg not loaded');
   await ffmpeg.writeFile(inputName, videoBytes.slice());
-}
-
-async function probeVideo(id: string, videoData: ArrayBuffer, fileName: string): Promise<void> {
-  if (!ffmpeg) {
-    sendError(id, 'FFmpeg not loaded');
-    return;
-  }
-
-  const inputName = `probe_${Date.now()}.${fileName.split('.').pop() || 'mp4'}`;
-
-  try {
-    const videoBytes = copyBuffer(videoData);
-    await ffmpeg.writeFile(inputName, videoBytes);
-
-    let duration = 0;
-    let width = 0;
-    let height = 0;
-
-    ffmpeg.on('log', ({ message }) => {
-      const durationMatch = message.match(/Duration:\s*(\d+):(\d+):(\d+\.?\d*)/);
-      if (durationMatch) {
-        const hours = parseInt(durationMatch[1], 10);
-        const minutes = parseInt(durationMatch[2], 10);
-        const seconds = parseFloat(durationMatch[3]);
-        duration = hours * 3600 + minutes * 60 + seconds;
-      }
-      const streamMatch = message.match(/Stream.*Video.*?(\d+)x(\d+)/);
-      if (streamMatch) {
-        width = parseInt(streamMatch[1], 10);
-        height = parseInt(streamMatch[2], 10);
-      }
-    });
-
-    await ffmpeg.exec(['-i', inputName, '-vframes', '1', '-f', 'null', '-']);
-    await deleteFileIfExists(inputName);
-
-    ctx.postMessage({
-      id,
-      type: 'info',
-      info: { duration, width, height },
-    } as VideoWorkerResponse);
-  } catch (error) {
-    await deleteFileIfExists(inputName);
-    sendError(id, `Failed to probe video: ${error instanceof Error ? error.message : String(error)}`);
-  }
 }
 
 function getMimeFromExt(ext: string): string {
@@ -342,6 +275,87 @@ async function trimVideoExport(
     await deleteFileIfExists(inputName);
     await deleteFileIfExists(outputName);
     sendError(id, `Failed to trim video: ${error instanceof Error ? error.message : String(error)}. FFmpeg output: ${getRecentLogs()}`);
+  }
+}
+
+/* =============================================================================
+ * LEGACY_FFMPEG_EXTRACTION — preserved for reference (do not delete)
+ *
+ * Previously used for probe + per-frame extract. Replaced by WebCodecs
+ * (src/workers/webCodecsWorker.ts) for speed at dense intervals (e.g. 0.05s).
+ * =============================================================================
+
+import {
+  VIDEO_EXTRACTION_CHUNK_SIZE,
+  VIDEO_EXTRACTION_CHUNK_SIZE_PNG,
+} from '../constants/optimization';
+import type { ExtractionOptions } from '../types/video';
+
+const SINGLE_FRAME_OUTPUT = 'frame_out';
+const DELAY_AFTER_FRAME_MS = 10;
+const DELAY_BETWEEN_BATCHES_MS = 150;
+
+async function pngToJpeg(pngBytes: Uint8Array, quality: number): Promise<Uint8Array> {
+  const pngBlob = new Blob([pngBytes], { type: 'image/png' });
+  const bitmap = await createImageBitmap(pngBlob);
+  try {
+    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+    const c2d = canvas.getContext('2d');
+    if (!c2d) {
+      throw new Error('OffscreenCanvas 2D context unavailable');
+    }
+    c2d.drawImage(bitmap, 0, 0);
+    const clampedQuality = Math.min(1, Math.max(0.1, quality));
+    const jpegBlob = await canvas.convertToBlob({ type: 'image/jpeg', quality: clampedQuality });
+    const buf = await jpegBlob.arrayBuffer();
+    return new Uint8Array(buf);
+  } finally {
+    bitmap.close();
+  }
+}
+
+async function probeVideo(id: string, videoData: ArrayBuffer, fileName: string): Promise<void> {
+  if (!ffmpeg) {
+    sendError(id, 'FFmpeg not loaded');
+    return;
+  }
+
+  const inputName = `probe_${Date.now()}.${fileName.split('.').pop() || 'mp4'}`;
+
+  try {
+    const videoBytes = copyBuffer(videoData);
+    await ffmpeg.writeFile(inputName, videoBytes);
+
+    let duration = 0;
+    let width = 0;
+    let height = 0;
+
+    ffmpeg.on('log', ({ message }) => {
+      const durationMatch = message.match(/Duration:\s*(\d+):(\d+):(\d+\.?\d*)/);
+      if (durationMatch) {
+        const hours = parseInt(durationMatch[1], 10);
+        const minutes = parseInt(durationMatch[2], 10);
+        const seconds = parseFloat(durationMatch[3]);
+        duration = hours * 3600 + minutes * 60 + seconds;
+      }
+      const streamMatch = message.match(/Stream.*Video.*?(\d+)x(\d+)/);
+      if (streamMatch) {
+        width = parseInt(streamMatch[1], 10);
+        height = parseInt(streamMatch[2], 10);
+      }
+    });
+
+    await ffmpeg.exec(['-i', inputName, '-vframes', '1', '-f', 'null', '-']);
+    await deleteFileIfExists(inputName);
+
+    ctx.postMessage({
+      id,
+      type: 'info',
+      info: { duration, width, height },
+    } as VideoWorkerResponse);
+  } catch (error) {
+    await deleteFileIfExists(inputName);
+    sendError(id, `Failed to probe video: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
@@ -552,12 +566,22 @@ async function extractFrames(
   }
 }
 
+============================================================================= */
+
 ctx.onmessage = async (event: MessageEvent<VideoWorkerRequest>) => {
-  const { id, type, videoData, fileName, options, trimOptions } = event.data;
+  const { id, type, videoData, fileName, trimOptions } = event.data;
 
   try {
     if (type === 'cancel') {
       isCancelled = true;
+      return;
+    }
+
+    if (type === 'probe' || type === 'extract') {
+      sendError(
+        id,
+        `FFmpeg ${type} is disabled — use the WebCodecs worker. Legacy code is preserved in LEGACY_FFMPEG_EXTRACTION.`
+      );
       return;
     }
 
@@ -572,11 +596,7 @@ ctx.onmessage = async (event: MessageEvent<VideoWorkerRequest>) => {
       await loadFFmpeg();
     }
 
-    if (type === 'probe' && videoData && fileName) {
-      await probeVideo(id, videoData, fileName);
-    } else if (type === 'extract' && videoData && fileName && options) {
-      await extractFrames(id, videoData, fileName, options);
-    } else if (type === 'trim' && videoData && fileName && trimOptions) {
+    if (type === 'trim' && videoData && fileName && trimOptions) {
       await trimVideoExport(id, videoData, fileName, trimOptions);
     } else {
       sendError(id, `Invalid request: missing required parameters for ${type}`);

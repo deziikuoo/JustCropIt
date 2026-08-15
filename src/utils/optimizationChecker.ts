@@ -26,6 +26,8 @@ import {
   getThumbnailCacheKey,
   UPLOAD_INGEST_CHUNK_SIZE,
   UPLOAD_INGEST_CHUNK_SIZE_FAST,
+  UPLOAD_INGEST_CHUNK_SIZE_VIDEO_FRAMES,
+  UPLOAD_INGEST_CHUNK_SIZE_VIDEO_FRAMES_LOW_MEMORY,
   UPLOAD_DECODE_JPEG_QUALITY,
   UPLOAD_WORKER_POOL_MAX,
   getUploadIngestChunkSize,
@@ -655,7 +657,7 @@ export function runOptimizationChecks(): OptimizationCheckResult[] {
     name: 'Phase 1: Upload ingest constants',
     status: uploadConstantsOk && chunkSizerOk ? 'pass' : 'fail',
     message: uploadConstantsOk && chunkSizerOk
-      ? `chunk slow=${UPLOAD_INGEST_CHUNK_SIZE} fast=${UPLOAD_INGEST_CHUNK_SIZE_FAST} workers max=${UPLOAD_WORKER_POOL_MAX}`
+      ? `chunk slow=${UPLOAD_INGEST_CHUNK_SIZE} fast=${UPLOAD_INGEST_CHUNK_SIZE_FAST} video=${UPLOAD_INGEST_CHUNK_SIZE_VIDEO_FRAMES}/${UPLOAD_INGEST_CHUNK_SIZE_VIDEO_FRAMES_LOW_MEMORY} workers max=${UPLOAD_WORKER_POOL_MAX}`
       : 'Upload ingest constants missing or invalid',
   });
 
@@ -665,7 +667,7 @@ export function runOptimizationChecks(): OptimizationCheckResult[] {
     name: 'Phase 1: Dedicated upload worker pool',
     status: uploadWorkerOk ? 'pass' : 'fail',
     message: uploadWorkerOk
-      ? `Upload worker pool isolated from edit pool (supported=${uploadWorkerPool.isSupported()})`
+      ? `Upload worker pool isolated from edit pool (max=${UPLOAD_WORKER_POOL_MAX}, supported=${uploadWorkerPool.isSupported()})`
       : 'uploadWorkerPool not available',
   });
 

@@ -27,12 +27,7 @@ ctx.onmessage = async (event: MessageEvent<WorkerRequest>) => {
 
     let resultBuffer: ArrayBuffer;
 
-    // Create ImageBitmap from ArrayBuffer
-    // Optimization: Disable premultiplyAlpha and colorSpaceConversion for speed and accuracy
-    const bitmap = await createImageBitmap(new Blob([imageData], { type: mimeType }), {
-      premultiplyAlpha: 'none',
-      colorSpaceConversion: 'none'
-    });
+    const bitmap = await decodeWithRetry(imageData, mimeType);
 
     try {
       if (type === 'flip') {
@@ -80,6 +75,40 @@ ctx.onmessage = async (event: MessageEvent<WorkerRequest>) => {
     ctx.postMessage(response);
   }
 };
+
+const DECODE_ATTEMPTS = 3;
+const DECODE_RETRY_DELAY_MS = 200;
+
+/**
+ * `createImageBitmap` throws InvalidStateError when the browser cannot allocate
+ * for the decode, not just when the bytes are bad. Retrying after a short pause
+ * gives concurrent decodes time to release memory.
+ */
+async function decodeWithRetry(
+  imageData: ArrayBuffer,
+  mimeType: string
+): Promise<ImageBitmap> {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= DECODE_ATTEMPTS; attempt++) {
+    try {
+      return await createImageBitmap(new Blob([imageData], { type: mimeType }), {
+        premultiplyAlpha: 'none',
+        colorSpaceConversion: 'none',
+      });
+    } catch (error) {
+      lastError = error;
+      if (attempt < DECODE_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, DECODE_RETRY_DELAY_MS * attempt));
+      }
+    }
+  }
+
+  const reason = lastError instanceof Error ? lastError.message : String(lastError);
+  throw new Error(
+    `Failed to decode ${mimeType || 'image'} (${imageData.byteLength} bytes) after ${DECODE_ATTEMPTS} attempts: ${reason}`
+  );
+}
 
 /**
  * Core image processing logic mirroring App.vue's applyFlipsRotationAndCrop

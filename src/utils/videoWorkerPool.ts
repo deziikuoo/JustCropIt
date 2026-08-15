@@ -1,19 +1,19 @@
 /**
  * Video Worker Pool Manager
- * 
- * Manages a single Web Worker for video processing with FFmpeg.wasm.
- * Unlike the image worker pool, we use a single worker because FFmpeg.wasm
- * handles its own internal threading and doesn't benefit from multiple instances.
+ *
+ * Routes probe + extract to the WebCodecs worker (hardware decode when available).
+ * Routes trim export to the FFmpeg worker (lazy-loaded on first trim).
  */
 
-import type { 
-  VideoWorkerRequest, 
-  VideoWorkerResponse, 
+import type {
+  VideoWorkerRequest,
+  VideoWorkerResponse,
   ExtractionOptions,
   ExtractionProgress,
   VideoInfo,
   TrimExportOptions,
 } from '../types/video';
+import { isWebCodecsSupported } from './webCodecs/support';
 
 type ProgressCallback = (progress: ExtractionProgress) => void;
 type FrameCallback = (frame: { index: number; timestamp: number; blob: Blob }) => void;
@@ -25,41 +25,20 @@ interface PendingRequest {
   onProgress?: ProgressCallback;
   onFrame?: FrameCallback;
   onInfo?: InfoCallback;
+  workerKind: 'webcodecs' | 'ffmpeg';
 }
 
 class VideoWorkerPool {
-  private worker: Worker | null = null;
+  private webCodecsWorker: Worker | null = null;
+  private ffmpegWorker: Worker | null = null;
   private pendingRequests = new Map<string, PendingRequest>();
   private requestCounter = 0;
-  private initialized = false;
+  private webCodecsInitialized = false;
+  private ffmpegInitialized = false;
 
-  /** Single-threaded @ffmpeg/core only needs Web Workers (not SharedArrayBuffer). */
+  /** WebCodecs path needs Worker + VideoDecoder + OffscreenCanvas. */
   isSupported(): boolean {
-    return typeof Worker !== 'undefined';
-  }
-
-  private initWorker(): void {
-    if (this.initialized || !this.isSupported()) return;
-
-    this.worker = new Worker(
-      new URL('../workers/videoWorker.ts', import.meta.url),
-      { type: 'module' }
-    );
-
-    this.worker.onmessage = (event: MessageEvent<VideoWorkerResponse>) => {
-      this.handleResponse(event.data);
-    };
-
-    this.worker.onerror = (error) => {
-      console.error('Video worker error:', error);
-      // Reject all pending requests
-      for (const [id, pending] of this.pendingRequests) {
-        pending.reject(new Error(`Worker error: ${error.message}`));
-        this.pendingRequests.delete(id);
-      }
-    };
-
-    this.initialized = true;
+    return isWebCodecsSupported();
   }
 
   private handleResponse(response: VideoWorkerResponse): void {
@@ -110,6 +89,42 @@ class VideoWorkerPool {
     }
   }
 
+  private bindWorker(worker: Worker, label: string): void {
+    worker.onmessage = (event: MessageEvent<VideoWorkerResponse>) => {
+      this.handleResponse(event.data);
+    };
+
+    worker.onerror = (error) => {
+      console.error(`${label} worker error:`, error);
+      for (const [id, pending] of this.pendingRequests) {
+        pending.reject(new Error(`Worker error: ${error.message}`));
+        this.pendingRequests.delete(id);
+      }
+    };
+  }
+
+  private initWebCodecsWorker(): void {
+    if (this.webCodecsInitialized || !this.isSupported()) return;
+
+    this.webCodecsWorker = new Worker(
+      new URL('../workers/webCodecsWorker.ts', import.meta.url),
+      { type: 'module' }
+    );
+    this.bindWorker(this.webCodecsWorker, 'WebCodecs');
+    this.webCodecsInitialized = true;
+  }
+
+  private initFfmpegWorker(): void {
+    if (this.ffmpegInitialized) return;
+
+    this.ffmpegWorker = new Worker(
+      new URL('../workers/videoWorker.ts', import.meta.url),
+      { type: 'module' }
+    );
+    this.bindWorker(this.ffmpegWorker, 'FFmpeg');
+    this.ffmpegInitialized = true;
+  }
+
   private generateId(): string {
     return `video-${Date.now()}-${++this.requestCounter}`;
   }
@@ -125,9 +140,9 @@ class VideoWorkerPool {
       throw new Error('Video processing is not supported in this browser');
     }
 
-    this.initWorker();
-    if (!this.worker) {
-      throw new Error('Failed to initialize video worker');
+    this.initWebCodecsWorker();
+    if (!this.webCodecsWorker) {
+      throw new Error('Failed to initialize WebCodecs worker');
     }
 
     const id = this.generateId();
@@ -143,22 +158,23 @@ class VideoWorkerPool {
           }
         },
         reject,
-        onInfo
+        onInfo,
+        workerKind: 'webcodecs',
       });
 
       const request: VideoWorkerRequest = {
         id,
         type: 'probe',
         videoData,
-        fileName: videoFile.name
+        fileName: videoFile.name,
       };
 
-      this.worker!.postMessage(request, [videoData]);
+      this.webCodecsWorker!.postMessage(request, [videoData]);
     });
   }
 
   /**
-   * Extract frames from a video file
+   * Extract frames from a video file via WebCodecs
    */
   async extractFrames(
     videoFile: File,
@@ -172,9 +188,9 @@ class VideoWorkerPool {
       throw new Error('Video processing is not supported in this browser');
     }
 
-    this.initWorker();
-    if (!this.worker) {
-      throw new Error('Failed to initialize video worker');
+    this.initWebCodecsWorker();
+    if (!this.webCodecsWorker) {
+      throw new Error('Failed to initialize WebCodecs worker');
     }
 
     const id = this.generateId();
@@ -185,12 +201,13 @@ class VideoWorkerPool {
         resolve: (response) => {
           resolve({
             framesExtracted: response.framesExtracted || 0,
-            cancelled: response.type === 'cancelled'
+            cancelled: response.type === 'cancelled',
           });
         },
         reject,
         onProgress: callbacks.onProgress,
-        onFrame: callbacks.onFrame
+        onFrame: callbacks.onFrame,
+        workerKind: 'webcodecs',
       });
 
       const request: VideoWorkerRequest = {
@@ -198,28 +215,29 @@ class VideoWorkerPool {
         type: 'extract',
         videoData,
         fileName: videoFile.name,
-        options
+        options,
       };
 
-      this.worker!.postMessage(request, [videoData]);
+      this.webCodecsWorker!.postMessage(request, [videoData]);
     });
   }
 
   /**
-   * Export a trimmed clip from a video file
+   * Export a trimmed clip from a video file (FFmpeg)
    */
   async trimVideo(
     videoFile: File,
     trimOptions: TrimExportOptions,
-    onProgress?: ProgressCallback,
+    onProgress?: ProgressCallback
   ): Promise<{ blob: Blob; fileName: string }> {
-    if (!this.isSupported()) {
+    // Trim uses FFmpeg.wasm — only needs Worker support
+    if (typeof Worker === 'undefined') {
       throw new Error('Video processing is not supported in this browser');
     }
 
-    this.initWorker();
-    if (!this.worker) {
-      throw new Error('Failed to initialize video worker');
+    this.initFfmpegWorker();
+    if (!this.ffmpegWorker) {
+      throw new Error('Failed to initialize FFmpeg worker');
     }
 
     const id = this.generateId();
@@ -245,6 +263,7 @@ class VideoWorkerPool {
         },
         reject,
         onProgress,
+        workerKind: 'ffmpeg',
       });
 
       const request: VideoWorkerRequest = {
@@ -255,34 +274,40 @@ class VideoWorkerPool {
         trimOptions,
       };
 
-      this.worker!.postMessage(request, [videoData]);
+      this.ffmpegWorker!.postMessage(request, [videoData]);
     });
   }
 
   /**
-   * Cancel the current extraction
+   * Cancel the current extraction / trim
    */
   cancel(): void {
-    if (!this.worker) return;
-
-    // Send cancel request to all pending extractions
-    for (const [id] of this.pendingRequests) {
+    for (const [id, pending] of this.pendingRequests) {
       const request: VideoWorkerRequest = {
         id,
-        type: 'cancel'
+        type: 'cancel',
       };
-      this.worker.postMessage(request);
+      if (pending.workerKind === 'webcodecs' && this.webCodecsWorker) {
+        this.webCodecsWorker.postMessage(request);
+      } else if (pending.workerKind === 'ffmpeg' && this.ffmpegWorker) {
+        this.ffmpegWorker.postMessage(request);
+      }
     }
   }
 
   /**
-   * Terminate the worker and clean up
+   * Terminate workers and clean up
    */
   terminate(): void {
-    if (this.worker) {
-      this.worker.terminate();
-      this.worker = null;
-      this.initialized = false;
+    if (this.webCodecsWorker) {
+      this.webCodecsWorker.terminate();
+      this.webCodecsWorker = null;
+      this.webCodecsInitialized = false;
+    }
+    if (this.ffmpegWorker) {
+      this.ffmpegWorker.terminate();
+      this.ffmpegWorker = null;
+      this.ffmpegInitialized = false;
     }
     this.pendingRequests.clear();
   }

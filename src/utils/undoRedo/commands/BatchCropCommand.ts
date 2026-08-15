@@ -9,6 +9,8 @@ import { updatePhoto, updatePhotosBatch } from '../../photoStorage';
 import { runBatchCropRemaining } from '../../batchImageOps';
 import { blobToFile } from '../../blobToFile';
 import { CropCommand } from './CropCommand';
+import type { BatchProgressCallback } from '../../batchEditProgress';
+import { isBatchAborted } from '../../batchEditProgress';
 
 type BlobToFileFn = typeof blobToFile;
 type BlobFromFileFn = (file: File) => Promise<Blob>;
@@ -21,6 +23,8 @@ export class BatchCropCommand extends BaseCommand {
   private updatePhotosBatchFn: typeof updatePhotosBatch;
   private blobToFileFn: BlobToFileFn;
   private blobFromFileFn: BlobFromFileFn;
+  private onProgress?: BatchProgressCallback;
+  private signal?: AbortSignal;
 
   constructor(
     indices: number[],
@@ -31,7 +35,9 @@ export class BatchCropCommand extends BaseCommand {
     updatePhotosBatchFn: typeof updatePhotosBatch,
     applyFlipsRotationAndCropFn: ApplyFlipsRotationAndCropFn,
     blobToFileFn: BlobToFileFn,
-    blobFromFileFn: BlobFromFileFn
+    blobFromFileFn: BlobFromFileFn,
+    onProgress?: BatchProgressCallback,
+    signal?: AbortSignal
   ) {
     super(photos, updatePhotoFn, applyFlipsRotationAndCropFn);
     this.indices = [...indices];
@@ -40,6 +46,8 @@ export class BatchCropCommand extends BaseCommand {
     this.updatePhotosBatchFn = updatePhotosBatchFn;
     this.blobToFileFn = blobToFileFn;
     this.blobFromFileFn = blobFromFileFn;
+    this.onProgress = onProgress;
+    this.signal = signal;
   }
 
   private capturePreviousStates(): void {
@@ -70,6 +78,12 @@ export class BatchCropCommand extends BaseCommand {
 
   async execute(): Promise<void> {
     this.capturePreviousStates();
+    const total = this.indices.length;
+    this.onProgress?.(0, total);
+
+    if (isBatchAborted(this.signal)) {
+      return;
+    }
 
     await runBatchCropRemaining(
       this.indices,
@@ -79,8 +93,14 @@ export class BatchCropCommand extends BaseCommand {
       this.updatePhotosBatchFn,
       this.blobToFileFn,
       this.blobFromFileFn,
-      (index) => this.applyCropToIndex(index)
+      (index) => this.applyCropToIndex(index),
+      this.onProgress,
+      this.signal
     );
+
+    if (!isBatchAborted(this.signal)) {
+      this.onProgress?.(total, total);
+    }
   }
 
   async undo(): Promise<void> {
@@ -113,7 +133,7 @@ export class BatchCropCommand extends BaseCommand {
   }
 
   getDescription(): string {
-    return `Cropped ${this.indices.length} photo${this.indices.length === 1 ? '' : 's'}`;
+    return `Crop (${this.indices.length} photo${this.indices.length === 1 ? '' : 's'})`;
   }
 
   captureState(): Map<string, PhotoState> {

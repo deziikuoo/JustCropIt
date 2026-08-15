@@ -7,6 +7,8 @@ import type { Ref } from "vue";
 import { BaseCommand, type Photo, type ApplyFlipsRotationAndCropFn } from "./BaseCommand";
 import type { PhotoState } from "../types";
 import { updatePhoto } from "../../photoStorage";
+import type { BatchProgressCallback } from "../../batchEditProgress";
+import { isBatchAborted } from "../../batchEditProgress";
 
 export interface CopiedSettings {
   flips: { horizontal: boolean; vertical: boolean };
@@ -18,17 +20,23 @@ export class PasteSettingsCommand extends BaseCommand {
   private photoIds: string[];
   private settings: CopiedSettings;
   private previousStates: Map<string, PhotoState> = new Map();
+  private onProgress?: BatchProgressCallback;
+  private signal?: AbortSignal;
 
   constructor(
     photoIds: string[],
     settings: CopiedSettings,
     photos: Ref<Photo[]>,
     updatePhotoFn: typeof updatePhoto,
-    applyFlipsRotationAndCropFn: ApplyFlipsRotationAndCropFn
+    applyFlipsRotationAndCropFn: ApplyFlipsRotationAndCropFn,
+    onProgress?: BatchProgressCallback,
+    signal?: AbortSignal
   ) {
     super(photos, updatePhotoFn, applyFlipsRotationAndCropFn);
     this.photoIds = [...photoIds];
     this.settings = { ...settings };
+    this.onProgress = onProgress;
+    this.signal = signal;
   }
 
   async execute(): Promise<void> {
@@ -45,11 +53,36 @@ export class PasteSettingsCommand extends BaseCommand {
       this.previousStates.set(photoId, this.capturePhotoState(photo));
     }
 
+    const total = this.photoIds.length;
+    this.onProgress?.(0, total);
+    let completed = 0;
+
     // Apply settings to all photos
     for (const photoId of this.photoIds) {
+      if (isBatchAborted(this.signal)) {
+        break;
+      }
+
       const photo = this.findPhotoById(photoId);
       if (!photo || !photo.id) {
-        continue; // Skip if photo not found (should not happen due to validation)
+        completed += 1;
+        this.onProgress?.(completed, total);
+        continue;
+      }
+
+      const pastedHasGeometry =
+        Boolean(this.settings.crop) || Boolean(this.settings.rotation);
+
+      // Flip-only paste onto deferred photos: metadata + CSS, no re-encode
+      if (!pastedHasGeometry && this.canUseDeferredFlipPath(photo)) {
+        await this.updateFlipsMetadataOnly(photoId, {
+          flips: { ...this.settings.flips },
+          crop: undefined,
+          rotation: undefined,
+        });
+        completed += 1;
+        this.onProgress?.(completed, total);
+        continue;
       }
 
       // Create new state with pasted settings
@@ -85,6 +118,12 @@ export class PasteSettingsCommand extends BaseCommand {
 
       // Update photo
       await this.updatePhotoState(photoId, newCurrent, newState);
+      completed += 1;
+      this.onProgress?.(completed, total);
+    }
+
+    if (!isBatchAborted(this.signal)) {
+      this.onProgress?.(total, total);
     }
   }
 
@@ -99,6 +138,11 @@ export class PasteSettingsCommand extends BaseCommand {
       const photo = this.findPhotoById(photoId);
       if (!photo || !photo.id) {
         continue; // Skip if photo not found
+      }
+
+      if (this.canUseDeferredFlipPath(photo, previousState)) {
+        await this.updateFlipsMetadataOnly(photoId, previousState);
+        continue;
       }
 
       // Regenerate photo from original + previous state

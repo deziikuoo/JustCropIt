@@ -192,6 +192,30 @@ async function runSlowPathIngest(
   }
 }
 
+async function createThumbnailViaWorker(file: File): Promise<Blob> {
+  const buffer = await file.arrayBuffer();
+  const transferable = buffer.slice(0);
+  const id = `thumb-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+
+  const response = await uploadWorkerPool.submitTask(
+    {
+      id,
+      type: 'thumbnail',
+      imageData: transferable,
+      mimeType: file.type || 'image/jpeg',
+      thumbnailMaxEdge: THUMBNAIL_MAX_EDGE_PX,
+      thumbnailQuality: THUMBNAIL_JPEG_QUALITY,
+    },
+    [transferable]
+  );
+
+  if (!response.success || !response.thumbnailBuffer) {
+    throw new Error(response.error || 'Upload worker thumbnail failed');
+  }
+
+  return new Blob([response.thumbnailBuffer], { type: 'image/jpeg' });
+}
+
 /**
  * Ingest a single photo file: decode if needed, normalize EXIF orientation,
  * produce thumbnail — single-pass where possible.
@@ -222,7 +246,21 @@ export async function ingestPhotoFile(file: File): Promise<IngestResult> {
 
   if (!useSlowPath) {
     const thumbStart = performance.now();
-    const thumbnailBlob = await createThumbnailFromFile(workingFile);
+    let thumbnailBlob: Blob;
+    let workerUsed = false;
+
+    if (uploadWorkerPool.isSupported()) {
+      try {
+        thumbnailBlob = await createThumbnailViaWorker(workingFile);
+        workerUsed = true;
+      } catch (error) {
+        console.warn('[uploadIngest] Worker thumbnail failed, using main thread:', error);
+        thumbnailBlob = await createThumbnailFromFile(workingFile);
+      }
+    } else {
+      thumbnailBlob = await createThumbnailFromFile(workingFile);
+    }
+
     timings.thumbnailMs = Math.round(performance.now() - thumbStart);
 
     return {
@@ -230,7 +268,7 @@ export async function ingestPhotoFile(file: File): Promise<IngestResult> {
       thumbnailBlob,
       sourceFormat,
       exifNormalized: false,
-      workerUsed: false,
+      workerUsed,
       decoded: false,
       timings,
     };

@@ -30,8 +30,8 @@ interface PhotoStorageDB extends DBSchema {
 const DB_NAME = "photo-editor-db";
 const DB_VERSION = 3;
 const STORE_NAME = "photos";
-const STORAGE_LIMIT_SOFT = 2 * 1024 * 1024 * 1024; // 2GB
-const STORAGE_LIMIT_HARD = 2.5 * 1024 * 1024 * 1024; // 2.5GB
+const STORAGE_LIMIT_SOFT = 20 * 1024 * 1024 * 1024; // 20GB
+const STORAGE_LIMIT_HARD = 25 * 1024 * 1024 * 1024; // 25GB
 const EXPIRATION_HOURS = 24;
 
 let db: IDBPDatabase<PhotoStorageDB> | null = null;
@@ -83,32 +83,56 @@ export const getStorageStatus = async (): Promise<{
   canStore: boolean;
   shouldWarn: boolean;
   message?: string;
+  usage?: number;
+  quota?: number;
+  available?: number;
 }> => {
-  const { quota, percentage } = await checkStorageQuota();
-  const softLimitPercentage = (STORAGE_LIMIT_SOFT / quota) * 100;
-  const hardLimitPercentage = (STORAGE_LIMIT_HARD / quota) * 100;
+  const { usage, quota, available, percentage } = await checkStorageQuota();
 
-  if (percentage >= hardLimitPercentage) {
+  // App soft/hard caps are absolute byte budgets (not % of huge browser quotas).
+  if (usage >= STORAGE_LIMIT_HARD) {
     return {
       canStore: false,
       shouldWarn: true,
-      message: `Storage limit reached (${percentage.toFixed(
+      usage,
+      quota,
+      available,
+      message: `App storage limit reached (${(usage / 1024 / 1024 / 1024).toFixed(
+        2
+      )}GB used of ${(STORAGE_LIMIT_HARD / 1024 / 1024 / 1024).toFixed(
+        1
+      )}GB max). Delete some photos or clear site data.`,
+    };
+  }
+
+  // Also respect browser quota (private mode / low disk).
+  if (quota > 0 && percentage >= 95) {
+    return {
+      canStore: false,
+      shouldWarn: true,
+      usage,
+      quota,
+      available,
+      message: `Browser storage is nearly full (${percentage.toFixed(
         1
       )}% used). Please delete some photos or clear browser data.`,
     };
   }
 
-  if (percentage >= softLimitPercentage) {
+  if (usage >= STORAGE_LIMIT_SOFT || (quota > 0 && percentage >= 80)) {
     return {
       canStore: true,
       shouldWarn: true,
-      message: `Storage is ${percentage.toFixed(
-        1
-      )}% full. Consider deleting old photos.`,
+      usage,
+      quota,
+      available,
+      message: `Storage is getting full (${(usage / 1024 / 1024).toFixed(
+        0
+      )}MB used). Consider deleting old photos.`,
     };
   }
 
-  return { canStore: true, shouldWarn: false };
+  return { canStore: true, shouldWarn: false, usage, quota, available };
 };
 
 export const estimatePhotoSize = async (file: File): Promise<number> => {
@@ -116,7 +140,8 @@ export const estimatePhotoSize = async (file: File): Promise<number> => {
 };
 
 export const canStorePhoto = async (
-  file: File
+  file: File,
+  options?: { identicalOriginalAndCurrent?: boolean }
 ): Promise<{
   canStore: boolean;
   reason?: string;
@@ -129,8 +154,11 @@ export const canStorePhoto = async (
   const photoSize = await estimatePhotoSize(file);
   const { available } = await checkStorageQuota();
 
-  // Reserve space for original, current, and approximate thumbnail overhead
-  const requiredSpace = photoSize * 2 + photoSize * 0.15;
+  // Fresh imports store the same bytes for original + current; estimate once + thumb.
+  const identical = options?.identicalOriginalAndCurrent !== false;
+  const requiredSpace = identical
+    ? photoSize * 1.2
+    : photoSize * 2 + photoSize * 0.15;
 
   if (requiredSpace > available) {
     return {
@@ -167,12 +195,13 @@ export const savePhoto = async (
   const now = Date.now();
   const expiresAt = now + EXPIRATION_HOURS * 60 * 60 * 1000;
 
-  const originalBlob = await original
-    .arrayBuffer()
-    .then((b) => new Blob([b], { type: original.type }));
-  const currentBlob = await current
-    .arrayBuffer()
-    .then((b) => new Blob([b], { type: current.type }));
+  const sameFile = original === current;
+  const originalBuffer = await original.arrayBuffer();
+  const originalBlob = new Blob([originalBuffer], { type: original.type });
+  // Avoid a second full copy in memory when importing untouched frames/photos.
+  const currentBlob = sameFile
+    ? originalBlob
+    : new Blob([await current.arrayBuffer()], { type: current.type });
 
   const id = `photo-${now}-${Math.random().toString(36).substr(2, 9)}`;
 
@@ -236,6 +265,91 @@ export const updatePhoto = async (
   console.log("updatePhoto: Saving metadata:", updated.metadata);
   await database.put(STORE_NAME, updated);
   console.log("updatePhoto: Successfully saved to database");
+};
+
+/**
+ * Update transform metadata only — does not rewrite current/original/thumbnail blobs.
+ * Used for deferred flips (CSS preview until export).
+ */
+export const updatePhotoMetadata = async (
+  id: string,
+  metadata: {
+    flips: { horizontal: boolean; vertical: boolean };
+    crop?: { x: number; y: number; width: number; height: number };
+    rotation?: number;
+  }
+): Promise<void> => {
+  const database = await initDB();
+  const existing = await database.get(STORE_NAME, id);
+
+  if (!existing) {
+    throw new Error(`Photo with id ${id} not found`);
+  }
+
+  const plainFlips = {
+    horizontal: metadata.flips.horizontal,
+    vertical: metadata.flips.vertical,
+  };
+
+  const updated: PhotoData = {
+    ...existing,
+    metadata: {
+      ...existing.metadata,
+      flips: plainFlips,
+      crop: metadata.crop ? { ...metadata.crop } : undefined,
+      rotation: metadata.rotation,
+    },
+  };
+
+  await database.put(STORE_NAME, updated);
+};
+
+export const updatePhotosMetadataBatch = async (
+  updates: Array<{
+    id: string;
+    metadata: {
+      flips: { horizontal: boolean; vertical: boolean };
+      crop?: { x: number; y: number; width: number; height: number };
+      rotation?: number;
+    };
+  }>
+): Promise<void> => {
+  if (updates.length === 0) return;
+
+  const database = await initDB();
+  const tx = database.transaction(STORE_NAME, "readwrite");
+  const store = tx.objectStore(STORE_NAME);
+
+  await Promise.all(
+    updates.map(async (update) => {
+      const existing = await store.get(update.id);
+      if (!existing) {
+        console.warn(
+          `Photo with id ${update.id} not found, skipping metadata update`
+        );
+        return;
+      }
+
+      const plainFlips = {
+        horizontal: update.metadata.flips.horizontal,
+        vertical: update.metadata.flips.vertical,
+      };
+
+      await store.put({
+        ...existing,
+        metadata: {
+          ...existing.metadata,
+          flips: plainFlips,
+          crop: update.metadata.crop
+            ? { ...update.metadata.crop }
+            : undefined,
+          rotation: update.metadata.rotation,
+        },
+      });
+    })
+  );
+
+  await tx.done;
 };
 
 export const updatePhotosBatch = async (

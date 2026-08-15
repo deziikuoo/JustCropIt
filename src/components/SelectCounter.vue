@@ -113,8 +113,8 @@ const isSelectAll = computed(() => {
 
 const isEmbeddedVisible = computed(() => {
   if (!showNotification.value) return false;
-  if (props.inline) return isSelectAll.value;
-  return true;
+  // Always show when there is a selection (including partial + select-all)
+  return props.selectedCount > 0 || displayedCount.value > 0;
 });
 
 const SHIMMER_COLORS = ["#ffd700", "#d4af37", "#fff9e6"];

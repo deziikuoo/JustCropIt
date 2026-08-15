@@ -51,10 +51,19 @@ export const GRID_MOUNT_BATCH_SIZE = 16;
 export const GRID_ENTRANCE_ANIMATION_CAP = 6;
 export const GRID_ENTRANCE_STAGGER_MS = 70;
 
-/** Frames per batch before WASM reset */
+/** Frames per batch before WASM reset (legacy FFmpeg extraction) */
 export const VIDEO_EXTRACTION_CHUNK_SIZE = 25;
-/** Smaller batches when using lossless PNG */
+/** Smaller batches when using lossless PNG (legacy FFmpeg extraction) */
 export const VIDEO_EXTRACTION_CHUNK_SIZE_PNG = 25;
+
+/** Prefer GPU/hardware decode when the browser supports it */
+export const WEBCODECS_HARDWARE_ACCELERATION = 'prefer-hardware' as const;
+/** Throttle progress postMessage frequency during dense (e.g. 0.05s) extraction */
+export const WEBCODECS_PROGRESS_EVERY_N_FRAMES = 5;
+/** Match decoded frames to target timestamps within this window (microseconds) */
+export const WEBCODECS_TIMESTAMP_TOLERANCE_US = 25_000;
+/** Max encoded chunks waiting in VideoDecoder before pausing demux */
+export const WEBCODECS_MAX_DECODE_QUEUE = 12;
 
 export function getThumbnailCacheKey(
   photoId: string,
@@ -65,25 +74,46 @@ export function getThumbnailCacheKey(
 
 // Upload ingest pipeline (Phase 1)
 export const UPLOAD_INGEST_CHUNK_SIZE = 1;
-export const UPLOAD_INGEST_CHUNK_SIZE_FAST = 3;
+export const UPLOAD_INGEST_CHUNK_SIZE_FAST = 4;
+/** Larger chunks for already-decoded video frame JPEGs/PNGs on higher-memory devices */
+export const UPLOAD_INGEST_CHUNK_SIZE_VIDEO_FRAMES = 8;
+/** Fallback chunk size for video frames on low-memory devices */
+export const UPLOAD_INGEST_CHUNK_SIZE_VIDEO_FRAMES_LOW_MEMORY = 4;
 export const UPLOAD_DECODE_JPEG_QUALITY = 0.92;
 export const UPLOAD_HEIC_MAX_CONCURRENT = 1;
-export const UPLOAD_WORKER_POOL_MAX = 2;
+export const UPLOAD_WORKER_POOL_MAX = 11;
 
 interface NavigatorWithMemory extends Navigator {
   deviceMemory?: number;
+}
+
+export interface UploadIngestChunkOptions {
+  hasSlowPathCandidate: boolean;
+  /** Video-frame dumps are already JPEG/PNG — allow larger parallel chunks */
+  preferLargerChunks?: boolean;
 }
 
 /**
  * Pick chunk size for upload ingest based on batch composition and device memory.
  */
 export function getUploadIngestChunkSize(
-  hasSlowPathCandidate: boolean
+  hasSlowPathCandidateOrOptions: boolean | UploadIngestChunkOptions
 ): number {
+  const options: UploadIngestChunkOptions =
+    typeof hasSlowPathCandidateOrOptions === 'boolean'
+      ? { hasSlowPathCandidate: hasSlowPathCandidateOrOptions }
+      : hasSlowPathCandidateOrOptions;
+
   const nav = navigator as NavigatorWithMemory;
   const memory = nav.deviceMemory ?? 4;
 
-  if (hasSlowPathCandidate || memory <= 4) {
+  if (options.preferLargerChunks && !options.hasSlowPathCandidate) {
+    return memory <= 4
+      ? UPLOAD_INGEST_CHUNK_SIZE_VIDEO_FRAMES_LOW_MEMORY
+      : UPLOAD_INGEST_CHUNK_SIZE_VIDEO_FRAMES;
+  }
+
+  if (options.hasSlowPathCandidate || memory <= 4) {
     return UPLOAD_INGEST_CHUNK_SIZE;
   }
 

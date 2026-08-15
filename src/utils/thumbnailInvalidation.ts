@@ -1,5 +1,6 @@
 import type { Photo } from '../types/photo';
 import { getThumbnailCacheKey } from '../constants/optimization';
+import { clearThumbnailBackfillFailure } from './thumbnailBackfill';
 
 export function getPreviousDisplayCacheKey(photo: Photo): string | null {
   if (!photo.id) return null;
@@ -22,6 +23,9 @@ export function applyDisplayInvalidation<T extends Photo>(
   photo: T,
   updates: Partial<T>
 ): T {
+  if (photo.id) {
+    clearThumbnailBackfillFailure(photo.id);
+  }
   return {
     ...photo,
     ...updates,

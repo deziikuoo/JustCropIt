@@ -42,14 +42,12 @@
           v-if="displayUrl"
           :src="displayUrl"
           alt="Uploaded photo"
+          class="photo-card__image"
+          :style="imageTransformStyle"
           draggable="false"
           @dragstart.prevent
           @error="$emit('image-error')"
         />
-        <div
-          v-else-if="isLoading"
-          class="image-placeholder image-placeholder--loading"
-        ></div>
         <div
           v-else-if="placeholderPreviewUrl"
           class="image-placeholder image-placeholder--thumbhash"
@@ -58,10 +56,15 @@
             :src="placeholderPreviewUrl"
             alt=""
             class="image-placeholder__preview"
+            :style="imageTransformStyle"
             draggable="false"
             @dragstart.prevent
           />
         </div>
+        <div
+          v-else-if="isLoading"
+          class="image-placeholder image-placeholder--loading"
+        ></div>
         <div v-else class="image-placeholder"></div>
       </div>
       <div class="actions">
@@ -114,9 +117,14 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue';
 import type { Photo } from '../types/photo';
+import {
+  getDeferredFlipCssTransform,
+  usesDeferredFlips,
+} from '../utils/editTransform';
 
-defineProps<{
+const props = defineProps<{
   photo: Photo;
   realIndex: number;
   displayUrl: string | null;
@@ -133,6 +141,12 @@ defineProps<{
   itemSize: string;
   registerCardRef: (el: HTMLElement | null) => void;
 }>();
+
+const imageTransformStyle = computed(() => {
+  if (!usesDeferredFlips(props.photo)) return undefined;
+  const transform = getDeferredFlipCssTransform(props.photo.flips);
+  return transform ? { transform } : undefined;
+});
 
 defineEmits<{
   (e: 'flip', direction: 'horizontal' | 'vertical'): void;

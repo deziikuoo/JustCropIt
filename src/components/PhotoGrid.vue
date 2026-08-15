@@ -344,6 +344,10 @@
               hasCopiedSettings,
               photo.thumbRevision,
               photo.thumbhash,
+              photo.flips.horizontal,
+              photo.flips.vertical,
+              photo.crop,
+              photo.rotation,
               entranceIndices.has(visibleRange.start + index),
               allowGridAnimation,
             ]"
