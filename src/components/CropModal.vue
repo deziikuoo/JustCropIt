@@ -16,6 +16,7 @@
           :key="`cropper-${imageSrc}-${initialRotation || 0}`"
           :src="currentImageSrc"
           :default-size="fullImageDefaultSize"
+          :transitions="!isRadialDragging"
           :stencil-props="{
             aspectRatio: selectedAspectRatio,
             movable: true,
@@ -113,6 +114,60 @@
             </button>
           </div>
         </div>
+        <div
+          class="rotate-radial"
+          role="slider"
+          tabindex="0"
+          aria-label="Rotate"
+          :aria-valuemin="FINE_ROTATE_MIN"
+          :aria-valuemax="FINE_ROTATE_MAX"
+          :aria-valuenow="Math.round(fineRotation)"
+          :aria-valuetext="`${fineRotationLabel} degrees`"
+          @pointerdown.stop="onRadialPointerDown"
+          @pointermove="onRadialPointerMove"
+          @pointerup="onRadialPointerUp"
+          @pointercancel="onRadialPointerUp"
+          @wheel.prevent="onRadialWheel"
+          @keydown="onRadialKeydown"
+        >
+          <div class="rotate-radial__value">{{ fineRotationLabel }}°</div>
+          <svg
+            class="rotate-radial__svg"
+            :viewBox="`0 0 ${RADIAL_VIEW_W} ${RADIAL_VIEW_H}`"
+            aria-hidden="true"
+          >
+            <path
+              class="rotate-radial__arc"
+              :d="radialArcPath"
+              fill="none"
+            />
+            <g v-for="tick in radialTicks" :key="tick.angle">
+              <line
+                :x1="tick.x1"
+                :y1="tick.y1"
+                :x2="tick.x2"
+                :y2="tick.y2"
+                class="rotate-radial__tick"
+                :class="{ 'rotate-radial__tick--major': tick.major }"
+              />
+              <text
+                v-if="tick.major"
+                :x="tick.labelX"
+                :y="tick.labelY"
+                class="rotate-radial__label"
+                text-anchor="middle"
+                dominant-baseline="middle"
+                :opacity="tick.labelOpacity"
+              >
+                {{ tick.angle }}
+              </text>
+            </g>
+            <polygon
+              class="rotate-radial__indicator"
+              :points="radialIndicatorPoints"
+            />
+          </svg>
+        </div>
       </div>
     </div>
   </div>
@@ -120,7 +175,7 @@
 
 <script setup lang="ts">
 import { Cropper } from "vue-advanced-cropper";
-import { ref, onMounted, onUnmounted, watch, nextTick } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from "vue";
 import "vue-advanced-cropper/dist/style.css";
 import type { CropTarget } from "../types/detection";
 
@@ -210,8 +265,196 @@ const cropTargetOptions: { value: CropTarget; label: string; icon: string }[] = 
   { value: 'head', label: 'Head', icon: 'fas fa-circle-user' },
 ];
 const currentImageSrc = ref<string>(imageSrc);
-const currentRotation = ref<number>(initialRotation || 0); // Track cumulative rotation
 const isDragging = ref(false); // Track if stencil is being dragged (for iOS-style overlay)
+const isRadialDragging = ref(false);
+
+const FINE_ROTATE_MIN = -45;
+const FINE_ROTATE_MAX = 45;
+const RADIAL_VIEW_W = 480;
+const RADIAL_VIEW_H = 44;
+const RADIAL_VISIBLE_SPAN = 32;
+const RADIAL_CX = RADIAL_VIEW_W / 2;
+const RADIAL_SAGITTA = 11;
+const RADIAL_HALF_W = RADIAL_VIEW_W / 2 - 8;
+const RADIAL_R =
+  (RADIAL_HALF_W * RADIAL_HALF_W + RADIAL_SAGITTA * RADIAL_SAGITTA) /
+  (2 * RADIAL_SAGITTA);
+const RADIAL_ARC_SPAN =
+  (Math.asin(RADIAL_HALF_W / RADIAL_R) * 180) / Math.PI;
+const RADIAL_VISUAL_SCALE = RADIAL_ARC_SPAN / RADIAL_VISIBLE_SPAN;
+const RADIAL_CY = RADIAL_VIEW_H - 0.5 + RADIAL_R - RADIAL_SAGITTA;
+const RADIAL_ARC_Y = RADIAL_CY - RADIAL_R;
+const RADIAL_PX_PER_DEGREE = 6;
+
+function radialPoint(relative: number): { x: number; y: number; sin: number; cos: number } {
+  const rad = (relative * RADIAL_VISUAL_SCALE * Math.PI) / 180;
+  const sin = Math.sin(rad);
+  const cos = Math.cos(rad);
+  return {
+    x: RADIAL_CX + RADIAL_R * sin,
+    y: RADIAL_CY - RADIAL_R * cos,
+    sin,
+    cos,
+  };
+}
+
+function normalize360(deg: number): number {
+  return ((deg % 360) + 360) % 360;
+}
+
+function splitRotation(total: number): { base: number; fine: number } {
+  const n = normalize360(total);
+  let nearest = Math.round(n / 90) * 90;
+  let fine = n - nearest;
+  if (fine > 45) {
+    nearest += 90;
+    fine -= 90;
+  } else if (fine < -45) {
+    nearest -= 90;
+    fine += 90;
+  }
+  return { base: normalize360(nearest), fine };
+}
+
+const initialSplit = splitRotation(initialRotation || 0);
+const baseRotation = ref(initialSplit.base);
+const fineRotation = ref(initialSplit.fine);
+const currentRotation = computed(() =>
+  normalize360(baseRotation.value + fineRotation.value)
+);
+const fineRotationLabel = computed(() => String(Math.round(fineRotation.value) || 0));
+
+let appliedRotation = currentRotation.value;
+
+function applySplit(total: number): void {
+  const { base, fine } = splitRotation(total);
+  baseRotation.value = base;
+  fineRotation.value = fine;
+}
+
+function shortestAngleDelta(from: number, to: number): number {
+  let delta = normalize360(to) - normalize360(from);
+  if (delta > 180) delta -= 360;
+  if (delta < -180) delta += 360;
+  return delta;
+}
+
+function syncCropperRotation(): void {
+  if (!cropper.value) return;
+  const target = currentRotation.value;
+  const delta = shortestAngleDelta(appliedRotation, target);
+  if (Math.abs(delta) < 0.001) {
+    appliedRotation = target;
+    return;
+  }
+  cropper.value.rotate(delta);
+  appliedRotation = target;
+}
+
+function setFineRotation(next: number): void {
+  fineRotation.value = Math.min(FINE_ROTATE_MAX, Math.max(FINE_ROTATE_MIN, next));
+  syncCropperRotation();
+}
+
+type RadialTick = {
+  angle: number;
+  major: boolean;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  labelX: number;
+  labelY: number;
+  labelOpacity: number;
+};
+
+function radialLabelOpacity(relative: number): number {
+  const distance = Math.abs(relative);
+  if (distance < 5) return 0;
+  const fadeStart = RADIAL_VISIBLE_SPAN * 0.4;
+  const fadeEnd = RADIAL_VISIBLE_SPAN * 0.95;
+  if (distance <= fadeStart) return 1;
+  if (distance >= fadeEnd) return 0;
+  const t = (distance - fadeStart) / (fadeEnd - fadeStart);
+  return 1 - t * t;
+}
+
+const radialTicks = computed<RadialTick[]>(() => {
+  const ticks: RadialTick[] = [];
+  for (let angle = FINE_ROTATE_MIN; angle <= FINE_ROTATE_MAX; angle += 2) {
+    const relative = angle - fineRotation.value;
+    if (Math.abs(relative) > RADIAL_VISIBLE_SPAN) continue;
+    const { x, y, sin, cos } = radialPoint(relative);
+    const major = angle % 10 === 0;
+    const tickLen = major ? 8 : 4;
+    ticks.push({
+      angle,
+      major,
+      x1: x,
+      y1: y,
+      x2: x + sin * tickLen,
+      y2: y - cos * tickLen,
+      labelX: x + sin * 18,
+      labelY: y - cos * 18,
+      labelOpacity: major ? radialLabelOpacity(relative) : 1,
+    });
+  }
+  return ticks;
+});
+
+const radialIndicatorPoints = `${RADIAL_CX},${RADIAL_ARC_Y + 1} ${RADIAL_CX + 6},${RADIAL_ARC_Y - 10} ${RADIAL_CX - 6},${RADIAL_ARC_Y - 10}`;
+
+const radialArcPath = computed(() => {
+  const span = RADIAL_VISIBLE_SPAN - 1;
+  const start = radialPoint(-span);
+  const end = radialPoint(span);
+  return `M ${start.x} ${start.y} A ${RADIAL_R} ${RADIAL_R} 0 0 1 ${end.x} ${end.y}`;
+});
+
+let radialPointerId: number | null = null;
+let radialDragStartX = 0;
+let radialDragStartFine = 0;
+
+function onRadialPointerDown(event: PointerEvent): void {
+  radialPointerId = event.pointerId;
+  radialDragStartX = event.clientX;
+  radialDragStartFine = fineRotation.value;
+  isRadialDragging.value = true;
+  (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+}
+
+function onRadialPointerMove(event: PointerEvent): void {
+  if (!isRadialDragging.value || event.pointerId !== radialPointerId) return;
+  const dx = event.clientX - radialDragStartX;
+  setFineRotation(radialDragStartFine + dx / RADIAL_PX_PER_DEGREE);
+}
+
+function onRadialPointerUp(event: PointerEvent): void {
+  if (event.pointerId !== radialPointerId) return;
+  isRadialDragging.value = false;
+  radialPointerId = null;
+  if (Math.abs(fineRotation.value) < 0.35) {
+    setFineRotation(0);
+  }
+}
+
+function onRadialWheel(event: WheelEvent): void {
+  const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+  setFineRotation(fineRotation.value + delta / 20);
+}
+
+function onRadialKeydown(event: KeyboardEvent): void {
+  if (event.key === "ArrowLeft" || event.key === "ArrowDown") {
+    event.preventDefault();
+    setFineRotation(fineRotation.value - (event.shiftKey ? 5 : 1));
+  } else if (event.key === "ArrowRight" || event.key === "ArrowUp") {
+    event.preventDefault();
+    setFineRotation(fineRotation.value + (event.shiftKey ? 5 : 1));
+  } else if (event.key === "Home" || event.key === "0") {
+    event.preventDefault();
+    setFineRotation(0);
+  }
+}
 
 function selectCropTarget(target: CropTarget) {
   selectedCropTarget.value = target;
@@ -222,7 +465,8 @@ function selectCropTarget(target: CropTarget) {
 // Watch for changes in imageSrc and initialRotation props
 watch([() => imageSrc, () => initialRotation], ([newSrc, newRotation]) => {
   currentImageSrc.value = newSrc;
-  currentRotation.value = newRotation || 0;
+  applySplit(newRotation || 0);
+  appliedRotation = currentRotation.value;
   selectedCropTarget.value = null;
 });
 
@@ -232,20 +476,17 @@ const applyRotationToCropper = (rotation: number) => {
     console.warn("Cropper not ready for rotation");
     return;
   }
-  
-  // Reset cropper first to clear any existing rotation
+
   cropper.value.reset();
   cropper.value.updateBoundaries();
 
-  // Apply the rotation immediately
-  const normalizedRotation = ((rotation % 360) + 360) % 360;
-  const rotationSteps = Math.round(normalizedRotation / 90) % 4;
-
-  for (let i = 0; i < rotationSteps; i++) {
-    cropper.value.rotate(90);
+  const normalizedRotation = normalize360(rotation);
+  applySplit(normalizedRotation);
+  if (normalizedRotation !== 0) {
+    cropper.value.rotate(normalizedRotation);
   }
   cropper.value.updateBoundaries();
-  currentRotation.value = normalizedRotation;
+  appliedRotation = normalizedRotation;
 };
 
 const handleEsc = (event: KeyboardEvent) => {
@@ -657,11 +898,7 @@ const cropImage = async () => {
 
 const rotate = (angle: number) => {
   if (cropper.value) {
-    // Update cumulative rotation (normalize to 0-360 range)
-    currentRotation.value = (currentRotation.value + angle) % 360;
-    if (currentRotation.value < 0) {
-      currentRotation.value += 360;
-    }
+    baseRotation.value = normalize360(baseRotation.value + angle);
     const { left, top, width, height } = cropper.value.stencilCoordinates;
     const { width: imgWidth, height: imgHeight } = cropper.value.getResult()
       .canvas || {
@@ -710,6 +947,7 @@ const rotate = (angle: number) => {
       height: newHeight,
     };
     cropper.value.setCoordinates(coordinates);
+    appliedRotation = currentRotation.value;
   }
 };
 
@@ -721,11 +959,15 @@ const reset = async () => {
 
   selectedAspectRatio.value = null;
   selectedCropTarget.value = null;
-  currentRotation.value = initialRotation || 0;
+  applySplit(initialRotation || 0);
   await nextTick();
 
   cropper.value.reset();
   await nextTick();
+  if (currentRotation.value !== 0) {
+    cropper.value.rotate(currentRotation.value);
+  }
+  appliedRotation = currentRotation.value;
   setFullImageCoordinates();
 };
 </script>
@@ -922,7 +1164,7 @@ const reset = async () => {
   flex-direction: column;
   align-items: stretch;
   gap: 10px;
-  padding: 12px 0;
+  padding: 12px 0 0;
   border-top: 1px solid var(--surface-border);
 }
 
@@ -932,6 +1174,72 @@ const reset = async () => {
   align-items: center;
   justify-content: center;
   flex-wrap: wrap;
+}
+
+.rotate-radial {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  width: min(100%, 480px);
+  margin: auto auto 0;
+  padding: 0;
+  outline: none;
+  cursor: ew-resize;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.rotate-radial:focus-visible {
+  border-radius: 8px;
+  box-shadow: 0 0 0 2px rgba(212, 175, 55, 0.45);
+}
+
+.rotate-radial__value {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.72);
+  line-height: 1;
+  margin-bottom: 0;
+}
+
+.rotate-radial__svg {
+  display: block;
+  width: 100%;
+  height: 44px;
+  overflow: hidden;
+  margin-bottom: 0;
+}
+
+.rotate-radial__arc {
+  stroke: rgba(255, 255, 255, 0.55);
+  stroke-width: 1.25;
+  stroke-dasharray: 3 4;
+  stroke-linecap: round;
+}
+
+.rotate-radial__tick {
+  stroke: rgba(255, 255, 255, 0.7);
+  stroke-width: 1;
+  stroke-linecap: round;
+}
+
+.rotate-radial__tick--major {
+  stroke: #fff;
+  stroke-width: 1.5;
+}
+
+.rotate-radial__label {
+  fill: #fff;
+  font-size: 11px;
+  font-weight: 500;
+  pointer-events: none;
+}
+
+.rotate-radial__indicator {
+  fill: rgba(180, 180, 180, 0.95);
 }
 
 .controls label {
@@ -1023,11 +1331,19 @@ const reset = async () => {
 
   .controls {
     gap: 6px;
-    padding: 10px 0;
+    padding: 10px 0 0;
   }
 
   .controls label {
     font-size: 0.8rem;
+  }
+
+  .rotate-radial {
+    width: min(100%, 360px);
+  }
+
+  .rotate-radial__svg {
+    height: 40px;
   }
 
   .actions {

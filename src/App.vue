@@ -668,13 +668,30 @@ const applyFlipsRotationAndCrop = async (
     cropY = crop.x;
     cropWidth = crop.height;
     cropHeight = crop.width;
-  } else {
+  } else if (normalizedRotation === 0) {
     rotatedWidth = imgWidth;
     rotatedHeight = imgHeight;
     cropX = crop.x;
     cropY = crop.y;
     cropWidth = crop.width;
     cropHeight = crop.height;
+  } else {
+    const cos = Math.cos(rotationRad);
+    const sin = Math.sin(rotationRad);
+    rotatedWidth = Math.round(
+      Math.abs(imgWidth * cos) + Math.abs(imgHeight * sin)
+    );
+    rotatedHeight = Math.round(
+      Math.abs(imgWidth * sin) + Math.abs(imgHeight * cos)
+    );
+    const cx = crop.x + crop.width / 2 - imgWidth / 2;
+    const cy = crop.y + crop.height / 2 - imgHeight / 2;
+    const rcx = cx * cos - cy * sin;
+    const rcy = cx * sin + cy * cos;
+    cropWidth = crop.width;
+    cropHeight = crop.height;
+    cropX = rotatedWidth / 2 + rcx - cropWidth / 2;
+    cropY = rotatedHeight / 2 + rcy - cropHeight / 2;
   }
 
   const rotatedCanvas = document.createElement("canvas");
@@ -1002,7 +1019,7 @@ const openCropModal = (index: number) => {
 };
 
 const handleCrop = async (
-  _blob: Blob,
+  blob: Blob,
   crop: { x: number; y: number; width: number; height: number },
   rotation: number
 ) => {
@@ -1020,7 +1037,8 @@ const handleCrop = async (
       rotation,
       photos,
       updatePhoto,
-      applyFlipsRotationAndCrop
+      applyFlipsRotationAndCrop,
+      blob
     );
     await command.execute();
   } catch (error) {

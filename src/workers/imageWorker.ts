@@ -165,9 +165,17 @@ async function processImage(
   if (normalizedRotation === 90 || normalizedRotation === 270) {
     rotatedWidth = imgHeight;
     rotatedHeight = imgWidth;
-  } else {
+  } else if (
+    normalizedRotation === 0 ||
+    normalizedRotation === 180
+  ) {
     rotatedWidth = imgWidth;
     rotatedHeight = imgHeight;
+  } else {
+    const cos = Math.abs(Math.cos(rotationRad));
+    const sin = Math.abs(Math.sin(rotationRad));
+    rotatedWidth = Math.round(imgWidth * cos + imgHeight * sin);
+    rotatedHeight = Math.round(imgWidth * sin + imgHeight * cos);
   }
 
   // Prepare crop coordinates transform if crop exists
@@ -188,9 +196,18 @@ async function processImage(
       cropY = crop.x;
       cropWidth = crop.height;
       cropHeight = crop.width;
-    } else {
+    } else if (normalizedRotation === 0) {
       cropX = crop.x;
       cropY = crop.y;
+    } else {
+      const cos = Math.cos(rotationRad);
+      const sin = Math.sin(rotationRad);
+      const cx = crop.x + crop.width / 2 - imgWidth / 2;
+      const cy = crop.y + crop.height / 2 - imgHeight / 2;
+      const rcx = cx * cos - cy * sin;
+      const rcy = cx * sin + cy * cos;
+      cropX = rotatedWidth / 2 + rcx - cropWidth / 2;
+      cropY = rotatedHeight / 2 + rcy - cropHeight / 2;
     }
   }
 

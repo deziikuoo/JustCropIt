@@ -13,6 +13,7 @@ export class CropCommand extends BaseCommand {
   private newCrop: { x: number; y: number; width: number; height: number };
   private newRotation: number;
   private previousState: PhotoState | null = null;
+  private bakedBlob: Blob | null;
 
   constructor(
     photoId: string,
@@ -20,12 +21,14 @@ export class CropCommand extends BaseCommand {
     rotation: number,
     photos: Ref<Photo[]>,
     updatePhotoFn: typeof updatePhoto,
-    applyFlipsRotationAndCropFn: ApplyFlipsRotationAndCropFn
+    applyFlipsRotationAndCropFn: ApplyFlipsRotationAndCropFn,
+    bakedBlob?: Blob | null
   ) {
     super(photos, updatePhotoFn, applyFlipsRotationAndCropFn);
     this.photoId = photoId;
     this.newCrop = { ...crop };
     this.newRotation = rotation;
+    this.bakedBlob = bakedBlob ?? null;
   }
 
   async execute(): Promise<void> {
@@ -47,8 +50,11 @@ export class CropCommand extends BaseCommand {
       rotation: this.newRotation,
     };
 
-    // Regenerate photo from original + new state
-    const newCurrent = await this.regeneratePhotoFromState(photo, newState);
+    const newCurrent = this.bakedBlob
+      ? new File([this.bakedBlob], photo.original.name, {
+          type: this.bakedBlob.type || photo.original.type,
+        })
+      : await this.regeneratePhotoFromState(photo, newState);
 
     // Update photo
     await this.updatePhotoState(this.photoId, newCurrent, newState);
