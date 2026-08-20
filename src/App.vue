@@ -272,6 +272,7 @@ import ShimmerBackground from "./components/ShimmerBackground.vue";
 import VideoExtractor from "./components/VideoExtractor.vue";
 import FeedbackPanel from "./components/FeedbackPanel.vue";
 import { getExportStripChunkSize } from "./constants/optimization";
+import { trackEvent } from "./utils/analytics";
 import { useCropSuggestion } from "./composables/useCropSuggestion";
 import { useExportSettings } from "./composables/useExportSettings";
 import { prepareExportFile } from "./utils/export/prepareExportBlob";
@@ -830,6 +831,10 @@ const handleUpload = async (event: Event) => {
       onPhotosAdded: trackPhotoAddition,
     });
 
+    if (result.photos.length > 0) {
+      trackEvent("import");
+    }
+
     if (result.cancelled) {
       console.warn("[Import][UI] Upload cancelled", result);
       showAlert(
@@ -904,6 +909,10 @@ const handleVideoFramesExtracted = async (files: File[]) => {
       },
       onPhotosAdded: trackPhotoAddition,
     });
+
+    if (result.photos.length > 0) {
+      trackEvent("import_frames");
+    }
 
     if (result.cancelled) {
       console.warn("[Import][UI] Video-frame import cancelled", result);
@@ -1041,6 +1050,7 @@ const handleCrop = async (
       blob
     );
     await command.execute();
+    trackEvent("crop");
   } catch (error) {
     console.error("Failed to execute crop command:", error);
     showAlert("error", "Crop Failed", "Failed to crop photo. Please try again.");
@@ -1235,6 +1245,7 @@ const handleBatchCropNext = async (
       batchEditAbortController?.signal
     );
     await command.execute();
+    trackEvent("crop");
   } catch (error) {
     console.error("Failed to execute batch crop command:", error);
     showAlert(
@@ -1427,6 +1438,7 @@ const handleBatchDownload = async () => {
       : null;
 
     await downloadZip(zip, `photos-${indices.length}-files.zip`);
+    trackEvent("download");
   } catch (error) {
     console.error("Error creating ZIP file:", error);
     if (!isBatchAborted(batchEditAbortController?.signal)) {
@@ -1575,6 +1587,7 @@ const handleDownload = async (index: number) => {
     a.href = url;
     a.download = prepared.fileName;
     a.click();
+    trackEvent("download");
   } finally {
     URL.revokeObjectURL(url);
   }
