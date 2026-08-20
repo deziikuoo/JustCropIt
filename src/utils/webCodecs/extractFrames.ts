@@ -172,7 +172,7 @@ export class WebCodecsExtractionSession {
               currentFrame: framesSent,
               totalFrames: targets.length,
               percent: 5 + Math.round((framesSent / targets.length) * 90),
-              message: `Extracted frame ${framesSent} of ${targets.length}...`,
+              message: `Extracted frames ${framesSent} of ${targets.length}`,
             });
           }
         } catch (err) {

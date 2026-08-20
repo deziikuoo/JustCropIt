@@ -12,20 +12,7 @@
 
     <template v-else>
       <header class="video-extractor-header">
-        <div class="video-extractor-header-row">
-          <p class="video-extractor-subtitle">Extract high-quality frames from video</p>
-          <button
-            v-if="videoFile"
-            type="button"
-            class="frame-action-btn frame-action-btn--danger"
-            :disabled="isExtracting || isExportingTrim || isDownloading || isAddingToPhotos"
-            title="Clear the entire video page (video, frames, and saved session)"
-            @click="clearVideoPage"
-          >
-            <i class="fas fa-trash-alt"></i>
-            Clear
-          </button>
-        </div>
+        <p class="video-extractor-subtitle">Extract high-quality frames from video</p>
       </header>
 
       <!-- Video Input Area -->
@@ -63,13 +50,15 @@
               ref="videoRef"
               :src="videoPreviewUrl"
               class="video-preview"
-              muted
+              controls
+              controlslist="nodownload noremoteplayback"
               playsinline
               preload="metadata"
               @loadedmetadata="syncVideoMetadata"
               @durationchange="syncVideoMetadata"
               @loadeddata="syncVideoMetadata"
               @timeupdate="onVideoTimeUpdate"
+              @play="onVideoPlay"
             ></video>
             
             <div class="video-info-overlay">
@@ -205,7 +194,7 @@
                 :disabled="isExtracting"
               >
                 <i class="fas fa-gem"></i>
-                Lossless (PNG)
+                Maximum quality (PNG)
               </button>
               <span
                 class="quality-help"
@@ -233,9 +222,6 @@
             <span class="estimated-frames-right">
               <i class="fas fa-layer-group"></i>
               <strong>{{ estimatedFrameCount }}</strong> frames
-              <span class="hw-hint" title="Uses WebCodecs with hardware decode when available">
-                · GPU decode
-              </span>
             </span>
           </template>
           <span v-else-if="displayVideoInfo" class="estimated-frames-message">
@@ -267,9 +253,6 @@
         </div>
         <div class="progress-details" v-if="progress.message">
           {{ progress.message }}
-        </div>
-        <div class="progress-frames" v-if="progress.currentFrame > 0">
-          Frame {{ progress.currentFrame }} of {{ progress.totalFrames || '?' }}
         </div>
       </div>
 
@@ -305,104 +288,11 @@
         <div class="extracted-header">
           <h3>
             <i class="fas fa-check-circle"></i>
-            {{ extractedFrames.length }} Frames Extracted
-            <span v-if="isSelectMode && selectedCount > 0" class="selection-count">
-              · {{ selectedCount }} selected
+            Extracted
+            <span v-if="isSelectMode && displaySelectedCount > 0" class="selection-count">
+              · {{ displaySelectedCount }} selected
             </span>
           </h3>
-          <div class="extracted-actions">
-            <template v-if="!isSelectMode">
-              <button
-                class="frame-action-btn"
-                type="button"
-                :disabled="isDownloading || isAddingToPhotos"
-                title="Download all extracted frames as a ZIP"
-                @click="handleDownloadAll"
-              >
-                <i :class="isDownloading ? 'fas fa-spinner fa-spin' : 'fas fa-download'"></i>
-                Download All
-              </button>
-              <button
-                class="frame-action-btn"
-                type="button"
-                :disabled="isDownloading || isAddingToPhotos"
-                title="Select frames to download or delete"
-                @click="enterSelectMode"
-              >
-                <i class="fas fa-check-double"></i>
-                Select
-              </button>
-              <button
-                class="frame-action-btn frame-action-btn--danger"
-                type="button"
-                :disabled="isDownloading || isAddingToPhotos"
-                title="Delete all extracted frames (keeps the video)"
-                @click="handleDeleteAllFrames"
-              >
-                <i class="fas fa-trash"></i>
-                Delete All
-              </button>
-              <button
-                class="add-to-grid-btn"
-                type="button"
-                :disabled="isDownloading || isAddingToPhotos"
-                @click="handleAddToGrid"
-              >
-                <i :class="isAddingToPhotos ? 'fas fa-spinner fa-spin' : 'fas fa-plus'"></i>
-                {{ isAddingToPhotos ? 'Adding to Photos…' : 'Add to Photos' }}
-              </button>
-            </template>
-            <template v-else>
-              <button
-                class="frame-action-btn"
-                type="button"
-                :disabled="isDownloading || selectedCount === extractedFrames.length"
-                @click="selectAllFrames"
-              >
-                <i class="fas fa-check-square"></i>
-                Select All
-              </button>
-              <button
-                class="frame-action-btn"
-                type="button"
-                :disabled="isDownloading || selectedCount === 0"
-                title="Deselect all frames"
-                @click="clearFrameSelection"
-              >
-                <i class="fas fa-square"></i>
-                Deselect
-              </button>
-              <button
-                class="frame-action-btn frame-action-btn--danger"
-                type="button"
-                :disabled="isDownloading || selectedCount === 0"
-                :title="selectedCount === 0 ? 'Select frames first' : `Delete ${selectedCount} frame(s)`"
-                @click="handleDeleteSelectedFrames"
-              >
-                <i class="fas fa-trash"></i>
-                Delete{{ selectedCount > 0 ? ` (${selectedCount})` : '' }}
-              </button>
-              <button
-                class="frame-action-btn frame-action-btn--primary"
-                type="button"
-                :disabled="isDownloading || selectedCount === 0"
-                :title="selectedCount === 0 ? 'Select frames first' : `Download ${selectedCount} frame(s)`"
-                @click="handleDownloadSelected"
-              >
-                <i :class="isDownloading ? 'fas fa-spinner fa-spin' : 'fas fa-download'"></i>
-                Download{{ selectedCount > 0 ? ` (${selectedCount})` : '' }}
-              </button>
-              <button
-                class="frame-action-btn"
-                type="button"
-                :disabled="isDownloading"
-                @click="exitSelectMode"
-              >
-                <i class="fas fa-times"></i>
-                Done
-              </button>
-            </template>
-          </div>
         </div>
 
         <div class="download-progress" v-if="isDownloading && downloadProgress">
@@ -426,61 +316,159 @@
           <span class="download-progress-message">{{ downloadProgress.message }}</span>
         </div>
 
-        <div
-          class="frames-preview-grid"
-          :class="{
-            'frames-preview-grid--expanded': showAllPreviewFrames || isSelectMode,
-            'frames-preview-grid--selecting': isSelectMode,
-          }"
-        >
-          <button
-            v-for="frame in previewFrames"
-            :key="frame.index"
-            type="button"
-            class="preview-frame"
-            :class="{ 'preview-frame--selected': selectedFrameIndices.has(frame.index) }"
-            :aria-label="isSelectMode
-              ? `${selectedFrameIndices.has(frame.index) ? 'Deselect' : 'Select'} frame at ${formatTimestamp(frame.timestamp)}`
-              : `Preview frame at ${formatTimestamp(frame.timestamp)}`"
-            :aria-pressed="isSelectMode ? selectedFrameIndices.has(frame.index) : undefined"
-            @click="handleFrameClick(frame.index)"
+        <div class="extracted-body">
+          <div
+            ref="framesGridRef"
+            class="frames-preview-grid frames-preview-grid--expanded"
+            :class="{
+              'frames-preview-grid--selecting': isSelectMode,
+              'frames-preview-grid--drag-selecting': isDragSelecting,
+            }"
           >
-            <img
-              :src="getFramePreviewUrl(frame)"
-              :alt="`Frame ${frame.index + 1}`"
-              loading="lazy"
-              decoding="async"
-              draggable="false"
-            />
-            <span
-              v-if="isSelectMode"
-              class="frame-check"
-              :class="{ 'frame-check--on': selectedFrameIndices.has(frame.index) }"
-              aria-hidden="true"
+            <button
+              v-for="(frame, arrayIdx) in extractedFrames"
+              :key="frame.index"
+              type="button"
+              class="preview-frame"
+              :data-frame-array-index="arrayIdx"
+              :class="{
+                'preview-frame--selected': selectedFrameIndices.has(frame.index),
+                'preview-frame--dragging-over': draggedOverArrayIndices.has(arrayIdx),
+              }"
+              :tabindex="isDragSelecting ? -1 : 0"
+              :aria-label="isSelectMode
+                ? `${selectedFrameIndices.has(frame.index) ? 'Deselect' : 'Select'} frame at ${formatTimestamp(frame.timestamp)}`
+                : `Preview frame at ${formatTimestamp(frame.timestamp)}`"
+              :aria-pressed="isSelectMode ? selectedFrameIndices.has(frame.index) : undefined"
+              @click="handleFrameClick(frame.index)"
+              @mousedown="handleFrameMouseDown(arrayIdx, $event)"
+              @touchstart.passive="handleFrameTouchStart(arrayIdx, $event)"
             >
-              <i class="fas fa-check"></i>
-            </span>
-            <span class="frame-time">{{ formatTimestamp(frame.timestamp) }}</span>
-          </button>
-          <button
-            v-if="hiddenPreviewCount > 0 && !showAllPreviewFrames && !isSelectMode"
-            type="button"
-            class="more-frames"
-            :aria-label="`Show ${hiddenPreviewCount} more frames`"
-            @click="showAllPreviewFrames = true"
-          >
-            +{{ hiddenPreviewCount }} more
-          </button>
+              <img
+                :src="getFramePreviewUrl(frame)"
+                :alt="`Frame ${frame.index + 1}`"
+                loading="lazy"
+                decoding="async"
+                draggable="false"
+              />
+              <span
+                v-if="isSelectMode"
+                class="frame-check"
+                :class="{ 'frame-check--on': selectedFrameIndices.has(frame.index) }"
+                aria-hidden="true"
+              >
+                <i class="fas fa-check"></i>
+              </span>
+              <span class="frame-time">{{ formatTimestamp(frame.timestamp) }}</span>
+            </button>
+          </div>
+
+          <div class="extracted-side-actions">
+            <template v-if="!isSelectMode">
+              <button
+                class="frame-action-btn"
+                type="button"
+                :disabled="isDownloading || isAddingToPhotos"
+                title="Select frames to download or delete"
+                @click="enterSelectMode"
+              >
+                <i class="fas fa-check-double"></i>
+                Select
+              </button>
+              <button
+                class="add-to-grid-btn"
+                type="button"
+                :disabled="isDownloading || isAddingToPhotos"
+                @click="handleAddToGrid"
+              >
+                <i :class="isAddingToPhotos ? 'fas fa-spinner fa-spin' : 'fas fa-plus'"></i>
+                {{ isAddingToPhotos ? 'Adding to Images…' : 'Add to Images' }}
+              </button>
+              <button
+                class="frame-action-btn"
+                type="button"
+                :disabled="isDownloading || isAddingToPhotos"
+                title="Download all extracted frames as a ZIP"
+                @click="handleDownloadAll"
+              >
+                <i :class="isDownloading ? 'fas fa-spinner fa-spin' : 'fas fa-download'"></i>
+                Download All
+              </button>
+              <button
+                class="frame-action-btn frame-action-btn--danger"
+                type="button"
+                :disabled="isDownloading || isAddingToPhotos"
+                title="Delete all extracted frames (keeps the video)"
+                @click="handleDeleteAllFrames"
+              >
+                <i class="fas fa-trash"></i>
+                Delete All
+              </button>
+            </template>
+            <template v-else>
+              <button
+                class="frame-action-btn"
+                type="button"
+                :disabled="isDownloading || selectedCount === extractedFrames.length"
+                @click="selectAllFrames"
+              >
+                <i class="fas fa-check-square"></i>
+                Select All
+              </button>
+              <button
+                class="frame-action-btn"
+                type="button"
+                :disabled="isDownloading || selectedCount === 0"
+                title="Deselect all frames"
+                @click="clearFrameSelection"
+              >
+                <i class="fas fa-square"></i>
+                Deselect
+              </button>
+              <button
+                class="frame-action-btn frame-action-btn--primary"
+                type="button"
+                :disabled="isDownloading || selectedCount === 0"
+                :title="selectedCount === 0 ? 'Select frames first' : `Download ${selectedCount} frame(s)`"
+                @click="handleDownloadSelected"
+              >
+                <i :class="isDownloading ? 'fas fa-spinner fa-spin' : 'fas fa-download'"></i>
+                Download{{ selectedCount > 0 ? ` (${selectedCount})` : '' }}
+              </button>
+              <button
+                class="frame-action-btn frame-action-btn--danger"
+                type="button"
+                :disabled="isDownloading || selectedCount === 0"
+                :title="selectedCount === 0 ? 'Select frames first' : `Delete ${selectedCount} frame(s)`"
+                @click="handleDeleteSelectedFrames"
+              >
+                <i class="fas fa-trash"></i>
+                Delete{{ selectedCount > 0 ? ` (${selectedCount})` : '' }}
+              </button>
+              <button
+                class="frame-action-btn"
+                type="button"
+                :disabled="isDownloading"
+                @click="exitSelectMode"
+              >
+                <i class="fas fa-times"></i>
+                Done
+              </button>
+            </template>
+          </div>
         </div>
-        <button
-          v-if="showAllPreviewFrames && hiddenPreviewCount > 0 && !isSelectMode"
-          type="button"
-          class="show-less-frames"
-          @click="showAllPreviewFrames = false"
-        >
-          Show less
-        </button>
       </div>
+
+      <ConfirmDialog
+        :show="confirmState.show"
+        :title="confirmState.title"
+        :message="confirmState.message"
+        :confirm-label="confirmState.confirmLabel"
+        :cancel-label="confirmState.cancelLabel"
+        :variant="confirmState.variant"
+        @confirm="resolveConfirm(true)"
+        @cancel="resolveConfirm(false)"
+      />
 
       <ExtractedFramePreviewModal
         :show="previewFrameIndex !== null"
@@ -490,6 +478,7 @@
         :format-timestamp="formatTimestamp"
         @close="closeFramePreview"
         @navigate="previewFrameIndex = $event"
+        @delete="handleDeletePreviewFrame"
       />
     </template>
   </div>
@@ -498,6 +487,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue';
 import { useVideoExtraction, type ExtractedFrameFile } from '../composables/useVideoExtraction';
+import ConfirmDialog from './ConfirmDialog.vue';
 import ExtractedFramePreviewModal from './ExtractedFramePreviewModal.vue';
 import VideoTrimmer from './VideoTrimmer.vue';
 import { createStreamingZip } from '../utils/export/streamingZip';
@@ -543,7 +533,6 @@ const videoRef = ref<HTMLVideoElement | null>(null);
 const isDragOver = ref(false);
 const framePreviewUrls = ref<Map<number, string>>(new Map());
 const previewFrameIndex = ref<number | null>(null);
-const showAllPreviewFrames = ref(false);
 const isPreviewingClip = ref(false);
 
 const isSelectMode = ref(false);
@@ -552,6 +541,67 @@ const isDownloading = ref(false);
 const downloadCancelled = ref(false);
 const downloadProgress = ref<{ percent: number; message: string } | null>(null);
 const isAddingToPhotos = ref(false);
+
+type ConfirmVariant = 'danger' | 'default';
+
+const confirmState = ref({
+  show: false,
+  title: '',
+  message: '',
+  confirmLabel: 'Confirm',
+  cancelLabel: 'Cancel',
+  variant: 'danger' as ConfirmVariant,
+});
+
+let confirmResolver: ((value: boolean) => void) | null = null;
+
+function askConfirm(options: {
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  variant?: ConfirmVariant;
+}): Promise<boolean> {
+  if (confirmResolver) {
+    confirmResolver(false);
+    confirmResolver = null;
+  }
+
+  confirmState.value = {
+    show: true,
+    title: options.title,
+    message: options.message,
+    confirmLabel: options.confirmLabel ?? 'Confirm',
+    cancelLabel: options.cancelLabel ?? 'Cancel',
+    variant: options.variant ?? 'danger',
+  };
+
+  return new Promise((resolve) => {
+    confirmResolver = resolve;
+  });
+}
+
+function resolveConfirm(confirmed: boolean) {
+  confirmState.value = { ...confirmState.value, show: false };
+  const resolve = confirmResolver;
+  confirmResolver = null;
+  resolve?.(confirmed);
+}
+
+// Drag-to-select (mirrors Images tab PhotoGrid behavior while in select mode)
+const framesGridRef = ref<HTMLElement | null>(null);
+const isDragSelecting = ref(false);
+const isDeselecting = ref(false);
+const dragStartArrayIndex = ref<number | null>(null);
+const draggedOverArrayIndices = ref<Set<number>>(new Set());
+const hasDragMoved = ref(false);
+const dragStartedFromTouch = ref(false);
+const dragIntent = ref<'undetermined' | 'scroll' | 'select'>('undetermined');
+const touchStartPosition = ref<{ x: number; y: number } | null>(null);
+const suppressNextFrameClick = ref(false);
+const dragSelectionCount = ref<number | null>(null);
+const autoScrollInterval = ref<number | null>(null);
+const autoScrollDirection = ref<'up' | 'down' | null>(null);
 
 const displayVideoInfo = computed(() => {
   if (videoInfo.value && videoInfo.value.duration > 0) {
@@ -564,8 +614,6 @@ const canGenerate = computed(() => {
   return Boolean(displayVideoInfo.value && estimatedFrameCount.value > 0);
 });
 
-const PREVIEW_FRAME_LIMIT = 6;
-
 const intervalPresets = [
   { label: '0.05s', value: 50 },
   { label: '0.1s', value: 100 },
@@ -577,19 +625,13 @@ const intervalPresets = [
 
 const selectedCount = computed(() => selectedFrameIndices.value.size);
 
-const previewFrames = computed(() => {
-  if (showAllPreviewFrames.value || isSelectMode.value) {
-    return extractedFrames.value;
-  }
-  return extractedFrames.value.slice(0, PREVIEW_FRAME_LIMIT);
-});
-
-const hiddenPreviewCount = computed(() => {
-  return Math.max(0, extractedFrames.value.length - PREVIEW_FRAME_LIMIT);
-});
+const displaySelectedCount = computed(() =>
+  dragSelectionCount.value !== null ? dragSelectionCount.value : selectedCount.value
+);
 
 watch(extractedFrames, () => {
   // New extraction / restore — drop stale selection
+  cleanupFrameDragSelection();
   selectedFrameIndices.value = new Set();
   if (extractedFrames.value.length === 0) {
     isSelectMode.value = false;
@@ -678,16 +720,16 @@ function closeFramePreview() {
   previewFrameIndex.value = null;
 }
 
-function stopClipPreview(): void {
+function stopClipPreview(pauseVideo = false): void {
   isPreviewingClip.value = false;
   const video = videoRef.value;
-  if (video && !video.paused) {
+  if (pauseVideo && video && !video.paused) {
     video.pause();
   }
 }
 
 function seekVideoPreview(time: number): void {
-  stopClipPreview();
+  stopClipPreview(true);
   const video = videoRef.value;
   if (!video) return;
   video.currentTime = Math.max(0, Math.min(time, video.duration || time));
@@ -698,17 +740,26 @@ async function toggleClipPreview(): Promise<void> {
   if (!video || clipDuration.value <= 0) return;
 
   if (isPreviewingClip.value) {
-    stopClipPreview();
+    // Leave clip-loop mode but keep playing from this moment in the full video.
+    stopClipPreview(false);
     return;
   }
 
   isPreviewingClip.value = true;
-  video.currentTime = trimStart.value;
+  const withinClip =
+    video.currentTime >= trimStart.value && video.currentTime < trimEnd.value - 0.05;
+  if (!withinClip) {
+    video.currentTime = trimStart.value;
+  }
   try {
     await video.play();
   } catch {
-    stopClipPreview();
+    stopClipPreview(true);
   }
+}
+
+function onVideoPlay(): void {
+  // Native controls can start playback; that is not clip-preview looping.
 }
 
 function onVideoTimeUpdate(): void {
@@ -722,19 +773,22 @@ function onVideoTimeUpdate(): void {
   }
 }
 
-function clearVideoPage() {
+async function clearVideoPage() {
   if (isExtracting.value || isExportingTrim.value || isDownloading.value || isAddingToPhotos.value) {
     return;
   }
-  const confirmed = window.confirm(
-    'Clear the entire video page? This removes the video, all extracted frames, and the saved video session. Photos are not affected.'
-  );
+  const confirmed = await askConfirm({
+    title: 'Clear video page?',
+    message:
+      'This removes the video, all extracted frames, and the saved video session. Photos are not affected.',
+    confirmLabel: 'Clear page',
+    variant: 'danger',
+  });
   if (!confirmed) return;
 
   stopClipPreview();
   closeFramePreview();
   clearFramePreviewUrls();
-  showAllPreviewFrames.value = false;
   exitSelectMode();
   void reset();
 }
@@ -749,15 +803,23 @@ function revokeFramePreviewUrls(indices: Iterable<number>): void {
   }
 }
 
-function handleDeleteSelectedFrames(): void {
+async function handleDeleteSelectedFrames() {
   if (isDownloading.value || selectedCount.value === 0) return;
-  const confirmed = window.confirm(
-    `Delete ${selectedCount.value} selected frame(s)? This cannot be undone.`
-  );
+  const count = selectedCount.value;
+  const confirmed = await askConfirm({
+    title: `Delete ${count} selected frame${count === 1 ? '' : 's'}?`,
+    message: 'This cannot be undone.',
+    confirmLabel: 'Delete',
+    variant: 'danger',
+  });
   if (!confirmed) return;
 
   const indices = [...selectedFrameIndices.value];
-  if (previewFrameIndex.value !== null && indices.includes(previewFrameIndex.value)) {
+  const previewFrame =
+    previewFrameIndex.value !== null
+      ? extractedFrames.value[previewFrameIndex.value]
+      : undefined;
+  if (previewFrame && indices.includes(previewFrame.index)) {
     closeFramePreview();
   }
   revokeFramePreviewUrls(indices);
@@ -765,24 +827,58 @@ function handleDeleteSelectedFrames(): void {
   clearFrameSelection();
   if (extractedFrames.value.length === 0) {
     exitSelectMode();
-    showAllPreviewFrames.value = false;
   }
 }
 
-function handleDeleteAllFrames(): void {
+async function handleDeletePreviewFrame() {
+  if (isDownloading.value || previewFrameIndex.value === null) return;
+  const arrayIdx = previewFrameIndex.value;
+  const frame = extractedFrames.value[arrayIdx];
+  if (!frame) return;
+
+  const confirmed = await askConfirm({
+    title: 'Delete this frame?',
+    message: 'This cannot be undone.',
+    confirmLabel: 'Delete',
+    variant: 'danger',
+  });
+  if (!confirmed) return;
+
+  const frameId = frame.index;
+  revokeFramePreviewUrls([frameId]);
+  if (selectedFrameIndices.value.has(frameId)) {
+    const next = new Set(selectedFrameIndices.value);
+    next.delete(frameId);
+    selectedFrameIndices.value = next;
+  }
+  removeFramesByIndices([frameId]);
+
+  if (extractedFrames.value.length === 0) {
+    closeFramePreview();
+    exitSelectMode();
+    return;
+  }
+
+  previewFrameIndex.value = Math.min(arrayIdx, extractedFrames.value.length - 1);
+}
+
+async function handleDeleteAllFrames() {
   if (isDownloading.value || isAddingToPhotos.value || extractedFrames.value.length === 0) {
     return;
   }
-  const confirmed = window.confirm(
-    `Delete all ${extractedFrames.value.length} extracted frame(s)? The video stays loaded. This cannot be undone.`
-  );
+  const count = extractedFrames.value.length;
+  const confirmed = await askConfirm({
+    title: `Delete all ${count} extracted frame${count === 1 ? '' : 's'}?`,
+    message: 'The video stays loaded. This cannot be undone.',
+    confirmLabel: 'Delete all',
+    variant: 'danger',
+  });
   if (!confirmed) return;
 
   closeFramePreview();
   clearFramePreviewUrls();
   clearExtractedFrames();
   exitSelectMode();
-  showAllPreviewFrames.value = false;
 }
 
 async function handleDownloadTrim(): Promise<void> {
@@ -794,7 +890,6 @@ async function handleExtract() {
   stopClipPreview();
   closeFramePreview();
   clearFramePreviewUrls();
-  showAllPreviewFrames.value = false;
 
   await startExtraction();
 }
@@ -826,20 +921,303 @@ function getPhaseLabel(phase: string): string {
 }
 
 function handleFrameClick(index: number) {
+  if (suppressNextFrameClick.value) {
+    suppressNextFrameClick.value = false;
+    return;
+  }
   if (isSelectMode.value) {
     toggleFrameSelection(index);
     return;
   }
-  openFramePreview(index);
+  const arrayIdx = extractedFrames.value.findIndex((frame) => frame.index === index);
+  if (arrayIdx >= 0) {
+    openFramePreview(arrayIdx);
+  }
+}
+
+function getFrameArrayIndexFromElement(element: Element | null): number | null {
+  if (!element) return null;
+  const frameEl = element.closest('.preview-frame');
+  if (!frameEl) return null;
+  const indexAttr = frameEl.getAttribute('data-frame-array-index');
+  if (indexAttr === null) return null;
+  const index = parseInt(indexAttr, 10);
+  return Number.isNaN(index) ? null : index;
+}
+
+function stopFrameAutoScroll() {
+  if (autoScrollInterval.value !== null) {
+    clearInterval(autoScrollInterval.value);
+    autoScrollInterval.value = null;
+  }
+  autoScrollDirection.value = null;
+}
+
+function startFrameAutoScroll(direction: 'up' | 'down') {
+  if (autoScrollDirection.value === direction) return;
+  stopFrameAutoScroll();
+  autoScrollDirection.value = direction;
+  autoScrollInterval.value = window.setInterval(() => {
+    const grid = framesGridRef.value;
+    if (!grid) return;
+    grid.scrollTop += direction === 'down' ? 20 : -20;
+  }, 16);
+}
+
+function updateDragSelectionCount() {
+  const selected = selectedFrameIndices.value;
+  const dragged = draggedOverArrayIndices.value;
+  if (isDeselecting.value) {
+    let removing = 0;
+    for (const arrayIdx of dragged) {
+      const frame = extractedFrames.value[arrayIdx];
+      if (frame && selected.has(frame.index)) removing += 1;
+    }
+    dragSelectionCount.value = Math.max(0, selected.size - removing);
+  } else {
+    let adding = 0;
+    for (const arrayIdx of dragged) {
+      const frame = extractedFrames.value[arrayIdx];
+      if (frame && !selected.has(frame.index)) adding += 1;
+    }
+    dragSelectionCount.value = selected.size + adding;
+  }
+}
+
+function handleFrameDragStart(arrayIdx: number, event: MouseEvent | TouchEvent) {
+  if (!isSelectMode.value) return;
+  if (isDownloading.value) return;
+
+  hasDragMoved.value = false;
+  dragStartedFromTouch.value = event.type === 'touchstart';
+  isDragSelecting.value = true;
+  dragStartArrayIndex.value = arrayIdx;
+  draggedOverArrayIndices.value = new Set([arrayIdx]);
+  dragIntent.value = 'undetermined';
+
+  const frame = extractedFrames.value[arrayIdx];
+  isDeselecting.value = frame ? selectedFrameIndices.value.has(frame.index) : false;
+
+  if ('touches' in event && event.touches.length > 0) {
+    touchStartPosition.value = {
+      x: event.touches[0].clientX,
+      y: event.touches[0].clientY,
+    };
+  } else {
+    const mouseEvent = event as MouseEvent;
+    touchStartPosition.value = { x: mouseEvent.clientX, y: mouseEvent.clientY };
+  }
+
+  updateDragSelectionCount();
+  document.body.classList.add('drag-selecting');
+
+  if (event.type === 'mousedown') {
+    document.addEventListener('mousemove', handleFrameDragMove);
+    document.addEventListener('mouseup', handleFrameDragEnd);
+  } else if (event.type === 'touchstart') {
+    document.addEventListener('touchmove', handleFrameDragMove, { passive: false });
+    document.addEventListener('touchend', handleFrameDragEnd, { passive: true });
+    document.addEventListener('touchcancel', handleFrameDragEnd, { passive: true });
+  }
+}
+
+function handleFrameDragMove(event: MouseEvent | TouchEvent) {
+  if (!isDragSelecting.value) return;
+
+  if ('touches' in event && event.touches.length === 2) {
+    return;
+  }
+
+  let clientX: number;
+  let clientY: number;
+
+  if ('touches' in event && event.touches.length > 0) {
+    clientX = event.touches[0].clientX;
+    clientY = event.touches[0].clientY;
+  } else if ('clientX' in event) {
+    clientX = event.clientX;
+    clientY = event.clientY;
+    event.preventDefault();
+  } else {
+    return;
+  }
+
+  if (
+    'touches' in event &&
+    dragIntent.value === 'undetermined' &&
+    touchStartPosition.value
+  ) {
+    const deltaX = Math.abs(clientX - touchStartPosition.value.x);
+    const deltaY = Math.abs(clientY - touchStartPosition.value.y);
+    const threshold = 10;
+    if (deltaX > threshold || deltaY > threshold) {
+      dragIntent.value = deltaX >= deltaY ? 'select' : 'scroll';
+    }
+  }
+
+  const grid = framesGridRef.value;
+  const edgeThreshold = 48;
+
+  if ('touches' in event && dragIntent.value === 'scroll') {
+    if (grid) {
+      const rect = grid.getBoundingClientRect();
+      if (clientY >= rect.bottom - edgeThreshold) {
+        startFrameAutoScroll('down');
+      } else if (clientY <= rect.top + edgeThreshold) {
+        startFrameAutoScroll('up');
+      } else {
+        stopFrameAutoScroll();
+      }
+    }
+    return;
+  }
+
+  if ('touches' in event && dragIntent.value === 'undetermined') {
+    return;
+  }
+
+  hasDragMoved.value = true;
+
+  const checkPoints = [
+    { x: clientX, y: clientY },
+    { x: clientX - 12, y: clientY },
+    { x: clientX + 12, y: clientY },
+    { x: clientX, y: clientY - 12 },
+    { x: clientX, y: clientY + 12 },
+  ];
+
+  const foundIndices = new Set<number>();
+  let primaryIndex: number | null = null;
+
+  for (const point of checkPoints) {
+    const element = document.elementFromPoint(point.x, point.y);
+    const index = getFrameArrayIndexFromElement(element);
+    if (index !== null) {
+      if (primaryIndex === null) primaryIndex = index;
+      foundIndices.add(index);
+    }
+  }
+
+  if (primaryIndex !== null && dragStartArrayIndex.value !== null) {
+    const start = Math.min(dragStartArrayIndex.value, primaryIndex);
+    const end = Math.max(dragStartArrayIndex.value, primaryIndex);
+    for (let i = start; i <= end; i += 1) {
+      foundIndices.add(i);
+    }
+  }
+
+  if (foundIndices.size > 0) {
+    draggedOverArrayIndices.value = new Set([
+      ...draggedOverArrayIndices.value,
+      ...foundIndices,
+    ]);
+    updateDragSelectionCount();
+  }
+
+  if ('touches' in event && dragIntent.value === 'select') {
+    if (foundIndices.size > 0) {
+      event.preventDefault();
+    }
+    if (grid) {
+      const rect = grid.getBoundingClientRect();
+      if (clientY >= rect.bottom - edgeThreshold) {
+        startFrameAutoScroll('down');
+      } else if (clientY <= rect.top + edgeThreshold) {
+        startFrameAutoScroll('up');
+      } else {
+        stopFrameAutoScroll();
+      }
+    }
+  } else if (!('touches' in event) && grid) {
+    const rect = grid.getBoundingClientRect();
+    if (clientY >= rect.bottom - edgeThreshold) {
+      startFrameAutoScroll('down');
+    } else if (clientY <= rect.top + edgeThreshold) {
+      startFrameAutoScroll('up');
+    } else {
+      stopFrameAutoScroll();
+    }
+  }
+}
+
+function cleanupFrameDragSelection() {
+  isDragSelecting.value = false;
+  isDeselecting.value = false;
+  dragStartArrayIndex.value = null;
+  draggedOverArrayIndices.value = new Set();
+  dragIntent.value = 'undetermined';
+  touchStartPosition.value = null;
+  hasDragMoved.value = false;
+  dragStartedFromTouch.value = false;
+  dragSelectionCount.value = null;
+  suppressNextFrameClick.value = false;
+  stopFrameAutoScroll();
+  document.body.classList.remove('drag-selecting');
+  document.removeEventListener('mousemove', handleFrameDragMove);
+  document.removeEventListener('mouseup', handleFrameDragEnd);
+  document.removeEventListener('touchmove', handleFrameDragMove);
+  document.removeEventListener('touchend', handleFrameDragEnd);
+  document.removeEventListener('touchcancel', handleFrameDragEnd);
+}
+
+function handleFrameDragEnd() {
+  if (!isDragSelecting.value) return;
+
+  const arrayIndices = Array.from(draggedOverArrayIndices.value).sort((a, b) => a - b);
+  const performedDragSelection =
+    hasDragMoved.value || draggedOverArrayIndices.value.size > 1;
+  const startedFromTouch = dragStartedFromTouch.value;
+  const intent = dragIntent.value;
+  const startIdx = dragStartArrayIndex.value;
+  const deselecting = isDeselecting.value;
+
+  cleanupFrameDragSelection();
+
+  if (performedDragSelection && arrayIndices.length > 0) {
+    suppressNextFrameClick.value = true;
+    const next = new Set(selectedFrameIndices.value);
+    for (const arrayIdx of arrayIndices) {
+      const frame = extractedFrames.value[arrayIdx];
+      if (!frame) continue;
+      if (deselecting) {
+        next.delete(frame.index);
+      } else {
+        next.add(frame.index);
+      }
+    }
+    selectedFrameIndices.value = next;
+  } else if (
+    !performedDragSelection &&
+    startedFromTouch &&
+    intent !== 'scroll'
+  ) {
+    if (startIdx !== null) {
+      const frame = extractedFrames.value[startIdx];
+      if (frame) {
+        suppressNextFrameClick.value = true;
+        toggleFrameSelection(frame.index);
+      }
+    }
+  }
+}
+
+function handleFrameMouseDown(arrayIdx: number, event: MouseEvent) {
+  if (!isSelectMode.value || event.button !== 0) return;
+  handleFrameDragStart(arrayIdx, event);
+}
+
+function handleFrameTouchStart(arrayIdx: number, event: TouchEvent) {
+  if (!isSelectMode.value || event.touches.length !== 1) return;
+  handleFrameDragStart(arrayIdx, event);
 }
 
 function enterSelectMode() {
   isSelectMode.value = true;
-  showAllPreviewFrames.value = true;
   closeFramePreview();
 }
 
 function exitSelectMode() {
+  cleanupFrameDragSelection();
   isSelectMode.value = false;
   selectedFrameIndices.value = new Set();
 }
@@ -1022,7 +1400,7 @@ async function handleAddToGrid() {
     error.value =
       err instanceof Error
         ? err.message
-        : 'Failed to add frames to Photos. Your extracted frames are still here.';
+        : 'Failed to add frames to Images. Your extracted frames are still here.';
   } finally {
     await finishPhotoImport();
     isAddingToPhotos.value = false;
@@ -1034,7 +1412,6 @@ async function onVideoSessionExpiredExternally(): Promise<void> {
   stopClipPreview();
   closeFramePreview();
   clearFramePreviewUrls();
-  showAllPreviewFrames.value = false;
   exitSelectMode();
   await reset();
   error.value =
@@ -1064,6 +1441,10 @@ onUnmounted(() => {
     clearTimeout(metadataRetryTimer);
     metadataRetryTimer = null;
   }
+  cleanupFrameDragSelection();
+  if (confirmResolver) {
+    resolveConfirm(false);
+  }
   closeFramePreview();
   clearFramePreviewUrls();
 });
@@ -1084,14 +1465,7 @@ onUnmounted(() => {
 .video-extractor-header {
   margin-top: 28px;
   margin-bottom: 8px;
-}
-
-.video-extractor-header-row {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 16px;
-  flex-wrap: wrap;
+  text-align: center;
 }
 
 .video-extractor-subtitle {
@@ -1244,18 +1618,21 @@ onUnmounted(() => {
 
 .video-info-overlay {
   position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  padding: 20px;
-  background: linear-gradient(transparent, rgba(0, 0, 0, 0.8));
+  top: 20px;
+  left: 20px;
+  right: 20px;
+  z-index: 2;
+  padding: 8px 44px 8px 12px;
+  pointer-events: none;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.72), transparent);
+  border-radius: 8px 8px 0 0;
 }
 
 .video-name {
-  font-size: 1rem;
+  font-size: 0.9rem;
   font-weight: 500;
   color: #fff;
-  margin-bottom: 12px;
+  margin-bottom: 2px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1263,26 +1640,30 @@ onUnmounted(() => {
 
 .video-meta {
   display: flex;
-  gap: 20px;
+  gap: 12px;
 }
 
 .meta-item {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 0.85rem;
-  color: rgba(255, 255, 255, 0.7);
+  gap: 5px;
+  font-size: 0.68rem;
+  font-style: italic;
+  font-weight: 400;
+  line-height: 1.2;
+  color: rgba(255, 255, 255, 0.55);
 }
 
 .meta-item i {
-  font-size: 0.8rem;
+  font-size: 0.62rem;
   opacity: 0.7;
 }
 
 .clear-video-btn {
   position: absolute;
-  top: 12px;
-  right: 12px;
+  top: 28px;
+  right: 28px;
+  z-index: 3;
   width: 32px;
   height: 32px;
   border-radius: 50%;
@@ -1538,11 +1919,6 @@ onUnmounted(() => {
   transform: translateY(0);
 }
 
-.hw-hint {
-  opacity: 0.7;
-  font-size: 0.85em;
-}
-
 .batch-hint {
   margin-left: 4px;
   color: rgba(255, 255, 255, 0.5);
@@ -1664,12 +2040,6 @@ onUnmounted(() => {
   color: rgba(255, 255, 255, 0.6);
 }
 
-.progress-frames {
-  margin-top: 10px;
-  font-size: 0.85rem;
-  color: rgba(255, 255, 255, 0.5);
-}
-
 /* Error Message */
 .error-message {
   display: flex;
@@ -1768,11 +2138,8 @@ onUnmounted(() => {
 
 .extracted-header {
   display: flex;
-  justify-content: space-between;
   align-items: center;
   margin-bottom: 24px;
-  flex-wrap: wrap;
-  gap: 16px;
 }
 
 .extracted-header h3 {
@@ -1790,11 +2157,29 @@ onUnmounted(() => {
   font-weight: 500;
 }
 
-.extracted-actions {
+.extracted-body {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.extracted-body .frames-preview-grid {
+  flex: 1;
+  min-width: 0;
+}
+
+.extracted-side-actions {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: min(200px, 100%);
+}
+
+.extracted-side-actions .frame-action-btn,
+.extracted-side-actions .add-to-grid-btn {
+  width: 100%;
+  justify-content: center;
 }
 
 .frame-action-btn {
@@ -1934,6 +2319,15 @@ onUnmounted(() => {
   cursor: pointer;
 }
 
+.frames-preview-grid--drag-selecting {
+  touch-action: none;
+  user-select: none;
+}
+
+.frames-preview-grid--drag-selecting .preview-frame {
+  cursor: grabbing;
+}
+
 .frames-preview-grid--expanded::-webkit-scrollbar {
   width: 8px;
 }
@@ -1941,30 +2335,6 @@ onUnmounted(() => {
 .frames-preview-grid--expanded::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.15);
   border-radius: 4px;
-}
-
-.show-less-frames {
-  display: block;
-  width: 100%;
-  margin-top: 12px;
-  padding: 8px 16px;
-  border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(255, 255, 255, 0.04);
-  color: rgba(255, 255, 255, 0.65);
-  font-size: 0.85rem;
-  cursor: pointer;
-  transition: background 0.2s ease, color 0.2s ease;
-}
-
-.show-less-frames:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: rgba(255, 255, 255, 0.9);
-}
-
-.show-less-frames:focus-visible {
-  outline: 2px solid rgba(212, 175, 55, 0.8);
-  outline-offset: 2px;
 }
 
 .preview-frame {
@@ -1995,6 +2365,20 @@ onUnmounted(() => {
 
 .preview-frame--selected img {
   opacity: 0.92;
+}
+
+.preview-frame--dragging-over {
+  box-shadow:
+    0 0 0 2px rgba(255, 255, 255, 0.85),
+    0 0 0 4px rgba(212, 175, 55, 0.35),
+    0 6px 20px rgba(0, 0, 0, 0.35);
+}
+
+.preview-frame--dragging-over.preview-frame--selected {
+  box-shadow:
+    0 0 0 2px rgba(255, 255, 255, 0.9),
+    0 0 0 5px rgba(212, 175, 55, 0.55),
+    0 6px 20px rgba(0, 0, 0, 0.35);
 }
 
 .frame-check {
@@ -2039,31 +2423,6 @@ onUnmounted(() => {
   color: rgba(255, 255, 255, 0.9);
 }
 
-.more-frames {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  aspect-ratio: 16/9;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px dashed rgba(255, 255, 255, 0.2);
-  color: rgba(255, 255, 255, 0.6);
-  font-size: 0.9rem;
-  cursor: pointer;
-  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
-}
-
-.more-frames:hover {
-  background: rgba(212, 175, 55, 0.12);
-  border-color: rgba(212, 175, 55, 0.35);
-  color: rgba(255, 255, 255, 0.85);
-}
-
-.more-frames:focus-visible {
-  outline: 2px solid rgba(212, 175, 55, 0.8);
-  outline-offset: 2px;
-}
-
 /* Responsive */
 @media (max-width: 768px) {
   .video-extractor {
@@ -2087,14 +2446,12 @@ onUnmounted(() => {
     justify-content: center;
   }
 
-  .extracted-header {
+  .extracted-body {
     flex-direction: column;
-    align-items: stretch;
   }
 
-  .extracted-actions {
-    flex-direction: column;
-    align-items: stretch;
+  .extracted-side-actions {
+    width: 100%;
   }
 
   .frame-action-btn,

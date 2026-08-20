@@ -9,22 +9,31 @@
         class="frame-preview-modal"
         role="dialog"
         aria-modal="true"
-        :aria-label="`Frame ${currentIndex + 1} of ${frames.length}`"
+        :aria-label="`Extracted frame at ${formatTimestamp(currentFrame.timestamp)}`"
         @click.stop
       >
         <header class="frame-preview-header">
           <div class="frame-preview-title">
-            <span class="frame-index">Frame {{ currentIndex + 1 }} of {{ frames.length }}</span>
             <span class="frame-timestamp">{{ formatTimestamp(currentFrame.timestamp) }}</span>
           </div>
-          <button
-            type="button"
-            class="frame-preview-close"
-            aria-label="Close preview"
-            @click="$emit('close')"
-          >
-            <i class="fas fa-times"></i>
-          </button>
+          <div class="frame-preview-header-actions">
+            <button
+              type="button"
+              class="frame-preview-delete"
+              aria-label="Delete this frame"
+              @click="$emit('delete')"
+            >
+              <i class="fas fa-trash"></i>
+            </button>
+            <button
+              type="button"
+              class="frame-preview-close"
+              aria-label="Close preview"
+              @click="$emit('close')"
+            >
+              <i class="fas fa-times"></i>
+            </button>
+          </div>
         </header>
 
         <div class="frame-preview-body">
@@ -86,6 +95,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'close'): void;
   (e: 'navigate', index: number): void;
+  (e: 'delete'): void;
 }>();
 
 const currentFrame = computed(() => props.frames[props.currentIndex] ?? props.frames[0]);
@@ -210,18 +220,21 @@ onUnmounted(() => {
   gap: 4px;
 }
 
-.frame-index {
+.frame-timestamp {
   font-size: 1rem;
   font-weight: 600;
   color: rgba(255, 255, 255, 0.95);
-}
-
-.frame-timestamp {
-  font-size: 0.85rem;
-  color: rgba(255, 255, 255, 0.55);
   font-variant-numeric: tabular-nums;
 }
 
+.frame-preview-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.frame-preview-delete,
 .frame-preview-close {
   width: 40px;
   height: 40px;
@@ -233,12 +246,18 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.2s ease, border-color 0.2s ease;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.frame-preview-delete:hover {
+  background: rgba(239, 68, 68, 0.3);
+  border-color: rgba(239, 68, 68, 0.55);
+  color: #fca5a5;
 }
 
 .frame-preview-close:hover {
-  background: rgba(239, 68, 68, 0.25);
-  border-color: rgba(239, 68, 68, 0.5);
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.28);
 }
 
 .frame-preview-body {

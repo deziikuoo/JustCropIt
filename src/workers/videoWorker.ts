@@ -528,7 +528,7 @@ async function extractFrames(
           currentFrame: framesSent,
           totalFrames,
           percent: 5 + Math.round((framesSent / totalFrames) * 90),
-          message: `Extracted frame ${framesSent} of ${totalFrames}...`,
+          message: `Extracted frames ${framesSent} of ${totalFrames}`,
         });
       }
     }

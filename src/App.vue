@@ -106,7 +106,7 @@
             @click="appMode = 'photos'"
           >
             <i class="fas fa-images"></i>
-            <span>Photos</span>
+            <span>Images</span>
           </button>
           <button 
             class="mode-tab" 

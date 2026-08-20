@@ -6,7 +6,7 @@
  * frame streaming, clip trimming, and session persistence.
  */
 
-import { ref, computed, watch, onUnmounted } from 'vue';
+import { ref, computed, watch, onUnmounted, nextTick } from 'vue';
 import { videoWorkerPool } from '../utils/videoWorkerPool';
 import {
   saveVideoSession,
@@ -307,19 +307,25 @@ export function useVideoExtraction() {
       sessionExpiresAt.value = session.expiresAt;
       scheduleExpiryTimer();
 
-      const file = new File([session.video], session.videoName, {
-        type: session.videoType || 'video/mp4',
-      });
-      videoFile.value = file;
-
+      // Restore frames before videoFile so a deferred videoFile watcher cannot
+      // clear them after we drop isRestoringSession.
       extractedFrames.value = session.extractedFrames.map((frame) => ({
         file: new File([frame.blob], frame.fileName, { type: frame.mimeType }),
         timestamp: frame.timestamp,
         index: frame.index,
       }));
 
+      const file = new File([session.video], session.videoName, {
+        type: session.videoType || 'video/mp4',
+      });
+      videoFile.value = file;
+
       error.value = null;
       progress.value = null;
+
+      // videoFile watch is flush:'pre' and may run after this async turn;
+      // keep the restoring flag until after that flush.
+      await nextTick();
       return true;
     } catch (err) {
       console.warn('Failed to restore video session:', err);
@@ -459,7 +465,7 @@ export function useVideoExtraction() {
           currentFrame: result.framesExtracted,
           totalFrames: result.framesExtracted,
           percent: 100,
-          message: `Extracted ${result.framesExtracted} frames`,
+          message: 'Extracted',
         };
       }
 
@@ -628,6 +634,8 @@ export function useVideoExtraction() {
     if (persistTimer) {
       clearTimeout(persistTimer);
       persistTimer = null;
+      // Flush pending save so refresh / remount does not drop frames.
+      void persistSession();
     }
     clearExpiryTimer();
     stopEtaTimer();
