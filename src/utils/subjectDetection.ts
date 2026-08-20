@@ -5,6 +5,7 @@
 import { DETECTION_INPUT_MAX_EDGE_PX } from '../constants/optimization';
 import type {
   BoundingBox,
+  CropTarget,
   DetectionStageTimings,
   DownscaledImagePayload,
   PortraitDebugOverlay,
@@ -86,7 +87,8 @@ export interface DetectSubjectResult {
 
 export async function detectSubject(
   file: File,
-  _photoId: string
+  _photoId: string,
+  target: CropTarget
 ): Promise<DetectSubjectResult> {
   const timings: DetectionStageTimings = {};
 
@@ -108,7 +110,7 @@ export async function detectSubject(
       colorSpaceConversion: 'none',
     });
 
-    const portraitResult = await detectPortraitInBitmap(inferenceBitmap);
+    const portraitResult = await detectPortraitInBitmap(inferenceBitmap, target);
 
     timings.loadModelMs = portraitResult.loadModelMs;
     timings.inferenceMs = portraitResult.inferenceMs;

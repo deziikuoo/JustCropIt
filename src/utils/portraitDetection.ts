@@ -1,53 +1,33 @@
 /**
  * Portrait detection — pose + face landmarks with face-detector fallback.
+ * Honors CropTarget so users pick full body, upper/lower body, head & shoulders, or head.
  */
 
 import type {
   BoundingBox,
+  CropTarget,
   PortraitDetectionMethod,
-  ImageDimensions,
   PortraitDebugOverlay,
 } from '../types/detection';
 import { detectFaceInBitmap } from './faceDetectorSession';
 import { detectFaceLandmarksInBitmap } from './faceLandmarkerSession';
 import { detectPoseInBitmap } from './poseLandmarkerSession';
+import { faceBboxToHeadNeckBbox } from './cropSuggestion';
 import {
+  buildFullBodyBboxFromPose,
+  buildFullHeadBboxFromLandmarks,
+  buildHeadAndShouldersBboxFromPose,
+  buildLowerBodyBboxFromPose,
   buildPortraitBboxFromFaceDetector,
   buildPortraitBboxFromFaceLandmarks,
-  buildPortraitBboxFromPose,
-  buildPortraitBboxFromPoseAndFace,
   buildPortraitDebugOverlay,
+  buildUpperBodyBboxFromPose,
   canUseFaceLandmarks,
+  canUseLowerBodyPose,
   canUsePoseLandmarks,
   resolveHorizontalMeta,
 } from './portraitCropBuilder';
-
-/** Safety clamp for face-detector fallback when no dense landmarks exist. */
-function clampWidthToFaceBbox(
-  bbox: BoundingBox,
-  faceBbox: BoundingBox,
-  imageSize: ImageDimensions
-): BoundingBox {
-  const maxWidth = faceBbox.width * 1.35;
-  if (bbox.width <= maxWidth) return bbox;
-
-  const cx = bbox.x + bbox.width / 2;
-  let left = cx - maxWidth / 2;
-  let right = cx + maxWidth / 2;
-
-  if (left < 0) {
-    right -= left;
-    left = 0;
-  }
-  if (right > imageSize.width) {
-    const overflow = right - imageSize.width;
-    left -= overflow;
-    right = imageSize.width;
-    if (left < 0) left = 0;
-  }
-
-  return { x: left, y: bbox.y, width: right - left, height: bbox.height };
-}
+import type { NormalizedLandmark } from '@mediapipe/tasks-vision';
 
 export interface PortraitDetectResult {
   bbox: BoundingBox | null;
@@ -60,28 +40,96 @@ export interface PortraitDetectResult {
   debug?: PortraitDebugOverlay | null;
 }
 
+interface LandmarkBundle {
+  poseLandmarks: NormalizedLandmark[] | null;
+  faceLandmarks: NormalizedLandmark[] | null;
+  poseInferenceMs: number;
+  faceLandmarkInferenceMs: number;
+  loadModelMs: number;
+}
+
+async function loadLandmarks(
+  bitmap: ImageBitmap,
+  needPose: boolean,
+  needFaceLandmarks: boolean
+): Promise<LandmarkBundle> {
+  let poseInferenceMs = 0;
+  let faceLandmarkInferenceMs = 0;
+  let poseLandmarks: NormalizedLandmark[] | null = null;
+  let faceLandmarks: NormalizedLandmark[] | null = null;
+  let loadModelMs = 0;
+
+  const posePromise = needPose
+    ? detectPoseInBitmap(bitmap)
+    : Promise.resolve(null);
+  const facePromise = needFaceLandmarks
+    ? detectFaceLandmarksInBitmap(bitmap)
+    : Promise.resolve(null);
+
+  const [poseResult, faceLandmarkResult] = await Promise.all([
+    posePromise,
+    facePromise,
+  ]);
+
+  if (poseResult) {
+    loadModelMs += poseResult.loadModelMs;
+    poseInferenceMs = poseResult.inferenceMs;
+    poseLandmarks = poseResult.landmarks;
+  }
+  if (faceLandmarkResult) {
+    loadModelMs += faceLandmarkResult.loadModelMs;
+    faceLandmarkInferenceMs = faceLandmarkResult.inferenceMs;
+    faceLandmarks = faceLandmarkResult.landmarks;
+  }
+
+  return {
+    poseLandmarks,
+    faceLandmarks,
+    poseInferenceMs,
+    faceLandmarkInferenceMs,
+    loadModelMs,
+  };
+}
+
+function emptyResult(
+  inferenceStart: number,
+  loadModelMs: number,
+  extras: Partial<PortraitDetectResult> = {}
+): PortraitDetectResult {
+  return {
+    bbox: null,
+    method: null,
+    inferenceMs: performance.now() - inferenceStart,
+    loadModelMs,
+    ...extras,
+  };
+}
+
 export async function detectPortraitInBitmap(
-  bitmap: ImageBitmap
+  bitmap: ImageBitmap,
+  target: CropTarget
 ): Promise<PortraitDetectResult> {
   try {
     const width = bitmap.width;
     const height = bitmap.height;
     const imageSize = { width, height };
-
     const inferenceStart = performance.now();
-    let loadModelMs = 0;
 
-    const [poseResult, faceLandmarkResult] = await Promise.all([
-      detectPoseInBitmap(bitmap),
-      detectFaceLandmarksInBitmap(bitmap),
-    ]);
+    const needPose = true;
+    const needFaceLandmarks =
+      target === 'head' ||
+      target === 'head-shoulders' ||
+      target === 'upper-body' ||
+      target === 'full-body';
 
-    loadModelMs = poseResult.loadModelMs + faceLandmarkResult.loadModelMs;
-    const poseInferenceMs = poseResult.inferenceMs;
-    const faceLandmarkInferenceMs = faceLandmarkResult.inferenceMs;
-
-    const poseLandmarks = poseResult.landmarks;
-    const faceLandmarks = faceLandmarkResult.landmarks;
+    const landmarks = await loadLandmarks(bitmap, needPose, needFaceLandmarks);
+    let { loadModelMs } = landmarks;
+    const {
+      poseLandmarks,
+      faceLandmarks,
+      poseInferenceMs,
+      faceLandmarkInferenceMs,
+    } = landmarks;
 
     const buildDebug = (bbox: BoundingBox | null): PortraitDebugOverlay =>
       buildPortraitDebugOverlay(
@@ -92,111 +140,154 @@ export async function detectPortraitInBitmap(
         resolveHorizontalMeta(imageSize, poseLandmarks, faceLandmarks)
       );
 
-    if (
-      canUsePoseLandmarks(poseLandmarks) &&
-      canUseFaceLandmarks(faceLandmarks) &&
-      poseLandmarks &&
-      faceLandmarks
-    ) {
-      const bbox = buildPortraitBboxFromPoseAndFace(
-        imageSize,
-        poseLandmarks,
-        faceLandmarks
-      );
-      if (bbox) {
-        return {
-          bbox,
-          method: 'pose+face',
-          inferenceMs: performance.now() - inferenceStart,
-          loadModelMs,
-          poseInferenceMs,
-          faceLandmarkInferenceMs,
-          debug: buildDebug(bbox),
-        };
-      }
-    }
+    const timingBase = {
+      poseInferenceMs: needPose ? poseInferenceMs : undefined,
+      faceLandmarkInferenceMs: needFaceLandmarks
+        ? faceLandmarkInferenceMs
+        : undefined,
+    };
 
-    if (canUsePoseLandmarks(poseLandmarks) && poseLandmarks) {
-      const bbox = buildPortraitBboxFromPose(
-        imageSize,
-        poseLandmarks,
-        faceLandmarks ?? undefined
-      );
-      if (bbox) {
-        return {
-          bbox,
-          method: 'pose',
-          inferenceMs: performance.now() - inferenceStart,
-          loadModelMs,
-          poseInferenceMs,
-          faceLandmarkInferenceMs,
-          debug: buildDebug(bbox),
-        };
-      }
-    }
-
-    if (canUseFaceLandmarks(faceLandmarks) && faceLandmarks) {
-      const bbox = buildPortraitBboxFromFaceLandmarks(imageSize, faceLandmarks);
-      if (bbox) {
-        return {
-          bbox,
-          method: 'face-landmark',
-          inferenceMs: performance.now() - inferenceStart,
-          loadModelMs,
-          poseInferenceMs,
-          faceLandmarkInferenceMs,
-          debug: buildDebug(bbox),
-        };
-      }
-    }
-
-    const faceDetectResult = await detectFaceInBitmap(bitmap, {
-      closeBitmap: false,
-    });
-    const faceDetectorInferenceMs = faceDetectResult.inferenceMs;
-    loadModelMs += faceDetectResult.loadModelMs;
-
-    if (!faceDetectResult.bbox) {
-      return {
-        bbox: null,
-        method: null,
-        inferenceMs: performance.now() - inferenceStart,
-        loadModelMs,
-        poseInferenceMs,
-        faceLandmarkInferenceMs,
-        faceDetectorInferenceMs,
-        debug: buildPortraitDebugOverlay(
-          imageSize,
-          poseLandmarks,
-          faceLandmarks,
-          null,
-          null
-        ),
-      };
-    }
-
-    const bbox = clampWidthToFaceBbox(
-      buildPortraitBboxFromFaceDetector(faceDetectResult.bbox),
-      faceDetectResult.bbox,
-      imageSize
-    );
-
-    return {
+    const done = (
+      bbox: BoundingBox | null,
+      method: PortraitDetectionMethod | null,
+      extra: Partial<PortraitDetectResult> = {}
+    ): PortraitDetectResult => ({
       bbox,
-      method: 'face-detector',
+      method,
       inferenceMs: performance.now() - inferenceStart,
       loadModelMs,
-      poseInferenceMs,
-      faceLandmarkInferenceMs,
-      faceDetectorInferenceMs,
-      debug: buildPortraitDebugOverlay(
+      ...timingBase,
+      debug: bbox ? buildDebug(bbox) : buildDebug(null),
+      ...extra,
+    });
+
+    if (target === 'head') {
+      const headBox = buildFullHeadBboxFromLandmarks(
         imageSize,
-        poseLandmarks,
         faceLandmarks,
-        bbox,
-        { source: 'face-detector', faceWidthPx: faceDetectResult.bbox.width * 1.35 }
-      ),
-    };
+        poseLandmarks
+      );
+      if (headBox) {
+        return done(
+          headBox,
+          canUseFaceLandmarks(faceLandmarks) ? 'face-landmark' : 'pose'
+        );
+      }
+
+      const faceDetectResult = await detectFaceInBitmap(bitmap, {
+        closeBitmap: false,
+      });
+      loadModelMs += faceDetectResult.loadModelMs;
+      if (!faceDetectResult.bbox) {
+        return emptyResult(inferenceStart, loadModelMs, {
+          ...timingBase,
+          faceDetectorInferenceMs: faceDetectResult.inferenceMs,
+          debug: buildDebug(null),
+        });
+      }
+
+      const bbox = faceBboxToHeadNeckBbox(faceDetectResult.bbox, {
+        topExtendRatio: 0.5,
+        bottomExtendRatio: 0.12,
+        sideExtendRatio: 0.22,
+      });
+      return done(bbox, 'face-detector', {
+        faceDetectorInferenceMs: faceDetectResult.inferenceMs,
+      });
+    }
+
+    if (target === 'head-shoulders') {
+      if (poseLandmarks) {
+        const bbox = buildHeadAndShouldersBboxFromPose(
+          imageSize,
+          poseLandmarks,
+          faceLandmarks ?? undefined
+        );
+        if (bbox) return done(bbox, 'pose');
+      }
+
+      if (canUseFaceLandmarks(faceLandmarks) && faceLandmarks) {
+        const faceBox = buildPortraitBboxFromFaceLandmarks(imageSize, faceLandmarks);
+        if (faceBox) {
+          const bbox = {
+            x: faceBox.x - faceBox.width * 0.35,
+            y: faceBox.y - faceBox.height * 0.08,
+            width: faceBox.width * 1.7,
+            height: faceBox.height * 1.55,
+          };
+          return done(bbox, 'face-landmark');
+        }
+      }
+
+      const faceDetectResult = await detectFaceInBitmap(bitmap, {
+        closeBitmap: false,
+      });
+      loadModelMs += faceDetectResult.loadModelMs;
+      if (!faceDetectResult.bbox) {
+        return emptyResult(inferenceStart, loadModelMs, {
+          ...timingBase,
+          faceDetectorInferenceMs: faceDetectResult.inferenceMs,
+          debug: buildDebug(null),
+        });
+      }
+
+      const bbox = buildPortraitBboxFromFaceDetector(faceDetectResult.bbox);
+      const expanded = {
+        x: bbox.x - bbox.width * 0.28,
+        y: bbox.y,
+        width: bbox.width * 1.56,
+        height: bbox.height * 1.2,
+      };
+      return done(expanded, 'face-detector', {
+        faceDetectorInferenceMs: faceDetectResult.inferenceMs,
+      });
+    }
+
+    if (target === 'full-body') {
+      if (poseLandmarks) {
+        const bbox = buildFullBodyBboxFromPose(
+          imageSize,
+          poseLandmarks,
+          faceLandmarks ?? undefined
+        );
+        if (bbox) return done(bbox, 'pose');
+      }
+      return emptyResult(inferenceStart, loadModelMs, {
+        ...timingBase,
+        debug: buildDebug(null),
+      });
+    }
+
+    if (target === 'upper-body') {
+      if (canUsePoseLandmarks(poseLandmarks) && poseLandmarks) {
+        const bbox = buildUpperBodyBboxFromPose(
+          imageSize,
+          poseLandmarks,
+          faceLandmarks ?? undefined
+        );
+        if (bbox) return done(bbox, 'pose');
+      }
+      return emptyResult(inferenceStart, loadModelMs, {
+        ...timingBase,
+        debug: buildDebug(null),
+      });
+    }
+
+    if (target === 'lower-body') {
+      if (canUseLowerBodyPose(poseLandmarks) && poseLandmarks) {
+        const bbox = buildLowerBodyBboxFromPose(imageSize, poseLandmarks);
+        if (bbox) return done(bbox, 'pose');
+      }
+      return emptyResult(inferenceStart, loadModelMs, {
+        ...timingBase,
+        debug: buildDebug(null),
+      });
+    }
+
+    return emptyResult(inferenceStart, loadModelMs, {
+      ...timingBase,
+      debug: buildDebug(null),
+    });
   } finally {
     bitmap.close();
   }

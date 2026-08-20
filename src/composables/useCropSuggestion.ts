@@ -4,6 +4,7 @@ import type {
   SuggestedCrop,
   DetectionStageTimings,
   PortraitDebugOverlay,
+  CropTarget,
 } from '../types/detection';
 import { DETECTION_DEBUG_OVERLAY } from '../constants/optimization';
 import { detectSubject, isDetectionSupported } from '../utils/subjectDetection';
@@ -51,7 +52,8 @@ export function useCropSuggestion() {
 
   async function runSuggest(
     photo: Photo,
-    aspectRatio?: number | null
+    aspectRatio: number | null | undefined,
+    target: CropTarget
   ): Promise<void> {
     if (!photo.id) {
       error.value = 'Photo must have an ID for detection';
@@ -80,7 +82,7 @@ export function useCropSuggestion() {
         if (revision !== detectionQueue.getRevision(photoId)) {
           return null;
         }
-        return detectSubject(photo.original, photoId);
+        return detectSubject(photo.original, photoId, target);
       });
 
       if (
@@ -95,7 +97,7 @@ export function useCropSuggestion() {
 
       if (stageTimings.portraitMethod) {
         console.debug(
-          `[crop-suggest] method=${stageTimings.portraitMethod}`,
+          `[crop-suggest] method=${stageTimings.portraitMethod} target=${target}`,
           {
             poseMs: stageTimings.poseInferenceMs,
             faceLandmarkMs: stageTimings.faceLandmarkInferenceMs,
@@ -112,7 +114,7 @@ export function useCropSuggestion() {
         lastBboxFound.value = false;
         suggestedCrop.value = null;
         detectionDebug.value = null;
-        error.value = 'Detection failed — try Suggest crop again';
+        error.value = 'Detection failed — try Crop target again';
         return;
       }
 
@@ -128,7 +130,7 @@ export function useCropSuggestion() {
       }
 
       const bitmap = await createImageBitmap(photo.original);
-      let imageSize = { width: bitmap.width, height: bitmap.height };
+      const imageSize = { width: bitmap.width, height: bitmap.height };
       bitmap.close();
 
       const postStart = performance.now();
@@ -185,8 +187,9 @@ export function useCropSuggestion() {
 
   function suggestForPhoto(
     photo: Photo,
-    aspectRatio?: number | null,
-    defer = false
+    aspectRatio: number | null | undefined,
+    defer: boolean,
+    target: CropTarget
   ): void {
     if (debounceTimer) {
       clearTimeout(debounceTimer);
@@ -194,7 +197,7 @@ export function useCropSuggestion() {
     }
 
     const execute = () => {
-      void runSuggest(photo, aspectRatio);
+      void runSuggest(photo, aspectRatio, target);
     };
 
     if (defer) {
@@ -209,13 +212,14 @@ export function useCropSuggestion() {
 
   function suggestForPhotoImmediate(
     photo: Photo,
-    aspectRatio?: number | null
+    aspectRatio: number | null | undefined,
+    target: CropTarget
   ): void {
     if (debounceTimer) {
       clearTimeout(debounceTimer);
       debounceTimer = null;
     }
-    void runSuggest(photo, aspectRatio);
+    void runSuggest(photo, aspectRatio, target);
   }
 
   onUnmounted(() => {

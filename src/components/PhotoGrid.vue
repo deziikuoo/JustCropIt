@@ -155,34 +155,6 @@
 
               <div class="tools-divider" v-show="selectMode"></div>
 
-            <!-- History -->
-            <section
-              class="tools-section"
-              v-show="selectMode"
-              aria-labelledby="history-heading"
-            >
-              <h3 id="history-heading" class="tools-section__heading">
-                <i class="fas fa-clock-rotate-left"></i>
-                <span>History</span>
-              </h3>
-              <button
-                type="button"
-                class="tool-btn tool-btn--wide"
-                :class="{ 'tool-btn--active': historyOpen }"
-                aria-controls="history-panel"
-                :aria-expanded="historyOpen"
-                title="Operation history"
-                @click="toggleHistory"
-              >
-                <i class="fas fa-clock-rotate-left"></i>
-                <span class="tool-btn__label">
-                  {{ historyOpen ? "Hide History" : "Show History" }}
-                </span>
-              </button>
-            </section>
-
-            <div class="tools-divider" v-show="selectMode"></div>
-
             <!-- Transform Tools Section -->
             <section
               class="tools-section"
@@ -229,10 +201,10 @@
                   :class="{ 'tool-btn--disabled': !hasSelection }"
                   :disabled="!hasSelection"
                   @click="$emit('batch-revert')"
-                  title="Revert to Original (R)"
+                  title="Reset to Original (R)"
                 >
                   <i class="fas fa-rotate-left"></i>
-                  <span class="tool-btn__label">Revert</span>
+                  <span class="tool-btn__label">Reset</span>
                 </button>
               </div>
             </section>
@@ -406,7 +378,6 @@ import {
   nextTick,
 } from "vue";
 import { useExportSettings } from "../composables/useExportSettings";
-import { useOperationHistory } from "../composables/useOperationHistory";
 import { useTouchCapability } from "../composables/useTouchCapability";
 import { usePinchZoom } from "../composables/usePinchZoom";
 import { useVirtualScroll } from "../composables/useVirtualScroll";
@@ -463,7 +434,6 @@ const addedActivityVisible = ref(false);
 const deletedActivityVisible = ref(false);
 
 const { stripExifOnExport } = useExportSettings();
-const { isOpen: historyOpen, toggleOpen: toggleHistory } = useOperationHistory();
 
 const emit = defineEmits<{
   (e: "upload", event: Event): void;

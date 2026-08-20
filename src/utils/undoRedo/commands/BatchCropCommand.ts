@@ -13,7 +13,6 @@ import type { BatchProgressCallback } from '../../batchEditProgress';
 import { isBatchAborted } from '../../batchEditProgress';
 
 type BlobToFileFn = typeof blobToFile;
-type BlobFromFileFn = (file: File) => Promise<Blob>;
 
 export class BatchCropCommand extends BaseCommand {
   private indices: number[];
@@ -22,7 +21,6 @@ export class BatchCropCommand extends BaseCommand {
   private previousStates: Map<string, PhotoState> = new Map();
   private updatePhotosBatchFn: typeof updatePhotosBatch;
   private blobToFileFn: BlobToFileFn;
-  private blobFromFileFn: BlobFromFileFn;
   private onProgress?: BatchProgressCallback;
   private signal?: AbortSignal;
 
@@ -35,7 +33,6 @@ export class BatchCropCommand extends BaseCommand {
     updatePhotosBatchFn: typeof updatePhotosBatch,
     applyFlipsRotationAndCropFn: ApplyFlipsRotationAndCropFn,
     blobToFileFn: BlobToFileFn,
-    blobFromFileFn: BlobFromFileFn,
     onProgress?: BatchProgressCallback,
     signal?: AbortSignal
   ) {
@@ -45,7 +42,6 @@ export class BatchCropCommand extends BaseCommand {
     this.rotation = rotation;
     this.updatePhotosBatchFn = updatePhotosBatchFn;
     this.blobToFileFn = blobToFileFn;
-    this.blobFromFileFn = blobFromFileFn;
     this.onProgress = onProgress;
     this.signal = signal;
   }
@@ -92,7 +88,6 @@ export class BatchCropCommand extends BaseCommand {
       this.photos,
       this.updatePhotosBatchFn,
       this.blobToFileFn,
-      this.blobFromFileFn,
       (index) => this.applyCropToIndex(index),
       this.onProgress,
       this.signal

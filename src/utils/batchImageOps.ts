@@ -38,7 +38,6 @@ type UpdatePhotosBatchFn = (
 ) => Promise<void>;
 
 type BlobToFileFn = (blob: Blob, fileName: string, mimeType: string) => File;
-type BlobFromFileFn = (file: File) => Promise<Blob>;
 type HandleFlipFn = (index: number, direction: "horizontal" | "vertical") => Promise<void>;
 type FallbackFn = (index: number) => Promise<void>;
 
@@ -177,7 +176,6 @@ export async function runBatchCropRemaining(
   photos: Ref<Photo[]>,
   updatePhotosBatch: UpdatePhotosBatchFn,
   blobToFile: BlobToFileFn,
-  blobFromFile: BlobFromFileFn,
   mainThreadFallback: FallbackFn,
   onProgress?: BatchProgressCallback,
   signal?: AbortSignal
@@ -238,14 +236,10 @@ export async function runBatchCropRemaining(
             photo.current.type
           );
 
-          const historyBlob = await blobFromFile(photo.current);
-
           photos.value[index] = applyDisplayInvalidation(photo, {
             current: newFile,
             crop: { ...crop },
             rotation,
-            cropHistory: [...photo.cropHistory, historyBlob],
-            cropFuture: [],
           });
 
           if (photo.id) {
@@ -302,7 +296,6 @@ export async function runBatchPaste(
   photos: Ref<Photo[]>,
   updatePhotosBatch: UpdatePhotosBatchFn,
   blobToFile: BlobToFileFn,
-  blobFromFile: BlobFromFileFn,
   mainThreadFallback: FallbackFn
 ): Promise<{ workerUsed: boolean }> {
 
@@ -354,15 +347,11 @@ export async function runBatchPaste(
             photo.current.type
           );
 
-          const historyBlob = await blobFromFile(photo.current);
-
           photos.value[index] = applyDisplayInvalidation(photo, {
             current: newFile,
             flips: { ...settings.flips },
             crop: { ...settings.crop! },
             rotation: settings.rotation,
-            cropHistory: [...photo.cropHistory, historyBlob],
-            cropFuture: [],
           });
 
           if (photo.id) {

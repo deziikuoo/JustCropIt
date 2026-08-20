@@ -210,7 +210,7 @@
       @select="handleBatchCropImageSelect"
       @close="handleBatchCropSelectorClose"
     />
-    <OperationHistoryPanel v-if="appMode === 'photos'" />
+    />
     <FeedbackPanel
       :open="showFeedbackPanel"
       @close="showFeedbackPanel = false"
@@ -223,7 +223,6 @@
       :initialCrop="photos[cropIndex]?.crop"
       :initialRotation="photos[cropIndex]?.rotation"
       :suggested-crop="suggestedCrop"
-      :detection-debug="detectionDebug"
       :suggestion-loading="suggestionLoading"
       :suggestion-error="suggestionError"
       :suggestion-no-subject="
@@ -261,7 +260,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, provide, nextTick } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from "vue";
 import PhotoGrid from "./components/PhotoGrid.vue";
 import CropModal from "./components/CropModal.vue";
 import BatchCropSelector from "./components/BatchCropSelector.vue";
@@ -271,13 +270,9 @@ import ShimmerBackground from "./components/ShimmerBackground.vue";
 // import OptimizationCheckModal from "./components/OptimizationCheckModal.vue";
 // import CopyPasteVisualizer from "./components/CopyPasteVisualizer.vue";
 import VideoExtractor from "./components/VideoExtractor.vue";
-import OperationHistoryPanel from "./components/OperationHistoryPanel.vue";
 import FeedbackPanel from "./components/FeedbackPanel.vue";
-import { getExportStripChunkSize, HISTORY_MAX_SIZE } from "./constants/optimization";
-import { UNDO_REDO_MANAGER_KEY } from "./types/history";
-import { useOperationHistory } from "./composables/useOperationHistory";
+import { getExportStripChunkSize } from "./constants/optimization";
 import { useCropSuggestion } from "./composables/useCropSuggestion";
-import { scheduleIdleTask } from "./utils/scheduler";
 import { useExportSettings } from "./composables/useExportSettings";
 import { prepareExportFile } from "./utils/export/prepareExportBlob";
 import {
@@ -301,7 +296,6 @@ import {
 import { cleanupExpiredVideoSession } from "./utils/videoSessionStorage";
 import { imageWorkerPool } from "./utils/imageWorkerPool";
 import {
-  UndoRedoManager,
   FlipCommand,
   CropCommand,
   PasteSettingsCommand,
@@ -309,6 +303,7 @@ import {
   BatchCropCommand,
 } from "./utils/undoRedo";
 import type { Photo } from "./types/photo";
+import type { CropTarget } from "./types/detection";
 import { blobToFile } from "./utils/blobToFile";
 import { scheduleThumbnailBackfill } from "./utils/thumbnailBackfill";
 import { applyDisplayInvalidation } from "./utils/thumbnailInvalidation";
@@ -439,7 +434,7 @@ const notifyBatchCancelled = (
     "info",
     "Batch Cancelled",
     completed > 0
-      ? `Stopped ${label.toLowerCase()} after ${completed} of ${total}. Already-applied changes can be undone.`
+      ? `Stopped ${label.toLowerCase()} after ${completed} of ${total}. Already-applied changes were kept.`
       : `Cancelled ${label.toLowerCase()} before any changes were applied.`,
     5000
   );
@@ -516,15 +511,8 @@ const handlePhotoThumbnailUpdated = (
   };
 };
 
-// Initialize UndoRedoManager
-const undoRedoManager = new UndoRedoManager();
-undoRedoManager.setMaxHistorySize(HISTORY_MAX_SIZE);
-provide(UNDO_REDO_MANAGER_KEY, undoRedoManager);
-const { undo: historyUndo, redo: historyRedo } =
-  useOperationHistory(undoRedoManager);
 const {
   suggestedCrop,
-  detectionDebug,
   loading: suggestionLoading,
   error: suggestionError,
   attempted: suggestionAttempted,
@@ -767,8 +755,6 @@ const loadPhotosFromStorage = async () => {
           : null,
         thumbhash: stored.metadata.thumbhash ?? null,
         thumbRevision: 0,
-        cropHistory: [],
-        cropFuture: [],
         flips: stored.metadata.flips,
         crop: stored.metadata.crop,
         rotation: stored.metadata.rotation,
@@ -984,7 +970,7 @@ const handleFlip = async (
       updatePhoto,
       applyFlipsRotationAndCrop
     );
-    await undoRedoManager.executeCommand(command);
+    await command.execute();
   } catch (error) {
     console.error("Failed to execute flip command:", error);
     showAlert("error", "Flip Failed", "Failed to flip photo. Please try again.");
@@ -995,15 +981,12 @@ const startCropSuggestionForIndex = (index: number) => {
   const photo = photos.value[index];
   if (!photo) return;
   resetCropSuggestion();
-  scheduleIdleTask(() => {
-    suggestForPhotoImmediate(photo);
-  }, { timeout: 500 });
 };
 
-const handleRequestCropSuggest = () => {
+const handleRequestCropSuggest = (target: CropTarget) => {
   const photo = photos.value[cropIndex.value];
   if (!photo) return;
-  suggestForPhotoImmediate(photo);
+  suggestForPhotoImmediate(photo, undefined, target);
 };
 
 const openCropModal = (index: number) => {
@@ -1039,7 +1022,7 @@ const handleCrop = async (
       updatePhoto,
       applyFlipsRotationAndCrop
     );
-    await undoRedoManager.executeCommand(command);
+    await command.execute();
   } catch (error) {
     console.error("Failed to execute crop command:", error);
     showAlert("error", "Crop Failed", "Failed to crop photo. Please try again.");
@@ -1154,7 +1137,7 @@ const handleBatchFlip = async (direction: "horizontal" | "vertical") => {
         updateBatchEditProgress(current, progressTotal),
       batchEditAbortController?.signal
     );
-    await undoRedoManager.executeCommand(command);
+    await command.execute();
   } catch (error) {
     console.error("Failed to execute batch flip command:", error);
     showAlert(
@@ -1229,12 +1212,11 @@ const handleBatchCropNext = async (
       updatePhotosBatch,
       applyFlipsRotationAndCrop,
       blobToFile,
-      blobFromFile,
       (current, progressTotal) =>
         updateBatchEditProgress(current, progressTotal),
       batchEditAbortController?.signal
     );
-    await undoRedoManager.executeCommand(command);
+    await command.execute();
   } catch (error) {
     console.error("Failed to execute batch crop command:", error);
     showAlert(
@@ -1455,7 +1437,7 @@ const handleBatchRevert = async () => {
   performanceLogger.startMeasurement(operationId);
 
   const indices = [...selectedIndices.value];
-  beginBatchEditProgress("Reverting", indices.length);
+  beginBatchEditProgress("Resetting", indices.length);
 
   try {
     let completed = 0;
@@ -1471,7 +1453,7 @@ const handleBatchRevert = async () => {
   } finally {
     const { wasCancelled, snapshot } = endBatchEditProgress();
     if (wasCancelled && snapshot) {
-      notifyBatchCancelled("Reverting", snapshot.current, snapshot.total);
+      notifyBatchCancelled("Resetting", snapshot.current, snapshot.total);
     }
     await performanceLogger.endMeasurement(
       operationId,
@@ -1496,7 +1478,7 @@ const handleBatchDelete = async () => {
     const idsToDelete: string[] = [];
     const signal = batchEditAbortController?.signal;
 
-    // 1. Collect IDs first (don't touch undo until delete succeeds)
+    // 1. Collect IDs first (don't splice until delete succeeds)
     for (const index of indices) {
       if (isBatchAborted(signal)) break;
       const photo = photos.value[index];
@@ -1510,12 +1492,9 @@ const handleBatchDelete = async () => {
       return;
     }
 
-    // 2. Batch DB delete, then notify undo
+    // 2. Batch DB delete
     if (idsToDelete.length > 0) {
       await deletePhotos(idsToDelete);
-      for (const id of idsToDelete) {
-        undoRedoManager.onPhotoDeleted(id);
-      }
     }
     updateBatchEditProgress(Math.max(1, Math.floor(deleteCount * 0.6)), deleteCount);
 
@@ -1614,8 +1593,6 @@ const handleRevert = async (index: number) => {
 
   photos.value[index] = applyDisplayInvalidation(photo, {
     current: photo.original,
-    cropHistory: [],
-    cropFuture: [],
     flips: { horizontal: false, vertical: false },
     crop: undefined,
     rotation: undefined,
@@ -1642,8 +1619,6 @@ const handleDelete = async (index: number) => {
     // Delete from IndexedDB if photo has an ID
     if (photo.id) {
       try {
-        // Clean up undo/redo history for this photo
-        undoRedoManager.onPhotoDeleted(photo.id);
         await deletePhoto(photo.id);
       } catch (error) {
         console.error("Failed to delete photo from storage:", error);
@@ -1736,7 +1711,7 @@ const handlePasteSettings = async (singleIndex?: number) => {
         updateBatchEditProgress(current, progressTotal),
       batchEditAbortController?.signal
     );
-    await undoRedoManager.executeCommand(command);
+    await command.execute();
   } catch (error) {
     console.error("Failed to execute paste settings command:", error);
     showAlert(
@@ -1758,13 +1733,6 @@ const handlePasteSettings = async (singleIndex?: number) => {
   }
 };
 
-const blobFromFile = async (file: File): Promise<Blob> => {
-  return new Blob([await file.arrayBuffer()], { type: file.type });
-};
-
-// Keyboard shortcuts handler for undo/redo
-let keyboardHandler: ((e: KeyboardEvent) => void) | null = null;
-
 // Initialize storage and load photos on mount
 onMounted(async () => {
   try {
@@ -1780,30 +1748,6 @@ onMounted(async () => {
       console.error("Video session cleanup error:", error);
     }
 
-    // Keyboard shortcuts for undo/redo
-    keyboardHandler = (e: KeyboardEvent) => {
-      // Ctrl+Z (Cmd+Z on Mac) for undo
-      if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
-        e.preventDefault();
-        historyUndo().catch((error) => {
-          console.error("Undo failed:", error);
-        });
-      }
-      // Ctrl+Y or Ctrl+Shift+Z for redo
-      if (
-        (e.ctrlKey || e.metaKey) &&
-        (e.key === "y" || (e.key === "z" && e.shiftKey))
-      ) {
-        e.preventDefault();
-        historyRedo().catch((error) => {
-          console.error("Redo failed:", error);
-        });
-      }
-    };
-
-    document.addEventListener("keydown", keyboardHandler);
-
-    // Set up cleanup interval (run every hour) — photos and video timers are separate
     cleanupInterval = setInterval(async () => {
       try {
         const deleted = await cleanupExpiredPhotos();
@@ -1867,10 +1811,6 @@ onUnmounted(() => {
   if (cleanupInterval) {
     clearInterval(cleanupInterval);
     cleanupInterval = null;
-  }
-  if (keyboardHandler) {
-    document.removeEventListener("keydown", keyboardHandler);
-    keyboardHandler = null;
   }
 });
 </script>

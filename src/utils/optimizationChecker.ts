@@ -34,9 +34,6 @@ import {
   EXPORT_STRIP_DEFAULT,
   EXPORT_STRIP_JPEG_QUALITY,
   getExportStripChunkSize,
-  HISTORY_MAX_SIZE,
-  UNDO_TO_NAV_DEBOUNCE_MS,
-  HISTORY_PANEL_MOBILE_BREAKPOINT_PX,
   DETECTION_WORKER_POOL_MAX,
   DETECTION_INPUT_MAX_EDGE_PX,
   DETECTION_BBOX_PADDING_RATIO,
@@ -76,9 +73,6 @@ import { uploadWorkerPool } from './uploadWorkerPool';
 import { prepareExportFile } from './export/prepareExportBlob';
 import { hasPixelEdits } from './export/hasPixelEdits';
 import { useExportSettings } from '../composables/useExportSettings';
-import { useOperationHistory } from '../composables/useOperationHistory';
-import OperationHistoryPanel from '../components/OperationHistoryPanel.vue';
-import { UndoRedoManager } from './undoRedo/undoRedoManager';
 import { BatchFlipCommand } from './undoRedo/commands/BatchFlipCommand';
 import { BatchCropCommand } from './undoRedo/commands/BatchCropCommand';
 import { CropCommand } from './undoRedo/commands/CropCommand';
@@ -400,8 +394,6 @@ export function runOptimizationChecks(): OptimizationCheckResult[] {
       original: new File([], 'sample.jpg'),
       current: new File([], 'sample.jpg'),
       thumbRevision: 0,
-      cropHistory: [],
-      cropFuture: [],
       flips: { horizontal: false, vertical: false },
       thumbhash: null,
     };
@@ -446,8 +438,6 @@ export function runOptimizationChecks(): OptimizationCheckResult[] {
     original: new File([], 'a'),
     current: new File([], 'a'),
     thumbRevision: 0,
-    cropHistory: [],
-    cropFuture: [],
     flips: { horizontal: false, vertical: false },
     thumbhash: 'abc',
   });
@@ -738,51 +728,12 @@ export function runOptimizationChecks(): OptimizationCheckResult[] {
       : 'Export worker/metrics wiring incomplete',
   });
 
-  // --- Phase 3: Operation history panel ---
-  const historyManager = new UndoRedoManager();
-  const historyApiOk =
-    typeof historyManager.subscribe === 'function' &&
-    typeof historyManager.getHistoryPanelState === 'function' &&
-    typeof historyManager.undoTo === 'function' &&
-    typeof historyManager.getIsNavigating === 'function';
+  // --- Phase 3: Edit commands (operation history UI removed) ---
   results.push({
     id: 'phase3-manager-api',
-    name: 'Phase 3: UndoRedoManager history API',
-    status: historyApiOk ? 'pass' : 'fail',
-    message: historyApiOk
-      ? 'subscribe, getHistoryPanelState, undoTo, getIsNavigating available'
-      : 'History manager API incomplete',
-  });
-
-  const historyConstantsOk =
-    HISTORY_MAX_SIZE === 50 &&
-    UNDO_TO_NAV_DEBOUNCE_MS === 300 &&
-    HISTORY_PANEL_MOBILE_BREAKPOINT_PX === 480;
-  results.push({
-    id: 'phase3-history-constants',
-    name: 'Phase 3: History constants',
-    status: historyConstantsOk ? 'pass' : 'fail',
-    message: historyConstantsOk
-      ? `max=${HISTORY_MAX_SIZE} debounce=${UNDO_TO_NAV_DEBOUNCE_MS}ms mobile=${HISTORY_PANEL_MOBILE_BREAKPOINT_PX}px`
-      : 'History constants missing or invalid',
-  });
-
-  results.push({
-    id: 'phase3-composable',
-    name: 'Phase 3: useOperationHistory composable',
-    status: typeof useOperationHistory === 'function' ? 'pass' : 'fail',
-    message: typeof useOperationHistory === 'function'
-      ? 'useOperationHistory exported'
-      : 'useOperationHistory missing',
-  });
-
-  results.push({
-    id: 'phase3-panel',
-    name: 'Phase 3: OperationHistoryPanel component',
-    status: OperationHistoryPanel != null ? 'pass' : 'fail',
-    message: OperationHistoryPanel != null
-      ? 'OperationHistoryPanel.vue registered'
-      : 'OperationHistoryPanel missing',
+    name: 'Phase 3: Operation history removed',
+    status: 'pass',
+    message: 'Photo operation history panel and undo/redo stacks are no longer used',
   });
 
   const batchHistoryCommandsOk =

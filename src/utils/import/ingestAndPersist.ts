@@ -49,8 +49,6 @@ function toPhoto(result: PersistedIngestPhoto): Photo {
     thumbnail: result.thumbnailFile,
     thumbhash: result.thumbhash,
     thumbRevision: 0,
-    cropHistory: [],
-    cropFuture: [],
     flips: { horizontal: false, vertical: false },
     rotation: undefined,
   };

@@ -27,6 +27,14 @@ export type PortraitDetectionMethod =
   | 'face-landmark'
   | 'face-detector';
 
+/** User-selected framing target for Suggest / Crop target. */
+export type CropTarget =
+  | 'full-body'
+  | 'upper-body'
+  | 'lower-body'
+  | 'head-shoulders'
+  | 'head';
+
 export interface DetectionStageTimings {
   downscaleMs?: number;
   loadModelMs?: number;

@@ -31,6 +31,39 @@ export const POSE_LEFT_EAR = 7;
 export const POSE_RIGHT_EAR = 8;
 export const POSE_LEFT_SHOULDER = 11;
 export const POSE_RIGHT_SHOULDER = 12;
+export const POSE_LEFT_ELBOW = 13;
+export const POSE_RIGHT_ELBOW = 14;
+export const POSE_LEFT_WRIST = 15;
+export const POSE_RIGHT_WRIST = 16;
+export const POSE_LEFT_HIP = 23;
+export const POSE_RIGHT_HIP = 24;
+export const POSE_LEFT_KNEE = 25;
+export const POSE_RIGHT_KNEE = 26;
+export const POSE_LEFT_ANKLE = 27;
+export const POSE_RIGHT_ANKLE = 28;
+export const POSE_LEFT_HEEL = 29;
+export const POSE_RIGHT_HEEL = 30;
+export const POSE_LEFT_FOOT = 31;
+export const POSE_RIGHT_FOOT = 32;
+
+const POSE_ALL_INDICES = Array.from({ length: 33 }, (_, i) => i);
+
+const POSE_FOOT_INDICES = [
+  POSE_LEFT_ANKLE,
+  POSE_RIGHT_ANKLE,
+  POSE_LEFT_HEEL,
+  POSE_RIGHT_HEEL,
+  POSE_LEFT_FOOT,
+  POSE_RIGHT_FOOT,
+];
+
+const POSE_LOWER_INDICES = [
+  POSE_LEFT_HIP,
+  POSE_RIGHT_HIP,
+  POSE_LEFT_KNEE,
+  POSE_RIGHT_KNEE,
+  ...POSE_FOOT_INDICES,
+];
 
 const FACE_CHIN = 152;
 const FACE_FOREHEAD = 10;
@@ -553,6 +586,233 @@ function resolveVerticalBoundsFromPose(
   return { top, bottom };
 }
 
+function collectPosePixels(
+  imageSize: ImageDimensions,
+  poseLandmarks: NormalizedLandmark[],
+  indices: number[],
+  minVisibility = DETECTION_LANDMARK_MIN_VISIBILITY
+): Point[] {
+  const { width, height } = imageSize;
+  return indices
+    .map((index) => poseLandmarks[index])
+    .filter(
+      (landmark): landmark is NormalizedLandmark =>
+        landmark != null && (landmark.visibility ?? 1) >= minVisibility
+    )
+    .map((landmark) => toPixel(landmark, width, height));
+}
+
+function horizontalFromPosePoints(
+  points: Point[],
+  imageSize: ImageDimensions,
+  padRatio = 0.12
+): { left: number; right: number } | null {
+  if (points.length === 0) return null;
+  const xs = points.map((p) => p.x);
+  const span = Math.max(Math.max(...xs) - Math.min(...xs), imageSize.width * 0.08);
+  const pad = span * padRatio;
+  return {
+    left: Math.min(...xs) - pad,
+    right: Math.max(...xs) + pad,
+  };
+}
+
+export function canUseLowerBodyPose(
+  landmarks: NormalizedLandmark[] | null | undefined
+): boolean {
+  if (!landmarks?.length) return false;
+  const hips =
+    Number(isVisible(landmarks[POSE_LEFT_HIP])) +
+    Number(isVisible(landmarks[POSE_RIGHT_HIP]));
+  const feet =
+    Number(isVisible(landmarks[POSE_LEFT_ANKLE])) +
+    Number(isVisible(landmarks[POSE_RIGHT_ANKLE])) +
+    Number(isVisible(landmarks[POSE_LEFT_FOOT])) +
+    Number(isVisible(landmarks[POSE_RIGHT_FOOT])) +
+    Number(isVisible(landmarks[POSE_LEFT_KNEE])) +
+    Number(isVisible(landmarks[POSE_RIGHT_KNEE]));
+  return hips >= 1 && feet >= 1;
+}
+
+export function buildFullBodyBboxFromPose(
+  imageSize: ImageDimensions,
+  poseLandmarks: NormalizedLandmark[],
+  faceLandmarks?: NormalizedLandmark[]
+): BoundingBox | null {
+  const RELAXED_VISIBILITY = 0.12;
+  const points = collectPosePixels(
+    imageSize,
+    poseLandmarks,
+    POSE_ALL_INDICES,
+    RELAXED_VISIBILITY
+  );
+  if (points.length < 4) return null;
+
+  const headTop =
+    resolveVerticalTop(imageSize, poseLandmarks, faceLandmarks) ??
+    Math.min(...points.map((p) => p.y));
+
+  const footPoints = collectPosePixels(
+    imageSize,
+    poseLandmarks,
+    POSE_FOOT_INDICES,
+    RELAXED_VISIBILITY
+  );
+  const kneePoints = collectPosePixels(
+    imageSize,
+    poseLandmarks,
+    [POSE_LEFT_KNEE, POSE_RIGHT_KNEE],
+    RELAXED_VISIBILITY
+  );
+  const hipPoints = collectPosePixels(
+    imageSize,
+    poseLandmarks,
+    [POSE_LEFT_HIP, POSE_RIGHT_HIP],
+    RELAXED_VISIBILITY
+  );
+
+  let bottom: number;
+  if (footPoints.length > 0) {
+    bottom = Math.max(...footPoints.map((p) => p.y));
+  } else if (kneePoints.length > 0 && hipPoints.length > 0) {
+    const hipY = Math.max(...hipPoints.map((p) => p.y));
+    const kneeY = Math.max(...kneePoints.map((p) => p.y));
+    const thigh = Math.max(kneeY - hipY, imageSize.height * 0.08);
+    bottom = kneeY + thigh;
+  } else {
+    bottom = Math.max(...points.map((p) => p.y));
+  }
+
+  const bodyHeight = Math.max(bottom - headTop, imageSize.height * 0.2);
+  const top = headTop - bodyHeight * 0.08;
+  bottom += bodyHeight * 0.06;
+
+  const xs = points.map((p) => p.x);
+  let left = Math.min(...xs);
+  let right = Math.max(...xs);
+  const rawWidth = right - left;
+  const minWidth = bodyHeight * 0.32;
+  const padX = Math.max(rawWidth * 0.16, (minWidth - rawWidth) / 2);
+  left -= padX;
+  right += padX;
+
+  return bboxFromExtents(left, top, right, bottom, imageSize, 0);
+}
+
+export function buildUpperBodyBboxFromPose(
+  imageSize: ImageDimensions,
+  poseLandmarks: NormalizedLandmark[],
+  faceLandmarks?: NormalizedLandmark[]
+): BoundingBox | null {
+  const RELAXED = 0.12;
+  const top = resolveVerticalTop(imageSize, poseLandmarks, faceLandmarks);
+  const hips = collectPosePixels(
+    imageSize,
+    poseLandmarks,
+    [POSE_LEFT_HIP, POSE_RIGHT_HIP],
+    RELAXED
+  );
+  if (top == null || hips.length === 0) return null;
+
+  const elbows = collectPosePixels(
+    imageSize,
+    poseLandmarks,
+    [POSE_LEFT_ELBOW, POSE_RIGHT_ELBOW],
+    RELAXED
+  );
+  const shoulders = collectPosePixels(
+    imageSize,
+    poseLandmarks,
+    [POSE_LEFT_SHOULDER, POSE_RIGHT_SHOULDER],
+    RELAXED
+  );
+
+  const hipY = Math.max(...hips.map((p) => p.y));
+  const elbowBottom =
+    elbows.length > 0 ? Math.max(...elbows.map((p) => p.y)) : hipY;
+  const bottom =
+    Math.max(hipY, elbowBottom) + (hipY - top) * 0.08;
+
+  const bodyPoints = [...hips, ...shoulders, ...elbows];
+  const horizontal = horizontalFromPosePoints(bodyPoints, imageSize, 0.14);
+  if (!horizontal) return null;
+
+  return bboxFromExtents(
+    horizontal.left,
+    top,
+    horizontal.right,
+    bottom,
+    imageSize,
+    0.03
+  );
+}
+
+export function buildLowerBodyBboxFromPose(
+  imageSize: ImageDimensions,
+  poseLandmarks: NormalizedLandmark[]
+): BoundingBox | null {
+  if (!canUseLowerBodyPose(poseLandmarks)) return null;
+
+  const points = collectPosePixels(imageSize, poseLandmarks, POSE_LOWER_INDICES);
+  if (points.length < 2) return null;
+
+  const hips = collectPosePixels(imageSize, poseLandmarks, [
+    POSE_LEFT_HIP,
+    POSE_RIGHT_HIP,
+  ]);
+  const top = hips.length > 0 ? Math.min(...hips.map((p) => p.y)) : Math.min(...points.map((p) => p.y));
+  const bottom = Math.max(...points.map((p) => p.y));
+  const horizontal = horizontalFromPosePoints(points, imageSize, 0.16);
+  if (!horizontal) return null;
+
+  return bboxFromExtents(horizontal.left, top, horizontal.right, bottom, imageSize, 0.08);
+}
+
+export function buildHeadAndShouldersBboxFromPose(
+  imageSize: ImageDimensions,
+  poseLandmarks: NormalizedLandmark[],
+  faceLandmarks?: NormalizedLandmark[]
+): BoundingBox | null {
+  const RELAXED = 0.15;
+  const shoulders = collectPosePixels(
+    imageSize,
+    poseLandmarks,
+    [POSE_LEFT_SHOULDER, POSE_RIGHT_SHOULDER],
+    RELAXED
+  );
+  if (shoulders.length === 0) return null;
+
+  const top = resolveVerticalTop(imageSize, poseLandmarks, faceLandmarks);
+  if (top == null) return null;
+
+  const shoulderY = Math.max(...shoulders.map((p) => p.y));
+  const headToShoulder = Math.max(shoulderY - top, imageSize.height * 0.12);
+
+  // MediaPipe joints sit inside the visual shoulder; pad out to the deltoid.
+  let left: number;
+  let right: number;
+  if (shoulders.length === 2) {
+    const span = Math.abs(shoulders[0].x - shoulders[1].x);
+    const pad = Math.max(span * 0.22, imageSize.width * 0.04);
+    left = Math.min(shoulders[0].x, shoulders[1].x) - pad;
+    right = Math.max(shoulders[0].x, shoulders[1].x) + pad;
+  } else {
+    const shoulder = shoulders[0];
+    const nose = poseLandmarks[POSE_NOSE];
+    const centerX =
+      nose != null ? nose.x * imageSize.width : shoulder.x;
+    const half = Math.max(Math.abs(shoulder.x - centerX), imageSize.width * 0.16);
+    const pad = half * 0.28;
+    left = Math.min(shoulder.x, centerX - half) - pad;
+    right = Math.max(shoulder.x, centerX + half) + pad;
+  }
+
+  const paddedTop = top - headToShoulder * 0.1;
+  const bottom = shoulderY + headToShoulder * 0.38;
+
+  return bboxFromExtents(left, paddedTop, right, bottom, imageSize, 0.02);
+}
+
 export function buildPortraitBboxFromPose(
   imageSize: ImageDimensions,
   poseLandmarks: NormalizedLandmark[],
@@ -586,6 +846,76 @@ export function buildPortraitBboxFromPoseAndFace(
   faceLandmarks: NormalizedLandmark[]
 ): BoundingBox | null {
   return buildPortraitBboxFromPose(imageSize, poseLandmarks, faceLandmarks);
+}
+
+export function buildFullHeadBboxFromLandmarks(
+  imageSize: ImageDimensions,
+  faceLandmarks?: NormalizedLandmark[] | null,
+  poseLandmarks?: NormalizedLandmark[] | null
+): BoundingBox | null {
+  const { width, height } = imageSize;
+  const ovalPoints =
+    faceLandmarks && canUseFaceLandmarks(faceLandmarks)
+      ? getFaceOvalIndices()
+          .map((index) => faceLandmarks[index])
+          .filter((landmark): landmark is NormalizedLandmark => landmark != null)
+          .map((landmark) => toPixel(landmark, width, height))
+      : [];
+
+  const earPoints = collectPosePixels(
+    imageSize,
+    poseLandmarks ?? [],
+    [POSE_LEFT_EAR, POSE_RIGHT_EAR],
+    DETECTION_EAR_MIN_VISIBILITY
+  );
+  if (faceLandmarks) {
+    for (const index of [FACE_LEFT_EAR_POINT, FACE_RIGHT_EAR_POINT]) {
+      const landmark = faceLandmarks[index];
+      if (landmark) earPoints.push(toPixel(landmark, width, height));
+    }
+  }
+
+  const horizontal =
+    resolveHorizontalBounds(
+      imageSize,
+      poseLandmarks ?? undefined,
+      faceLandmarks ?? undefined
+    ) ?? horizontalFromPosePoints([...ovalPoints, ...earPoints], imageSize, 0.1);
+
+  if (!horizontal && ovalPoints.length < 4 && earPoints.length < 2) {
+    return null;
+  }
+
+  const top =
+    resolveVerticalTop(
+      imageSize,
+      poseLandmarks ?? [],
+      faceLandmarks ?? undefined
+    ) ??
+    (ovalPoints.length > 0 ? Math.min(...ovalPoints.map((p) => p.y)) : null);
+  if (top == null || !horizontal) return null;
+
+  let chinY: number | null = null;
+  const chin = faceLandmarks?.[FACE_CHIN];
+  if (chin) chinY = chin.y * height;
+  const ovalBottom =
+    ovalPoints.length > 0 ? Math.max(...ovalPoints.map((p) => p.y)) : null;
+  const bottomAnchor = Math.max(chinY ?? 0, ovalBottom ?? 0, top + height * 0.08);
+  const faceHeight = Math.max(bottomAnchor - top, height * 0.08);
+
+  // Crown / hair above forehead; stop at the jaw rather than the neck.
+  const paddedTop = top - faceHeight * 0.18;
+  const paddedBottom = bottomAnchor + faceHeight * 0.1;
+  const earPad = Math.max((horizontal.right - horizontal.left) * 0.08, width * 0.02);
+
+  return bboxFromExtents(
+    horizontal.left - earPad,
+    paddedTop,
+    horizontal.right + earPad,
+    paddedBottom,
+    imageSize,
+    0.02
+  );
 }
 
 export function buildPortraitBboxFromFaceLandmarks(

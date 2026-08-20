@@ -56,26 +56,42 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
-function fitAspectRatio(
-  x: number,
-  y: number,
-  width: number,
-  height: number,
+/**
+ * Grow a crop so it fully covers the target while matching aspectRatio.
+ * If the box cannot fit in the image, it is scaled down to the image bounds.
+ */
+export function coverTargetWithAspect(
+  target: SuggestedCrop,
   aspectRatio: number,
   bounds: ImageDimensions
 ): SuggestedCrop {
-  const centerX = x + width / 2;
-  const centerY = y + height / 2;
-  let w = width;
-  let h = height;
+  let w = target.width;
+  let h = target.height;
   const currentRatio = w / h;
 
   if (currentRatio > aspectRatio) {
-    w = h * aspectRatio;
+    h = w / aspectRatio;
   } else if (currentRatio < aspectRatio) {
+    w = h * aspectRatio;
+  }
+
+  const maxW = bounds.width;
+  const maxH = bounds.height;
+  if (w > maxW) {
+    w = maxW;
+    h = w / aspectRatio;
+  }
+  if (h > maxH) {
+    h = maxH;
+    w = h * aspectRatio;
+  }
+  if (w > maxW) {
+    w = maxW;
     h = w / aspectRatio;
   }
 
+  const centerX = target.x + target.width / 2;
+  const centerY = target.y + target.height / 2;
   let left = centerX - w / 2;
   let top = centerY - h / 2;
 
@@ -84,15 +100,23 @@ function fitAspectRatio(
   if (left + w > bounds.width) left = bounds.width - w;
   if (top + h > bounds.height) top = bounds.height - h;
 
-  w = Math.min(w, bounds.width - left);
-  h = Math.min(h, bounds.height - top);
-
   return {
     x: Math.round(left),
     y: Math.round(top),
     width: Math.round(w),
     height: Math.round(h),
   };
+}
+
+function fitAspectRatio(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  aspectRatio: number,
+  bounds: ImageDimensions
+): SuggestedCrop {
+  return coverTargetWithAspect({ x, y, width, height }, aspectRatio, bounds);
 }
 
 export function bboxToSuggestedCrop(

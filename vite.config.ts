@@ -4,22 +4,18 @@ import { existsSync } from "fs";
 import { join } from "path";
 import { execFile } from "child_process";
 
-// Function to find Chrome executable on Windows
-function getChromePath(): string | null {
+function getVivaldiPath(): string | null {
   if (process.platform !== "win32") {
     return null;
   }
 
-  const chromePaths = [
-    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-    join(
-      process.env.LOCALAPPDATA || "",
-      "Google\\Chrome\\Application\\chrome.exe",
-    ),
+  const vivaldiPaths = [
+    join(process.env.LOCALAPPDATA || "", "Vivaldi\\Application\\vivaldi.exe"),
+    "C:\\Program Files\\Vivaldi\\Application\\vivaldi.exe",
+    "C:\\Program Files (x86)\\Vivaldi\\Application\\vivaldi.exe",
   ];
 
-  for (const path of chromePaths) {
+  for (const path of vivaldiPaths) {
     if (existsSync(path)) {
       return path;
     }
@@ -30,7 +26,7 @@ function getChromePath(): string | null {
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => ({
-  plugins: [vue(), openChromeOnStart()],
+  plugins: [vue(), openVivaldiOnStart()],
   base: mode === "production" ? "/JustCropIt/" : "/",
   optimizeDeps: {
     // @ffmpeg/ffmpeg ships its own worker entry; pre-bundling breaks worker resolution
@@ -40,7 +36,7 @@ export default defineConfig(({ mode }) => ({
     format: "es",
   },
   server: {
-    open: false, // Disable auto-open, we'll handle it manually
+    open: false, // Disable Vite's default browser; open Vivaldi instead
     host: true, // listen on all addresses, including network
     port: 5173, // explicit port (optional, this is the default)
     strictPort: true, // Exit if port 5173 is already in use (prevents multiple instances)
@@ -63,9 +59,9 @@ export default defineConfig(({ mode }) => ({
   },
 }));
 
-function openChromeOnStart() {
+function openVivaldiOnStart() {
   return {
-    name: "open-chrome-on-start",
+    name: "open-vivaldi-on-start",
     configureServer(server: ViteDevServer) {
       // Ensure every response (including public/ WASM) is readable by opaque workers
       server.middlewares.use((_req, res, next) => {
@@ -79,8 +75,8 @@ function openChromeOnStart() {
         return;
       }
 
-      const chromePath = getChromePath();
-      if (!chromePath) {
+      const vivaldiPath = getVivaldiPath();
+      if (!vivaldiPath) {
         return;
       }
 
@@ -92,7 +88,7 @@ function openChromeOnStart() {
             ? (addr as { port: number }).port
             : 5173);
         const url = `http://localhost:${port}/`;
-        execFile(chromePath, [url]);
+        execFile(vivaldiPath, [url]);
       });
     },
   };

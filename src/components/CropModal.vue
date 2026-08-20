@@ -9,24 +9,19 @@
           aria-live="polite"
         >
           <i class="fas fa-spinner fa-spin" aria-hidden="true"></i>
-          <span>Finding subject...</span>
+          <span>Finding target...</span>
         </div>
         <Cropper
           ref="cropper"
           :key="`cropper-${imageSrc}-${initialRotation || 0}`"
           :src="currentImageSrc"
+          :default-size="fullImageDefaultSize"
           :stencil-props="{
             aspectRatio: selectedAspectRatio,
             movable: true,
             scalable: true,
           }"
           @ready="onCropperReady"
-        />
-        <canvas
-          v-if="debugOverlayAvailable && showDebugOverlay && detectionDebug"
-          ref="debugCanvas"
-          class="detection-debug-canvas"
-          aria-hidden="true"
         />
         <!-- Arrow navigation buttons (show when there's more than one image) -->
         <button
@@ -49,52 +44,74 @@
         </button>
       </div>
       <div class="controls">
-        <label for="aspect-ratio">Aspect Ratio:</label>
-        <select id="aspect-ratio" v-model="selectedAspectRatio">
-          <option :value="null">Freeform</option>
-          <option :value="1">1:1</option>
-          <option :value="4 / 3">4:3</option>
-          <option :value="16 / 9">16:9</option>
-        </select>
-        <button @click="rotate(-90)">Rotate Left</button>
-        <button @click="rotate(90)">Rotate Right</button>
-        <button @click="undo" :disabled="cropHistory.length <= 1">Undo</button>
-        <button @click="redo" :disabled="cropFuture.length === 0">Redo</button>
-        <button @click="reset">Reset</button>
-        <button
-          v-if="detectionSupported"
-          type="button"
-          class="suggest-btn"
-          :disabled="suggestionLoading"
-          @click="$emit('request-suggest')"
-        >
-          <i class="fas fa-wand-magic-sparkles"></i>
-          Suggest crop
-        </button>
-        <p
-          v-if="suggestionError"
-          class="suggestion-message suggestion-message--error"
-          role="status"
-        >
-          {{ suggestionError }}
-        </p>
-        <p
-          v-else-if="suggestionNoSubject"
-          class="suggestion-message"
-          role="status"
-        >
-          No subject detected — adjust stencil manually.
-        </p>
-        <label
-          v-if="debugOverlayAvailable && detectionDebug"
-          class="debug-overlay-toggle"
-        >
-          <input v-model="showDebugOverlay" type="checkbox" />
-          Show detection landmarks
-        </label>
-        <div class="actions">
-          <button @click="cropImage">Done</button>
-          <button @click="$emit('close')">Cancel</button>
+        <div class="controls-row">
+          <label for="aspect-ratio">Aspect Ratio:</label>
+          <select id="aspect-ratio" v-model="selectedAspectRatio">
+            <option :value="null">Freeform</option>
+            <option :value="1">1:1</option>
+            <option :value="4 / 3">4:3</option>
+            <option :value="16 / 9">16:9</option>
+          </select>
+          <button
+            type="button"
+            class="control-icon-btn"
+            title="Rotate left"
+            aria-label="Rotate left"
+            @click="rotate(-90)"
+          >
+            <i class="fas fa-rotate-left" aria-hidden="true"></i>
+          </button>
+          <button
+            type="button"
+            class="control-icon-btn"
+            title="Rotate right"
+            aria-label="Rotate right"
+            @click="rotate(90)"
+          >
+            <i class="fas fa-rotate-right" aria-hidden="true"></i>
+          </button>
+          <button @click="reset">Reset</button>
+          <p
+            v-if="suggestionError"
+            class="suggestion-message suggestion-message--error"
+            role="status"
+          >
+            {{ suggestionError }}
+          </p>
+          <p
+            v-else-if="suggestionNoSubject"
+            class="suggestion-message"
+            role="status"
+          >
+            No subject detected — adjust stencil manually.
+          </p>
+          <div class="actions">
+            <button @click="cropImage">Done</button>
+            <button @click="$emit('close')">Cancel</button>
+          </div>
+        </div>
+        <div v-if="detectionSupported" class="crop-target-bar">
+          <div
+            class="crop-target-group"
+            role="radiogroup"
+            aria-label="Crop target"
+          >
+            <button
+              v-for="option in cropTargetOptions"
+              :key="option.value"
+              type="button"
+              class="crop-target-btn"
+              role="radio"
+              :aria-checked="selectedCropTarget === option.value"
+              :class="{ 'crop-target-btn--active': selectedCropTarget === option.value }"
+              :disabled="suggestionLoading"
+              :title="option.label"
+              :aria-label="option.label"
+              @click="selectCropTarget(option.value)"
+            >
+              <i :class="option.icon" aria-hidden="true"></i>
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -105,8 +122,7 @@
 import { Cropper } from "vue-advanced-cropper";
 import { ref, onMounted, onUnmounted, watch, nextTick } from "vue";
 import "vue-advanced-cropper/dist/style.css";
-import { DETECTION_DEBUG_OVERLAY } from "../constants/optimization";
-import type { PortraitDebugOverlay } from "../types/detection";
+import type { CropTarget } from "../types/detection";
 
 // Type alias to extend Cropper instance with custom methods and properties
 type CropperInstance = InstanceType<typeof Cropper> & {
@@ -148,7 +164,6 @@ const {
   initialCrop,
   initialRotation,
   suggestedCrop,
-  detectionDebug,
   suggestionLoading,
   suggestionError,
   suggestionNoSubject,
@@ -161,7 +176,6 @@ const {
   initialCrop?: { x: number; y: number; width: number; height: number };
   initialRotation?: number;
   suggestedCrop?: { x: number; y: number; width: number; height: number } | null;
-  detectionDebug?: PortraitDebugOverlay | null;
   suggestionLoading?: boolean;
   suggestionError?: string | null;
   suggestionNoSubject?: boolean;
@@ -181,37 +195,35 @@ const emit = defineEmits<{
   (e: "close"): void;
   (e: "next-image"): void;
   (e: "previous-image"): void;
-  (e: "request-suggest"): void;
+  (e: "request-suggest", target: CropTarget): void;
   (e: "cancel-suggest"): void;
 }>();
 
 const cropper = ref<CropperInstance | null>(null);
-const debugCanvas = ref<HTMLCanvasElement | null>(null);
-const debugOverlayAvailable = DETECTION_DEBUG_OVERLAY;
-const showDebugOverlay = ref(true);
 const selectedAspectRatio = ref<number | null>(null);
+const selectedCropTarget = ref<CropTarget | null>(null);
+const cropTargetOptions: { value: CropTarget; label: string; icon: string }[] = [
+  { value: 'full-body', label: 'Full body', icon: 'fas fa-person' },
+  { value: 'upper-body', label: 'Upper body', icon: 'fas fa-user' },
+  { value: 'lower-body', label: 'Lower body', icon: 'fas fa-person-walking' },
+  { value: 'head-shoulders', label: 'Head and shoulders', icon: 'fas fa-portrait' },
+  { value: 'head', label: 'Head', icon: 'fas fa-circle-user' },
+];
 const currentImageSrc = ref<string>(imageSrc);
 const currentRotation = ref<number>(initialRotation || 0); // Track cumulative rotation
 const isDragging = ref(false); // Track if stencil is being dragged (for iOS-style overlay)
-const cropHistory = ref<
-  {
-    blob: Blob;
-    coordinates: { left: number; top: number; width: number; height: number };
-  }[]
->([]);
-const cropFuture = ref<
-  {
-    blob: Blob;
-    coordinates: { left: number; top: number; width: number; height: number };
-  }[]
->([]);
+
+function selectCropTarget(target: CropTarget) {
+  selectedCropTarget.value = target;
+  selectedAspectRatio.value = null;
+  emit('request-suggest', target);
+}
 
 // Watch for changes in imageSrc and initialRotation props
 watch([() => imageSrc, () => initialRotation], ([newSrc, newRotation]) => {
   currentImageSrc.value = newSrc;
-  cropHistory.value = [];
-  cropFuture.value = [];
   currentRotation.value = newRotation || 0;
+  selectedCropTarget.value = null;
 });
 
 // Helper function to apply rotation to the cropper
@@ -236,33 +248,6 @@ const applyRotationToCropper = (rotation: number) => {
   currentRotation.value = normalizedRotation;
 };
 
-
-// Watch currentImageSrc to reapply coordinates after image change
-watch(
-  () => currentImageSrc.value,
-  (newSrc) => {
-    if (newSrc && cropper.value) {
-      const img = new Image();
-      img.src = newSrc;
-      img.onload = () => {
-        if (cropper.value) {
-          // Find the coordinates for the current state
-          const currentState =
-            cropHistory.value.find(
-              (state) => URL.createObjectURL(state.blob) === newSrc
-            ) || cropHistory.value[cropHistory.value.length - 1];
-          if (currentState) {
-            cropper.value.setCoordinates(currentState.coordinates);
-          }
-        }
-      };
-      if (img.complete) {
-        img.onload(null as any);
-      }
-    }
-  }
-);
-
 const handleEsc = (event: KeyboardEvent) => {
   if (event.key === "Escape") {
     emit("close");
@@ -282,10 +267,6 @@ onUnmounted(() => {
   if (readyTimeoutId) {
     clearTimeout(readyTimeoutId);
     readyTimeoutId = null;
-  }
-  if (historyTimeoutId) {
-    clearTimeout(historyTimeoutId);
-    historyTimeoutId = null;
   }
   emit("cancel-suggest");
   isDragging.value = false;
@@ -479,7 +460,6 @@ const setupStencilDragListeners = () => {
 
 let dragListenerCleanup: (() => void) | null = null;
 let readyTimeoutId: ReturnType<typeof setTimeout> | null = null;
-let historyTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
 type NaturalCrop = { x: number; y: number; width: number; height: number };
 
@@ -487,185 +467,76 @@ function mapNaturalToCropperCoords(
   natural: NaturalCrop,
   cropperInstance: CropperInstance
 ): NaturalCrop | null {
-  if (cropperInstance.visibleArea && cropperInstance.imageSize) {
-    const va = cropperInstance.visibleArea;
-    const img = cropperInstance.imageSize;
-    const scaleX = va.width / img.width;
-    const scaleY = va.height / img.height;
+  const img = cropperInstance.imageSize;
+  const el = cropperInstance.image;
+  const naturalWidth = el?.naturalWidth ?? img?.width;
+  const naturalHeight = el?.naturalHeight ?? img?.height;
+
+  if (img && naturalWidth && naturalHeight) {
+    const scaleX = img.width / naturalWidth;
+    const scaleY = img.height / naturalHeight;
     return {
-      x: va.left + natural.x * scaleX,
-      y: va.top + natural.y * scaleY,
+      x: natural.x * scaleX,
+      y: natural.y * scaleY,
       width: natural.width * scaleX,
       height: natural.height * scaleY,
     };
   }
 
-  if (cropperInstance.image) {
+  if (el) {
     return { ...natural };
   }
 
   return null;
 }
 
-const DEBUG_POINT_COLORS: Record<
-  PortraitDebugOverlay["points"][number]["kind"],
-  string
-> = {
-  "face-ear": "#ff4444",
-  "face-cheek": "#ffcc00",
-  "face-eye": "#00ccff",
-  "pose-ear": "#44ff44",
-  bbox: "#ff44ff",
-};
+function resolveInitialNaturalCrop(): NaturalCrop | null {
+  if (suggestedCrop) return { ...suggestedCrop };
+  if (initialCrop) return { ...initialCrop };
+  return null;
+}
 
-/**
- * On-screen rectangle of the displayed image, relative to the overlay canvas.
- * Using the actual <img> element's bounding box correctly accounts for
- * letterboxing and fit-scaling (the cropper's internal image space does not
- * map 1:1 to DOM pixels).
- */
-function getImageScreenRect(): {
+function fullImageDefaultSize({
+  imageSize,
+  visibleArea,
+}: {
+  imageSize: { width: number; height: number };
+  visibleArea?: { width: number; height: number } | null;
+}) {
+  const area = visibleArea || imageSize;
+  return {
+    width: area.width,
+    height: area.height,
+  };
+}
+
+function setFullImageCoordinates(): {
   left: number;
   top: number;
   width: number;
   height: number;
 } | null {
-  const instance = cropper.value as unknown as { $el?: HTMLElement } | null;
-  const canvas = debugCanvas.value;
-  const imgEl = instance?.$el?.querySelector(
-    ".vue-advanced-cropper__image"
-  ) as HTMLElement | null;
-  if (!imgEl || !canvas) return null;
+  if (!cropper.value) return null;
 
-  const wrapper = canvas.parentElement;
-  if (!wrapper) return null;
-
-  const imgRect = imgEl.getBoundingClientRect();
-  const wrapRect = wrapper.getBoundingClientRect();
-  if (imgRect.width <= 0 || imgRect.height <= 0) return null;
-
+  cropper.value.setCoordinates(
+    ({
+      imageSize,
+    }: {
+      imageSize: { width: number; height: number };
+    }) => ({
+      left: 0,
+      top: 0,
+      width: imageSize.width,
+      height: imageSize.height,
+    })
+  );
+  cropper.value.updateBoundaries();
   return {
-    left: imgRect.left - wrapRect.left,
-    top: imgRect.top - wrapRect.top,
-    width: imgRect.width,
-    height: imgRect.height,
+    left: 0,
+    top: 0,
+    width: cropper.value.imageSize?.width ?? 0,
+    height: cropper.value.imageSize?.height ?? 0,
   };
-}
-
-function drawDetectionDebugOverlay(): void {
-  const canvas = debugCanvas.value;
-  const overlay = detectionDebug;
-  if (!canvas || !overlay || !showDebugOverlay.value) return;
-
-  // Normalized → screen mapping breaks under rotation; skip to avoid confusion.
-  if (currentRotation.value !== 0) return;
-
-  const wrapper = canvas.parentElement;
-  if (!wrapper) return;
-
-  const width = wrapper.clientWidth;
-  const height = wrapper.clientHeight;
-  if (width <= 0 || height <= 0) return;
-
-  const imgRect = getImageScreenRect();
-  if (!imgRect) return;
-
-  const imgWidth = overlay.imageSize.width;
-  const imgHeight = overlay.imageSize.height;
-  if (imgWidth <= 0 || imgHeight <= 0) return;
-
-  const toScreen = (px: number, py: number): { x: number; y: number } => ({
-    x: imgRect.left + (px / imgWidth) * imgRect.width,
-    y: imgRect.top + (py / imgHeight) * imgRect.height,
-  });
-
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = Math.round(width * dpr);
-  canvas.height = Math.round(height * dpr);
-  canvas.style.width = `${width}px`;
-  canvas.style.height = `${height}px`;
-
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, width, height);
-
-  for (const point of overlay.points) {
-    const mapped = toScreen(point.x, point.y);
-    const color = DEBUG_POINT_COLORS[point.kind];
-    ctx.beginPath();
-    ctx.fillStyle = color;
-    ctx.arc(mapped.x, mapped.y, 4, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.font = "10px sans-serif";
-    ctx.fillStyle = color;
-    ctx.fillText(point.label, mapped.x + 6, mapped.y - 6);
-  }
-
-  const drawRect = (
-    box: { x: number; y: number; width: number; height: number },
-    color: string,
-    dash: number[]
-  ) => {
-    const topLeft = toScreen(box.x, box.y);
-    const bottomRight = toScreen(
-      box.x + box.width,
-      box.y + box.height
-    );
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
-    ctx.setLineDash(dash);
-    ctx.strokeRect(
-      topLeft.x,
-      topLeft.y,
-      bottomRight.x - topLeft.x,
-      bottomRight.y - topLeft.y
-    );
-    ctx.setLineDash([]);
-  };
-
-  if (overlay.bbox) {
-    drawRect(overlay.bbox, DEBUG_POINT_COLORS.bbox, [6, 4]);
-  }
-
-  if (overlay.appliedCrop) {
-    drawRect(overlay.appliedCrop, "rgba(255, 255, 255, 0.95)", []);
-  }
-
-  const legend = [
-    overlay.widthSource ? `source: ${overlay.widthSource}` : null,
-    overlay.faceWidthPx != null
-      ? `face cap: ${Math.round(overlay.faceWidthPx)}px`
-      : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-
-  if (legend) {
-    ctx.font = "11px sans-serif";
-    ctx.fillStyle = "rgba(255, 255, 255, 0.92)";
-    ctx.strokeStyle = "rgba(0, 0, 0, 0.7)";
-    ctx.lineWidth = 3;
-    ctx.strokeText(legend, 10, height - 12);
-    ctx.fillText(legend, 10, height - 12);
-  }
-}
-
-function scheduleDebugOverlayDraw(): void {
-  if (!debugOverlayAvailable || !detectionDebug || !showDebugOverlay.value) {
-    return;
-  }
-  nextTick(() => {
-    requestAnimationFrame(() => drawDetectionDebugOverlay());
-  });
-}
-
-function resolveInitialNaturalCrop(): NaturalCrop | null {
-  if (suggestedCrop) return { ...suggestedCrop };
-  if (initialCrop) return { ...initialCrop };
-  return null;
 }
 
 function applyCoordinatesToCropper(
@@ -691,78 +562,26 @@ function applyCoordinatesToCropper(
     }
   }
 
-  if (useFullFrameFallback && cropper.value.visibleArea) {
-    const visibleArea = cropper.value.visibleArea;
-    const coordinates = {
-      left: visibleArea.left,
-      top: visibleArea.top,
-      width: visibleArea.width,
-      height: visibleArea.height,
-    };
-    cropper.value.setCoordinates(coordinates);
-    cropper.value.updateBoundaries();
-    return coordinates;
-  }
-
   if (useFullFrameFallback) {
-    cropper.value.reset();
-    cropper.value.updateBoundaries();
-    return cropper.value.stencilCoordinates;
+    return setFullImageCoordinates();
   }
 
   return null;
 }
 
-function seedCropHistory(coordinates: {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-}): void {
-  if (!cropper.value) return;
-
-  historyTimeoutId = setTimeout(() => {
-    if (!cropper.value) return;
-    const { canvas } = cropper.value.getResult();
-    if (canvas) {
-      canvas.toBlob((blob) => {
-        if (blob) {
-          cropHistory.value = [{ blob, coordinates }];
-          cropFuture.value = [];
-        }
-      }, "image/png");
-    }
-  }, 50);
-}
-
 const applyStencilFromProps = (useFullFrameFallback = true) => {
   if (!cropper.value || !cropper.value.image) return;
-
-  const natural = resolveInitialNaturalCrop();
-  const coordinates = applyCoordinatesToCropper(natural, useFullFrameFallback);
-  if (coordinates) {
-    seedCropHistory(coordinates);
-  }
+  applyCoordinatesToCropper(resolveInitialNaturalCrop(), useFullFrameFallback);
 };
 
 watch(
   () => suggestedCrop,
-  (crop) => {
+  async (crop) => {
     if (!crop || !cropper.value?.image) return;
-    const coordinates = applyCoordinatesToCropper({ ...crop }, false);
-    if (coordinates) {
-      seedCropHistory(coordinates);
-    }
-    scheduleDebugOverlayDraw();
+    await nextTick();
+    applyCoordinatesToCropper({ ...crop }, false);
   }
 );
-
-watch(
-  () => [detectionDebug, suggestedCrop],
-  () => scheduleDebugOverlayDraw()
-);
-
-watch(showDebugOverlay, () => scheduleDebugOverlayDraw());
 
 const onCropperReady = () => {
   if (cropper.value && cropper.value.image) {
@@ -780,7 +599,6 @@ const onCropperReady = () => {
 
         readyTimeoutId = setTimeout(() => {
           applyStencilFromProps(true);
-          scheduleDebugOverlayDraw();
         }, 50);
       }
     });
@@ -803,10 +621,6 @@ const cropImage = async () => {
         // stencilCoordinates are in a different coordinate system (viewport/scaled)
         const resultCoordinates = (cropperResult as any).coordinates;
         const stencilCoords = cropper.value.stencilCoordinates;
-
-        // Store stencil coordinates for internal history (used for undo/redo within cropper)
-        cropHistory.value.push({ blob, coordinates: stencilCoords });
-        cropFuture.value = [];
 
         // Use coordinates from getResult() - they're already in natural image pixel space
         let naturalCoords;
@@ -896,78 +710,23 @@ const rotate = (angle: number) => {
       height: newHeight,
     };
     cropper.value.setCoordinates(coordinates);
-
-    const { canvas } = cropper.value.getResult();
-    if (canvas) {
-      canvas.toBlob((blob) => {
-        if (blob) {
-          cropHistory.value.push({ blob, coordinates });
-          cropFuture.value = [];
-        }
-      }, "image/png");
-    } else {
-      console.warn("Canvas is undefined in rotate");
-    }
   }
 };
 
-const undo = () => {
-  if (cropHistory.value.length > 1 && cropper.value) {
-    const lastState = cropHistory.value.pop();
-    if (lastState) {
-      cropFuture.value.push(lastState);
-      const currentState = cropHistory.value[cropHistory.value.length - 1];
-      cropper.value.reset(); // Reset cropper to clear rotation state
-      currentImageSrc.value = URL.createObjectURL(currentState.blob);
-    }
-  }
-};
-
-const redo = () => {
-  if (cropFuture.value.length > 0 && cropper.value) {
-    const nextState = cropFuture.value.pop();
-    if (nextState) {
-      cropHistory.value.push(nextState);
-      cropper.value.reset(); // Reset cropper to clear rotation state
-      currentImageSrc.value = URL.createObjectURL(nextState.blob);
-    }
-  }
-};
-
-const reset = () => {
-  if (cropper.value && cropper.value.image) {
-    cropper.value.reset();
-    cropHistory.value = [];
-    cropFuture.value = [];
-    currentRotation.value = initialRotation || 0;
-    const img = cropper.value.image;
-    img.onload = () => {
-      if (cropper.value) {
-        const coordinates = {
-          left: 0,
-          top: 0,
-          width: img.naturalWidth,
-          height: img.naturalHeight,
-        };
-        cropper.value.setCoordinates(coordinates);
-        const { canvas } = cropper.value!.getResult();
-        if (canvas) {
-          canvas.toBlob((blob) => {
-            if (blob) {
-              cropHistory.value = [{ blob, coordinates }];
-            }
-          }, "image/png");
-        } else {
-          console.warn("Canvas is undefined in reset");
-        }
-      }
-    };
-    if (img.complete) {
-      img.onload(null as any);
-    }
-  } else {
+const reset = async () => {
+  if (!cropper.value?.image) {
     console.warn("Cropper or image is undefined in reset");
+    return;
   }
+
+  selectedAspectRatio.value = null;
+  selectedCropTarget.value = null;
+  currentRotation.value = initialRotation || 0;
+  await nextTick();
+
+  cropper.value.reset();
+  await nextTick();
+  setFullImageCoordinates();
 };
 </script>
 
@@ -1094,22 +853,41 @@ const reset = () => {
   position: relative;
 }
 
-.detection-debug-canvas {
-  position: absolute;
-  inset: 0;
-  z-index: 6;
-  pointer-events: none;
+.crop-target-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+  width: 100%;
 }
 
-.debug-overlay-toggle {
+.crop-target-group {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
-  color: var(--text-secondary, #666);
-  margin: 4px 0 0;
-  cursor: pointer;
-  user-select: none;
+}
+
+.crop-target-btn {
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+}
+
+.crop-target-btn--active {
+  background: rgba(212, 175, 55, 0.22);
+  border-color: rgba(212, 175, 55, 0.5);
+  color: #e8c96a;
+}
+
+.crop-target-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .suggestion-overlay {
@@ -1127,12 +905,6 @@ const reset = () => {
   pointer-events: none;
 }
 
-.suggest-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
 .suggestion-message {
   width: 100%;
   margin: 0;
@@ -1147,16 +919,38 @@ const reset = () => {
 
 .controls {
   display: flex;
-  gap: 12px;
-  align-items: center;
-  justify-content: center;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
   padding: 12px 0;
   border-top: 1px solid var(--surface-border);
 }
 
+.controls-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
 .controls label {
   font-weight: 500;
+}
+
+.control-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  padding: 0;
+  white-space: nowrap;
+}
+
+.control-icon-btn i {
+  font-size: 0.95rem;
 }
 
 .actions {
@@ -1189,9 +983,13 @@ const reset = () => {
     width: 96vw;
   }
 
-  .controls {
+  .controls-row {
     gap: 8px;
     flex-wrap: wrap;
+  }
+
+  .crop-target-bar {
+    gap: 8px;
   }
 
   .actions {

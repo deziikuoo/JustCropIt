@@ -109,7 +109,7 @@
         >
           <i class="fas fa-paste"></i>
         </button>
-        <button class="Revert" type="button" @click="$emit('revert')" title="Revert">
+        <button class="Revert" type="button" @click="$emit('revert')" title="Reset">
           <i class="fas fa-undo"></i>
         </button>
         <button class="Download" type="button" @click="$emit('download')" title="Download">
