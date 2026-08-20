@@ -604,7 +604,7 @@ export function runOptimizationChecks(): OptimizationCheckResult[] {
     name: 'Passive touch/scroll listeners',
     status: 'info',
     message:
-      'Spec: resize/touchend/touchcancel use { passive: true }; touchmove for drag uses passive: false (PhotoGrid, ShimmerBackground, DeletionNotification)',
+      'Spec: resize/touchend/touchcancel use { passive: true }; touchmove for drag uses passive: false (PhotoGrid, ShimmerBackground)',
     detail: 'See OptimizationImp2.md §5.7',
   });
 

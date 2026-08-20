@@ -1,0 +1,24 @@
+name: Feature request
+description: Suggest an improvement or new capability
+title: "[Feature] "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Share what you'd like JustCropIt to do differently or better.
+  - type: textarea
+    id: description
+    attributes:
+      label: Proposal
+      placeholder: What would you like to see?
+    validations:
+      required: true
+  - type: textarea
+    id: contact
+    attributes:
+      label: Contact (optional)
+      placeholder: Email
+    validations:
+      required: false

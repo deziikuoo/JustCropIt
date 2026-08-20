@@ -143,10 +143,21 @@
               </button>
             </div>
           </div>
-          <DeletionNotification />
         </div>
       </div>
     </div>
+
+    <button
+      v-show="!showFeedbackPanel"
+      type="button"
+      class="feedback-fab"
+      title="Support, feedback, or report a bug"
+      aria-label="Open support"
+      @click="showFeedbackPanel = true"
+    >
+      <i class="fas fa-comment-dots" aria-hidden="true"></i>
+      <span>Support</span>
+    </button>
 
     <main class="main-content">
       <!-- Wrapper div required: PhotoGrid has multiple root nodes, so v-show on the
@@ -200,6 +211,11 @@
       @close="handleBatchCropSelectorClose"
     />
     <OperationHistoryPanel v-if="appMode === 'photos'" />
+    <FeedbackPanel
+      :open="showFeedbackPanel"
+      @close="showFeedbackPanel = false"
+      @submitted="handleFeedbackSubmitted"
+    />
     <CropModal
       v-if="showCropModal"
       :show="showCropModal"
@@ -251,12 +267,12 @@ import CropModal from "./components/CropModal.vue";
 import BatchCropSelector from "./components/BatchCropSelector.vue";
 import StorageAlert from "./components/StorageAlert.vue";
 import ShimmerBackground from "./components/ShimmerBackground.vue";
-import DeletionNotification from "./components/DeletionNotification.vue";
 // import PerformanceDashboard from "./components/PerformanceDashboard.vue";
 // import OptimizationCheckModal from "./components/OptimizationCheckModal.vue";
 // import CopyPasteVisualizer from "./components/CopyPasteVisualizer.vue";
 import VideoExtractor from "./components/VideoExtractor.vue";
 import OperationHistoryPanel from "./components/OperationHistoryPanel.vue";
+import FeedbackPanel from "./components/FeedbackPanel.vue";
 import { getExportStripChunkSize, HISTORY_MAX_SIZE } from "./constants/optimization";
 import { UNDO_REDO_MANAGER_KEY } from "./types/history";
 import { useOperationHistory } from "./composables/useOperationHistory";
@@ -476,6 +492,7 @@ function getInitialAppMode(): 'photos' | 'video' {
 }
 
 const appMode = ref<'photos' | 'video'>(getInitialAppMode());
+const showFeedbackPanel = ref(false);
 
 watch(appMode, (mode) => {
   try {
@@ -573,6 +590,15 @@ const showAlert = (
   autoDismiss = 0
 ) => {
   alert.value = { show: true, type, title, message, autoDismiss };
+};
+
+const handleFeedbackSubmitted = () => {
+  showAlert(
+    "info",
+    "Support",
+    "A GitHub issue draft opened in a new tab. Sign in on GitHub and click Submit to send it.",
+    8000
+  );
 };
 
 // Cleanup interval
@@ -2003,12 +2029,45 @@ onUnmounted(() => {
   pointer-events: auto;
 }
 
+.feedback-fab {
+  position: fixed;
+  right: calc(12px + env(safe-area-inset-right, 0px));
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  z-index: 1100;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  min-height: 0;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(18, 18, 26, 0.98);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+
+.feedback-fab:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.95);
+  transform: none;
+}
+
 .app-brand {
   flex: 0 0 auto;
-  padding-top: 8px;
+  display: inline-block;
+  padding-top: 6px;
+  padding-bottom: 4px;
+  overflow: visible;
   font-size: 1.35rem;
   font-weight: 700;
-  line-height: 1;
+  line-height: 1.25;
   background: linear-gradient(
     135deg,
     #d4af37 0%,
@@ -2138,7 +2197,8 @@ onUnmounted(() => {
 @media (max-width: 768px) {
   .app-brand {
     font-size: 1.05rem;
-    padding-top: 7px;
+    padding-top: 5px;
+    padding-bottom: 3px;
   }
 
   .mode-tab {
@@ -2174,6 +2234,13 @@ onUnmounted(() => {
   }
 
   .app-size-controls {
+    padding: 3px 6px;
+    gap: 4px;
+  }
+
+  .feedback-fab {
+    right: calc(8px + env(safe-area-inset-right, 0px));
+    bottom: calc(8px + env(safe-area-inset-bottom, 0px));
     padding: 3px 6px;
     gap: 4px;
   }

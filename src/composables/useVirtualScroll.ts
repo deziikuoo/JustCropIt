@@ -5,6 +5,7 @@ interface UseVirtualScrollOptions {
   totalItems: Ref<number>;
   itemMinWidth: Ref<number>;
   gap: Ref<number>;
+  rowGap?: Ref<number>;
   containerRef: Ref<HTMLElement | undefined | null>;
   enabled: Ref<boolean>;
   bufferRows?: number;
@@ -14,6 +15,7 @@ export function useVirtualScroll({
   totalItems,
   itemMinWidth,
   gap,
+  rowGap,
   containerRef,
   enabled,
   bufferRows = 3
@@ -22,6 +24,7 @@ export function useVirtualScroll({
   const scrollY = ref(typeof window !== 'undefined' ? window.scrollY : 0);
   const containerWidth = ref(0);
   const containerTop = ref(0);
+  const rowGapSize = computed(() => rowGap?.value ?? gap.value);
 
   // Layout calculations
   const layout = computed(() => {
@@ -56,7 +59,7 @@ export function useVirtualScroll({
   const totalRows = computed(() => Math.ceil(totalItems.value / layout.value.colCount));
   const totalHeight = computed(() => {
     if (totalRows.value === 0) return 0;
-    return totalRows.value * layout.value.rowHeight + (totalRows.value - 1) * gap.value;
+    return totalRows.value * layout.value.rowHeight + (totalRows.value - 1) * rowGapSize.value;
   });
 
   // Calculate visible range
@@ -79,7 +82,7 @@ export function useVirtualScroll({
     const viewStart = Math.max(0, scrollY.value - containerTop.value);
     const viewEnd = viewStart + windowHeight.value;
 
-    const rowHeightWithGap = layout.value.rowHeight + gap.value;
+    const rowHeightWithGap = layout.value.rowHeight + rowGapSize.value;
     
     // Calculate visible rows
     let startRow = Math.floor(viewStart / rowHeightWithGap);
@@ -100,7 +103,7 @@ export function useVirtualScroll({
     if (!enabled.value) return 0;
     const startRow = Math.floor(visibleRange.value.start / layout.value.colCount);
     if (startRow <= 0) return 0;
-    const rowHeightWithGap = layout.value.rowHeight + gap.value;
+    const rowHeightWithGap = layout.value.rowHeight + rowGapSize.value;
     return startRow * rowHeightWithGap;
   });
 
@@ -109,7 +112,7 @@ export function useVirtualScroll({
     const endRow = Math.ceil(visibleRange.value.end / layout.value.colCount);
     const remainingRows = totalRows.value - endRow;
     if (remainingRows <= 0) return 0;
-    const rowHeightWithGap = layout.value.rowHeight + gap.value;
+    const rowHeightWithGap = layout.value.rowHeight + rowGapSize.value;
     // For the very last row, there is no gap after it, but our calculation includes it per row.
     // Exact height might be slightly off by one gap, but for spacer it's usually fine.
     // Correct calculation:

@@ -12,6 +12,7 @@
             @change="$emit('upload', $event)"
           />
         </label>
+        <p class="photo-input-hint">Photos are deleted after 24 hours</p>
       </div>
     </div>
     <div class="grid-wrapper" ref="gridWrapperRef">
@@ -325,7 +326,7 @@
           </div>
         </div>
 
-        <div class="grid" :style="{ gridTemplateColumns: currentGridTemplate, '--item-size': gridCellSizePx + 'px' }" ref="gridRef">
+        <div class="grid" :style="{ gridTemplateColumns: currentGridTemplate, '--item-size': gridCellSizePx + 'px', columnGap: gap + 'px', rowGap: rowGap + 'px' }" ref="gridRef">
           <div 
             v-if="spacerBeforeHeight > 0" 
             class="virtual-spacer" 
@@ -799,8 +800,7 @@ const handleDragStart = (index: number, event: MouseEvent | TouchEvent) => {
   const target = event.target as HTMLElement;
   // Ignore drags starting on action buttons, checkboxes, or action containers
   if (
-    target.closest(".actions") ||
-    target.closest(".actions-bottom") ||
+    target.closest(".action-dropdown") ||
     target.closest(".photo-checkbox")
   ) {
     return;
@@ -1081,8 +1081,7 @@ const handlePhotoCardMouseDown = (index: number, event: MouseEvent) => {
 
   // Don't activate hold-to-select if clicking on interactive elements
   if (
-    target.closest(".actions") ||
-    target.closest(".actions-bottom") ||
+    target.closest(".action-dropdown") ||
     target.closest(".photo-checkbox")
   ) {
     return;
@@ -1178,8 +1177,7 @@ const handlePhotoCardTouchStart = (index: number, event: TouchEvent) => {
 
   // Don't activate hold-to-select if touching on interactive elements
   if (
-    target.closest(".actions") ||
-    target.closest(".actions-bottom") ||
+    target.closest(".action-dropdown") ||
     target.closest(".photo-checkbox")
   ) {
     return;
@@ -1322,6 +1320,12 @@ const gap = computed(() => {
   return 24;
 });
 
+const rowGap = computed(() => {
+  if (isSmallScreen.value) return 48;
+  if (isMediumScreen.value) return 52;
+  return 56;
+});
+
 const itemMinWidth = computed(() => {
   const presetSize = photoSizes[selectedPhotoSize.value].minSize;
 
@@ -1342,6 +1346,7 @@ const { visibleRange, spacerBeforeHeight, spacerAfterHeight } = useVirtualScroll
     totalItems: computed(() => props.photos.length),
     itemMinWidth,
     gap,
+    rowGap,
     containerRef: gridRef,
     enabled: virtualScrollEnabled,
   });
@@ -1451,8 +1456,7 @@ const handlePhotoCardClick = (index: number, event: Event) => {
     const target = event.target as HTMLElement;
     // Don't trigger if clicking on action buttons or checkbox
     if (
-      !target.closest(".actions") &&
-      !target.closest(".actions-bottom") &&
+      !target.closest(".action-dropdown") &&
       !target.closest(".photo-checkbox")
     ) {
       const isCurrentlySelected = isSelected(index);
@@ -2021,7 +2025,21 @@ const handlePhotoCardClick = (index: number, event: Event) => {
 
 .photo-input-wrapper {
   margin-top: 16px;
-  display: inline-block;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.photo-input-hint {
+  margin: 0;
+  max-width: 16rem;
+  font-size: 0.7rem;
+  font-weight: 400;
+  line-height: 1.3;
+  color: rgba(255, 255, 255, 0.45);
+  font-style: italic;
+  text-align: center;
 }
 
 .photo-input-label {
@@ -2475,7 +2493,6 @@ const handlePhotoCardClick = (index: number, event: Event) => {
 /* Photo Grid */
 .grid {
   display: grid;
-  gap: 24px;
   width: 100%;
   max-width: 100%;
   justify-content: center;
@@ -2492,20 +2509,12 @@ const handlePhotoCardClick = (index: number, event: Event) => {
     margin-top: 0;
     margin-bottom: 40px;
   }
-
-  .grid {
-    gap: 16px;
-  }
 }
 
 @media (max-width: 480px) {
   .grid-wrapper {
     margin-top: 0;
     margin-bottom: 30px;
-  }
-
-  .grid {
-    gap: 12px;
   }
 }
 
@@ -2525,6 +2534,10 @@ const handlePhotoCardClick = (index: number, event: Event) => {
     margin-top: 12px;
     padding: 8px 12px;
     font-size: 0.8rem;
+  }
+
+  .photo-input-hint {
+    font-size: 0.65rem;
   }
 }
 </style>

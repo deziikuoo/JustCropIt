@@ -1,0 +1,26 @@
+name: Bug report
+description: Report something broken in JustCropIt
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please include steps to reproduce if you can.
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Include steps to reproduce, expected behavior, and what you saw instead.
+      placeholder: Describe the bug…
+    validations:
+      required: true
+  - type: textarea
+    id: contact
+    attributes:
+      label: Contact (optional)
+      description: Email or GitHub handle if you'd like a follow-up.
+      placeholder: Email
+    validations:
+      required: false

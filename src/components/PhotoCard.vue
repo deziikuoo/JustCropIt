@@ -67,9 +67,15 @@
         ></div>
         <div v-else class="image-placeholder"></div>
       </div>
-      <div class="actions">
+    </div>
+    <div class="action-dropdown" @click.stop @mousedown.stop>
+      <div class="action-dropdown__tab" aria-hidden="true">
+        <i class="fas fa-chevron-up"></i>
+      </div>
+      <div class="action-dropdown__menu">
         <button
           class="Flip H"
+          type="button"
           @click="$emit('flip', 'horizontal')"
           title="Flip Horizontally"
         >
@@ -77,16 +83,18 @@
         </button>
         <button
           class="Flip V"
+          type="button"
           @click="$emit('flip', 'vertical')"
           title="Flip Vertically"
         >
           <i class="fas fa-arrows-up-down"></i>
         </button>
-        <button class="Crop" @click="$emit('crop')" title="Crop">
+        <button class="Crop" type="button" @click="$emit('crop')" title="Crop">
           <i class="fas fa-crop"></i>
         </button>
         <button
           class="CopySettings"
+          type="button"
           @click="$emit('copy-settings')"
           title="Copy Settings"
         >
@@ -94,21 +102,20 @@
         </button>
         <button
           class="PasteSettings"
+          type="button"
           :disabled="!hasCopiedSettings"
           @click="$emit('paste-settings')"
           title="Paste Settings"
         >
           <i class="fas fa-paste"></i>
         </button>
-        <button class="Revert" @click="$emit('revert')" title="Revert">
+        <button class="Revert" type="button" @click="$emit('revert')" title="Revert">
           <i class="fas fa-undo"></i>
         </button>
-      </div>
-      <div class="actions-bottom">
-        <button class="Download" @click="$emit('download')" title="Download">
+        <button class="Download" type="button" @click="$emit('download')" title="Download">
           <i class="fas fa-download"></i>
         </button>
-        <button class="Delete" @click="$emit('delete')" title="Delete">
+        <button class="Delete" type="button" @click="$emit('delete')" title="Delete">
           <i class="fas fa-trash"></i>
         </button>
       </div>
@@ -168,8 +175,8 @@ defineEmits<{
 
 <style scoped>
 .photo-card-wrapper {
-  content-visibility: auto;
-  contain-intrinsic-size: var(--item-size) var(--item-size);
+  position: relative;
+  overflow: visible;
 }
 
 .photo-card {
@@ -219,25 +226,32 @@ defineEmits<{
 }
 
 @media (hover: hover) {
-  .photo-card:hover {
+  .photo-card-wrapper:hover {
+    z-index: 5;
+  }
+
+  .photo-card-wrapper:hover .photo-card {
     border-color: #ffffff;
     box-shadow:
       0 0 8px rgba(255, 215, 0, 0.15),
       var(--shadow-md);
-    transform: translateY(-4px);
   }
 
-  .photo-card.select-mode:hover {
+  .photo-card-wrapper:hover .photo-card.select-mode {
     border-color: #ffffff;
   }
 
-  .photo-card:hover .photo-checkbox,
-  .photo-card:hover .actions,
-  .photo-card:hover .actions-bottom {
+  .photo-card-wrapper:hover .photo-checkbox,
+  .photo-card-wrapper:hover .action-dropdown {
     opacity: 1;
+    pointer-events: auto;
   }
 
-  .photo-card:hover .image-container img {
+  .photo-card-wrapper:hover .action-dropdown {
+    transform: translateY(0);
+  }
+
+  .photo-card-wrapper:hover .image-container img {
     transform: scale(1.02);
   }
 }
@@ -250,12 +264,23 @@ defineEmits<{
     var(--shadow-md);
 }
 
-.photo-card.selected .photo-checkbox,
-.photo-card.selected .actions,
-.photo-card.selected .actions-bottom,
-.photo-card:focus-within .actions,
-.photo-card:focus-within .actions-bottom {
+.photo-card-wrapper:has(.photo-card.selected),
+.photo-card-wrapper:has(.photo-card:focus-within) {
+  z-index: 4;
+}
+
+.photo-card.selected .photo-checkbox {
   opacity: 1;
+}
+
+.photo-card-wrapper:has(.photo-card:focus-within) {
+  z-index: 4;
+}
+
+.photo-card-wrapper:has(.photo-card:focus-within) .action-dropdown {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
 }
 
 .photo-card.dragging-over {
@@ -428,121 +453,129 @@ defineEmits<{
   }
 }
 
-.actions {
+.action-dropdown {
   position: absolute;
-  top: 0;
+  bottom: calc(100% - 2px);
+  top: auto;
   left: 0;
   right: 0;
-  z-index: 2;
+  width: 100%;
+  max-width: 100%;
+  z-index: 6;
   display: flex;
+  flex-direction: column-reverse;
+  align-items: center;
+  box-sizing: border-box;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(6px);
+  transition:
+    opacity var(--transition-fast),
+    transform var(--transition-fast);
+}
+
+.action-dropdown__tab {
+  width: 42px;
+  height: 14px;
+  display: flex;
+  align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 12px;
-  background: linear-gradient(
-    to bottom,
-    rgba(0, 0, 0, 0.7) 0%,
-    transparent 100%
-  );
-  opacity: 0;
-  transition: opacity var(--transition-normal);
+  border-radius: 8px 8px 0 0;
+  background: rgba(18, 18, 26, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-bottom: none;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 0.55rem;
+  box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.35);
 }
 
-.actions button {
-  padding: 8px 12px;
-  font-size: 0.8rem;
-  background: rgba(30, 30, 46, 0.9);
-  backdrop-filter: blur(8px);
+.action-dropdown__tab i {
+  transition: transform var(--transition-fast);
 }
 
-.actions button:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.2);
+.photo-card-wrapper:hover .action-dropdown__tab i,
+.photo-card-wrapper:has(.photo-card:focus-within) .action-dropdown__tab i {
+  transform: rotate(180deg);
 }
 
-@media (max-width: 768px) {
-  .actions {
-    padding: 8px;
-    gap: 6px;
-  }
-
-  .actions button {
-    padding: 8px 10px;
-    font-size: 0.75rem;
-    min-height: 36px;
-    min-width: 36px;
-  }
-}
-
-@media (max-width: 480px) {
-  .actions {
-    padding: 6px;
-    gap: 4px;
-  }
-
-  .actions button {
-    padding: 6px 8px;
-    font-size: 0.7rem;
-    min-height: 48px;
-    min-width: 48px;
-  }
-
-  .actions button i {
-    font-size: 0.85rem;
-  }
-}
-
-.actions-bottom {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  z-index: 2;
+.action-dropdown__menu {
   display: flex;
-  justify-content: space-between;
-  padding: 12px;
-  background: linear-gradient(to top, rgba(0, 0, 0, 0.7) 0%, transparent 100%);
-  opacity: 0;
-  transition: opacity var(--transition-normal);
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 3px;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 5px;
+  border-radius: 10px 10px 0 0;
+  background: rgba(18, 18, 26, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: none;
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
 }
 
-.actions-bottom button {
-  padding: 8px 12px;
-  font-size: 0.8rem;
-  background: rgba(30, 30, 46, 0.9);
-  backdrop-filter: blur(8px);
+.action-dropdown__menu button {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 28px;
+  padding: 4px 0;
+  font-size: 0.7rem;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
-.actions-bottom button.Download:hover:not(:disabled) {
+.action-dropdown__menu button:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(212, 175, 55, 0.22) 0%, rgba(212, 175, 55, 0.1) 100%);
+  color: #ffd700;
+  transform: none;
+}
+
+.action-dropdown__menu button.Download:hover:not(:disabled) {
   background: var(--success-color);
   border-color: var(--success-color);
+  color: #fff;
 }
 
-.actions-bottom button.Delete:hover:not(:disabled) {
+.action-dropdown__menu button.Delete:hover:not(:disabled) {
   background: var(--danger-color);
   border-color: var(--danger-color);
+  color: #fff;
 }
 
 @media (max-width: 768px) {
-  .actions-bottom {
-    padding: 8px;
+  .action-dropdown__menu {
+    gap: 2px;
+    padding: 4px;
   }
 
-  .actions-bottom button {
-    padding: 8px 14px;
-    font-size: 0.75rem;
-    min-height: 36px;
+  .action-dropdown__menu button {
+    min-height: 28px;
+  }
+}
+
+@media (hover: none) {
+  .photo-card-wrapper:has(.photo-card.selected) {
+    z-index: 4;
+  }
+
+  .photo-card-wrapper:has(.photo-card.selected) .action-dropdown {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
   }
 }
 
 @media (max-width: 480px) {
-  .actions-bottom {
-    padding: 6px;
+  .action-dropdown__menu button {
+    min-height: 32px;
+    min-width: 0;
+    padding: 4px 0;
   }
 
-  .actions-bottom button {
-    padding: 6px 10px;
+  .action-dropdown__menu button i {
     font-size: 0.7rem;
-    min-height: 48px;
-    min-width: 48px;
   }
 }
 </style>
