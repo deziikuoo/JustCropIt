@@ -18,6 +18,7 @@
     "fflate": "^0.8.3",
     "heic2any": "^0.0.4",
     "idb": "^8.0.0",
+    "onnxruntime-web": "^1.21.0",
     "thumbhash": "^0.1.1",
     "vue": "^3.5.13",
     "vue-advanced-cropper": "^2.8.9",

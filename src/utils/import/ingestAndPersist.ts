@@ -1,17 +1,21 @@
 import { getUploadIngestChunkSize } from '../../constants/optimization';
-import type { PersistedIngestPhoto } from '../../types/import';
+import type { ImportFormat, PersistedIngestPhoto } from '../../types/import';
 import type { Photo } from '../../types/photo';
 import { performanceLogger } from '../performanceLogger';
 import {
-  canStorePhoto,
+  createBulkPhotoSaver,
   getStorageStatus,
-  savePhoto,
+  isQuotaExceededError,
+  isTransientIdbError,
 } from '../photoStorage';
 import { scheduleIdleTask } from '../scheduler';
 import { createThumbhashFromBlob } from '../thumbhashGenerator';
 import { blobToFile } from '../blobToFile';
+import { pauseThumbnailBackfill, resumeThumbnailBackfill } from '../thumbnailBackfill';
 import {
   batchHasSlowPathCandidate,
+  fileLooksLikeJpeg,
+  inferImportFormatFromNameAndType,
   isSupportedImportFile,
 } from './formatDetector';
 import { ingestPhotoFile } from './uploadIngest';
@@ -21,12 +25,17 @@ export interface IngestPersistOptions {
   onError: (title: string, message: string) => void;
   onStorageWarning: (message: string) => void;
   onPhotosAdded?: (count: number) => void;
-  /** Called after each chunk is written to IndexedDB so the UI can stream updates */
+  /** Called as photos are written so the UI can stream updates */
   onPhotosPersisted?: (photos: Photo[]) => void;
   /** Fired as files are processed (success, fail, or quota) for progress UI */
   onProgress?: (processed: number, total: number) => void;
-  /** Prefer larger parallel chunks (video-frame JPEG/PNG dumps) */
+  /** Prefer larger parallel chunks (video-frame dumps); JPEG gets bigger chunks than PNG */
   preferLargerChunks?: boolean;
+  /**
+   * Frames already extracted on the Video tab — persist existing bytes;
+   * skip format sniff, EXIF, decode, and thumbnail bake (grid backfill later).
+   */
+  fromVideoSession?: boolean;
   /** Abort in-flight import; already-persisted photos are kept */
   signal?: AbortSignal;
 }
@@ -46,6 +55,7 @@ function toPhoto(result: PersistedIngestPhoto): Photo {
     id: result.id,
     original: result.file,
     current: result.file,
+    fileName: result.file.name,
     thumbnail: result.thumbnailFile,
     thumbhash: result.thumbhash,
     thumbRevision: 0,
@@ -72,9 +82,14 @@ function isAborted(signal?: AbortSignal): boolean {
   return Boolean(signal?.aborted);
 }
 
+function videoSourceFormat(file: File): ImportFormat {
+  const format = inferImportFormatFromNameAndType(file);
+  return format === 'unknown' ? 'jpeg' : format;
+}
+
 /**
  * Full upload pipeline: validate → ingest → quota check → IndexedDB → Photo models.
- * Streams persisted photos to the UI after each chunk.
+ * Streams persisted photos to the UI as they land.
  * Supports cancellation via `signal`; photos already written are retained.
  */
 export async function ingestAndPersistPhotos(
@@ -87,6 +102,7 @@ export async function ingestAndPersistPhotos(
   logImport(`Starting import of ${requestedCount} file(s)`, {
     prefix: options.operationIdPrefix,
     preferLargerChunks: Boolean(options.preferLargerChunks),
+    fromVideoSession: Boolean(options.fromVideoSession),
   });
 
   if (isAborted(signal)) {
@@ -102,16 +118,38 @@ export async function ingestAndPersistPhotos(
     };
   }
 
-  const supportedChecks = await Promise.all(
-    rawFiles.map(async (file) =>
-      (await isSupportedImportFile(file)) ? file : null
-    )
-  );
-  const files = supportedChecks.filter((f): f is File => f !== null);
-  const skippedUnsupported = requestedCount - files.length;
+  pauseThumbnailBackfill();
+  try {
+    return await ingestAndPersistPhotosBody(rawFiles, options, requestedCount);
+  } finally {
+    resumeThumbnailBackfill();
+  }
+}
 
-  if (skippedUnsupported > 0) {
-    logImport(`Skipped ${skippedUnsupported} unsupported file(s)`);
+async function ingestAndPersistPhotosBody(
+  rawFiles: File[],
+  options: IngestPersistOptions,
+  requestedCount: number
+): Promise<IngestPersistResult> {
+  const signal = options.signal;
+  const fromVideoSession = Boolean(options.fromVideoSession);
+
+  let files: File[];
+  let skippedUnsupported = 0;
+
+  if (fromVideoSession) {
+    files = rawFiles;
+  } else {
+    const supportedChecks = await Promise.all(
+      rawFiles.map(async (file) =>
+        (await isSupportedImportFile(file)) ? file : null
+      )
+    );
+    files = supportedChecks.filter((f): f is File => f !== null);
+    skippedUnsupported = requestedCount - files.length;
+    if (skippedUnsupported > 0) {
+      logImport(`Skipped ${skippedUnsupported} unsupported file(s)`);
+    }
   }
 
   if (isAborted(signal)) {
@@ -140,59 +178,30 @@ export async function ingestAndPersistPhotos(
     };
   }
 
-  const slowPathBatch = await batchHasSlowPathCandidate(files);
+  const slowPathBatch = fromVideoSession
+    ? false
+    : await batchHasSlowPathCandidate(files);
+  const filesAreJpeg = files.every(fileLooksLikeJpeg);
   const chunkSize = getUploadIngestChunkSize({
     hasSlowPathCandidate: slowPathBatch,
     preferLargerChunks: options.preferLargerChunks,
+    filesAreJpeg,
   });
 
   logImport(`Using chunk size ${chunkSize}`, {
     slowPathBatch,
+    filesAreJpeg,
+    fromVideoSession,
     fileCount: files.length,
   });
-
-  const status = await getStorageStatus();
-  logImport('Storage status before import', {
-    canStore: status.canStore,
-    shouldWarn: status.shouldWarn,
-    usageMB:
-      status.usage != null
-        ? Math.round(status.usage / 1024 / 1024)
-        : undefined,
-    quotaMB:
-      status.quota != null
-        ? Math.round(status.quota / 1024 / 1024)
-        : undefined,
-    availableMB:
-      status.available != null
-        ? Math.round(status.available / 1024 / 1024)
-        : undefined,
-    message: status.message,
-  });
-
-  if (status.shouldWarn && status.message) {
-    options.onStorageWarning(status.message);
-  }
-  if (!status.canStore) {
-    logImport(`Storage hard-blocked before import: ${status.message}`);
-    options.onError(
-      'Storage Limit',
-      status.message || 'Not enough storage to import photos.'
-    );
-    return {
-      photos: [],
-      workerUsed: false,
-      stoppedEarly: true,
-      cancelled: false,
-      failedCount: 0,
-      skippedUnsupported,
-      requestedCount,
-    };
-  }
 
   const operationId = `${options.operationIdPrefix}-${Date.now()}`;
   performanceLogger.startMeasurement(operationId);
 
+  const saver = createBulkPhotoSaver();
+  const halfwayAt = Math.ceil(files.length / 2);
+  let initialStorageChecked = false;
+  let halfwayStorageChecked = false;
   let anyWorkerUsed = false;
   let stoppedEarly = false;
   let cancelled = false;
@@ -200,6 +209,68 @@ export async function ingestAndPersistPhotos(
   let processedCount = 0;
   let stopReason: string | null = null;
   const newPhotos: Photo[] = [];
+  const slots: Array<Photo | null | undefined> = new Array(files.length);
+  let nextEmitIndex = 0;
+
+  const releaseInOrder = (index: number, photo: Photo | null): void => {
+    slots[index] = photo;
+    while (
+      nextEmitIndex < files.length &&
+      slots[nextEmitIndex] !== undefined
+    ) {
+      const item = slots[nextEmitIndex];
+      nextEmitIndex += 1;
+      if (item) {
+        newPhotos.push(item);
+        options.onPhotosPersisted?.([item]);
+      }
+    }
+  };
+
+  const applyStorageStatus = async (
+    label: string
+  ): Promise<'ok' | 'stop'> => {
+    const status = await getStorageStatus();
+    logImport(`Storage status ${label}`, {
+      canStore: status.canStore,
+      shouldWarn: status.shouldWarn,
+      usageMB:
+        status.usage != null
+          ? Math.round(status.usage / 1024 / 1024)
+          : undefined,
+      quotaMB:
+        status.quota != null
+          ? Math.round(status.quota / 1024 / 1024)
+          : undefined,
+      availableMB:
+        status.available != null
+          ? Math.round(status.available / 1024 / 1024)
+          : undefined,
+      message: status.message,
+    });
+
+    if (status.shouldWarn && status.message) {
+      options.onStorageWarning(status.message);
+    }
+    if (!status.canStore) {
+      logImport(`Storage hard-blocked ${label}: ${status.message}`);
+      options.onError(
+        'Storage Limit',
+        status.message || 'Not enough storage to import photos.'
+      );
+      return 'stop';
+    }
+    return 'ok';
+  };
+
+  const markProcessed = (): number => {
+    processedCount += 1;
+    options.onProgress?.(
+      Math.min(processedCount, files.length),
+      files.length
+    );
+    return processedCount;
+  };
 
   for (let i = 0; i < files.length; i += chunkSize) {
     if (stoppedEarly || cancelled) break;
@@ -213,26 +284,61 @@ export async function ingestAndPersistPhotos(
       break;
     }
 
+    if (!initialStorageChecked) {
+      initialStorageChecked = true;
+      if ((await applyStorageStatus('on first file')) === 'stop') {
+        stoppedEarly = true;
+        stopReason = 'storage quota / app storage limit';
+        break;
+      }
+    }
+
     const chunk = files.slice(i, i + chunkSize);
     const chunkIndex = Math.floor(i / chunkSize) + 1;
     const totalChunks = Math.ceil(files.length / chunkSize);
-    const chunkPhotos: Photo[] = [];
 
     logImport(
       `Processing chunk ${chunkIndex}/${totalChunks} (${chunk.length} file(s))`
     );
 
-    const chunkResults = await Promise.all(
-      chunk.map(
-        async (
-          rawFile
-        ): Promise<PersistedIngestPhoto | null | 'quota' | 'cancelled'> => {
-          if (isAborted(signal)) return 'cancelled';
+    await Promise.all(
+      chunk.map(async (rawFile, chunkOffset): Promise<void> => {
+        const fileIndex = i + chunkOffset;
 
-          try {
+        if (stoppedEarly || cancelled || isAborted(signal)) {
+          if (isAborted(signal)) {
+            cancelled = true;
+            stopReason = stopReason ?? 'cancelled by user';
+          }
+          releaseInOrder(fileIndex, null);
+          return;
+        }
+
+        try {
+          let persistFile = rawFile;
+          let sourceFormat: ImportFormat = videoSourceFormat(rawFile);
+          let exifNormalized = false;
+          let thumbnailBlob: Blob | undefined;
+          let thumbhash: string | null = null;
+
+          if (fromVideoSession) {
+            // Existing JPEG/PNG bytes — do not re-detect, decode, or bake thumbs.
+          } else {
             const ingest = await ingestPhotoFile(rawFile);
-            if (isAborted(signal)) return 'cancelled';
+            if (stoppedEarly || cancelled || isAborted(signal)) {
+              if (isAborted(signal)) {
+                cancelled = true;
+                stopReason = stopReason ?? 'cancelled by user';
+              }
+              releaseInOrder(fileIndex, null);
+              markProcessed();
+              return;
+            }
 
+            persistFile = ingest.file;
+            sourceFormat = ingest.sourceFormat;
+            exifNormalized = ingest.exifNormalized;
+            thumbnailBlob = ingest.thumbnailBlob;
             if (ingest.workerUsed) anyWorkerUsed = true;
 
             if (ingest.timings.decodeMs || ingest.timings.normalizeMs) {
@@ -242,101 +348,121 @@ export async function ingestAndPersistPhotos(
               );
             }
 
-            const storageCheck = await canStorePhoto(ingest.file, {
-              identicalOriginalAndCurrent: true,
-            });
-            if (!storageCheck.canStore) {
-              const reason =
-                storageCheck.reason || `Cannot store ${rawFile.name}`;
-              logImport(`Quota/storage stop on ${rawFile.name}`, reason);
-              options.onError('Storage Limit', reason);
-              return 'quota';
+            thumbhash = await createThumbhashFromBlob(ingest.thumbnailBlob);
+            if (stoppedEarly || cancelled || isAborted(signal)) {
+              if (isAborted(signal)) {
+                cancelled = true;
+                stopReason = stopReason ?? 'cancelled by user';
+              }
+              releaseInOrder(fileIndex, null);
+              markProcessed();
+              return;
             }
+          }
 
-            if (isAborted(signal)) return 'cancelled';
+          const id = await saver.save({
+            original: persistFile,
+            current: persistFile,
+            metadata: {
+              name: persistFile.name,
+              flips: { horizontal: false, vertical: false },
+              sourceFormat,
+              exifNormalized,
+              ...(thumbhash ? { thumbhash } : {}),
+            },
+            thumbnail: thumbnailBlob,
+          });
 
-            const thumbhash = await createThumbhashFromBlob(
-              ingest.thumbnailBlob
-            );
-            if (isAborted(signal)) return 'cancelled';
+          const photo = toPhoto({
+            id,
+            file: persistFile,
+            thumbnailFile: thumbnailBlob
+              ? blobToFile(
+                  thumbnailBlob,
+                  `thumb-${persistFile.name}`,
+                  'image/jpeg'
+                )
+              : undefined,
+            thumbhash,
+            sourceFormat,
+            exifNormalized,
+          });
+          releaseInOrder(fileIndex, photo);
+          const processed = markProcessed();
+          if (
+            processed === 1 ||
+            processed === files.length ||
+            processed % chunkSize === 0
+          ) {
+            logImport(`Persisted ${processed}/${files.length}`);
+          }
 
-            const id = await savePhoto(
-              ingest.file,
-              ingest.file,
-              {
-                name: ingest.file.name,
-                flips: { horizontal: false, vertical: false },
-                sourceFormat: ingest.sourceFormat,
-                exifNormalized: ingest.exifNormalized,
-                ...(thumbhash ? { thumbhash } : {}),
-              },
-              ingest.thumbnailBlob
-            );
+          if (
+            !halfwayStorageChecked &&
+            files.length >= 2 &&
+            processed >= halfwayAt
+          ) {
+            halfwayStorageChecked = true;
+            if ((await applyStorageStatus('at 50%')) === 'stop') {
+              stoppedEarly = true;
+              stopReason = 'storage quota / app storage limit';
+            }
+          }
+        } catch (error) {
+          if (isAborted(signal)) {
+            cancelled = true;
+            stopReason = stopReason ?? 'cancelled by user';
+            releaseInOrder(fileIndex, null);
+            markProcessed();
+            return;
+          }
 
-            // Once saved, always return the photo so UI/IDB stay in sync
-            // even if cancel was requested during the write.
-            const thumbnailFile = blobToFile(
-              ingest.thumbnailBlob,
-              `thumb-${ingest.file.name}`,
-              'image/jpeg'
-            );
-
-            return {
-              id,
-              file: ingest.file,
-              thumbnailFile,
-              thumbhash,
-              sourceFormat: ingest.sourceFormat,
-              exifNormalized: ingest.exifNormalized,
-            };
-          } catch (error) {
-            if (isAborted(signal)) return 'cancelled';
-
-            failedCount += 1;
+          if (isQuotaExceededError(error)) {
             const message =
               error instanceof Error ? error.message : String(error);
-            logImport(`Failed to ingest ${rawFile.name}`, {
-              error: message,
-              stack: error instanceof Error ? error.stack : undefined,
-            });
+            logImport(`Quota exceeded on ${rawFile.name}`, message);
             options.onError(
-              'Upload Error',
-              `Failed to import ${rawFile.name}. ${message}`
+              'Import Incomplete',
+              'Browser storage quota was exceeded. Photos already imported were kept. Free disk space, exit private mode, or use JPEG frames.'
             );
-            return null;
+            stoppedEarly = true;
+            stopReason = stopReason ?? 'storage quota / app storage limit';
+            releaseInOrder(fileIndex, null);
+            markProcessed();
+            return;
           }
+
+          if (isTransientIdbError(error)) {
+            const message =
+              error instanceof Error ? error.message : String(error);
+            logImport(`Storage reconnect failed on ${rawFile.name}`, message);
+            options.onError(
+              'Import Incomplete',
+              `Storage connection failed after retries. Photos already imported were kept. ${message}`
+            );
+            stoppedEarly = true;
+            stopReason = stopReason ?? 'storage quota / app storage limit';
+            releaseInOrder(fileIndex, null);
+            markProcessed();
+            return;
+          }
+
+          failedCount += 1;
+          const message =
+            error instanceof Error ? error.message : String(error);
+          logImport(`Failed to ingest ${rawFile.name}`, {
+            error: message,
+            stack: error instanceof Error ? error.stack : undefined,
+          });
+          options.onError(
+            'Upload Error',
+            `Failed to import ${rawFile.name}. ${message}`
+          );
+          releaseInOrder(fileIndex, null);
+          markProcessed();
         }
-      )
+      })
     );
-
-    for (const result of chunkResults) {
-      processedCount += 1;
-      if (result === 'cancelled') {
-        cancelled = true;
-        stopReason = stopReason ?? 'cancelled by user';
-        continue;
-      }
-      if (result === 'quota') {
-        stoppedEarly = true;
-        stopReason = stopReason ?? 'storage quota / app storage limit';
-        continue;
-      }
-      if (!result) continue;
-      chunkPhotos.push(toPhoto(result));
-    }
-
-    options.onProgress?.(
-      Math.min(processedCount, files.length),
-      files.length
-    );
-
-    if (chunkPhotos.length > 0) {
-      newPhotos.push(...chunkPhotos);
-      options.onPhotosPersisted?.(chunkPhotos);
-      logImport(
-        `Persisted ${chunkPhotos.length} photo(s); running total ${newPhotos.length}/${files.length}`
-      );
-    }
 
     if (cancelled || isAborted(signal)) {
       cancelled = true;

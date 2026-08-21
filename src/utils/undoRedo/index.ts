@@ -19,3 +19,4 @@ export type { CopiedSettings } from "./commands/PasteSettingsCommand";
 export { BatchCommand } from "./commands/BatchCommand";
 export { BatchFlipCommand } from "./commands/BatchFlipCommand";
 export { BatchCropCommand } from "./commands/BatchCropCommand";
+export { BatchFollowSubjectCommand } from "./commands/BatchFollowSubjectCommand";

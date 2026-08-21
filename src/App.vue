@@ -167,6 +167,7 @@
           :photos="photos"
           v-model:selected-photo-size="selectedPhotoSize"
           :selectedIndices="selectedIndices"
+          :identity-miss-photo-ids="identityMissPhotoIds"
           :hasSelection="selectedIndices.length > 0"
           :allSelected="
             selectedIndices.length === photos.length && photos.length > 0
@@ -175,6 +176,8 @@
           :new-photos-count="newPhotosCount"
           :deleted-photos-count="deletedPhotosCount"
           :drag-selection-count="dragSelectionCount"
+          :post-crop-cleanup="postCropCleanup"
+          :is-loading-from-storage="isLoadingPhotosFromStorage"
           @upload="handleUpload"
           @flip="handleFlip"
           @crop="openCropModal"
@@ -195,6 +198,7 @@
           @deselect-multiple="handleDeselectMultiple"
           @drag-selection-progress="handleDragSelectionProgress"
           @photo-thumbnail-updated="handlePhotoThumbnailUpdated"
+          @update:post-crop-delete-enabled="postCropDeleteEnabled = $event"
         />
       </div>
 
@@ -209,7 +213,6 @@
       :photos="photos"
       @select="handleBatchCropImageSelect"
       @close="handleBatchCropSelectorClose"
-    />
     />
     <FeedbackPanel
       :open="showFeedbackPanel"
@@ -234,6 +237,8 @@
       "
       :detection-supported="isDetectionSupported()"
       :batchMode="isBatchCropMode"
+      :batch-crop-mode="pendingBatchCropMode"
+      :reference-faces="identityReferenceGallery"
       :currentBatchIndex="
         isBatchCropMode && batchCropIndices
           ? batchCropIndices.indexOf(cropIndex)
@@ -271,11 +276,18 @@ import ShimmerBackground from "./components/ShimmerBackground.vue";
 // import CopyPasteVisualizer from "./components/CopyPasteVisualizer.vue";
 import VideoExtractor from "./components/VideoExtractor.vue";
 import FeedbackPanel from "./components/FeedbackPanel.vue";
-import { getExportStripChunkSize } from "./constants/optimization";
+import {
+  getExportStripChunkSize,
+} from "./constants/optimization";
 import { trackEvent } from "./utils/analytics";
 import { useCropSuggestion } from "./composables/useCropSuggestion";
 import { useExportSettings } from "./composables/useExportSettings";
 import { prepareExportFile } from "./utils/export/prepareExportBlob";
+import {
+  createDownloadStamp,
+  stampDownloadFileName,
+  stampDownloadZipName,
+} from "./utils/downloadFileNames";
 import {
   createStreamingZip,
   type StreamingZipWriter,
@@ -302,14 +314,33 @@ import {
   PasteSettingsCommand,
   BatchFlipCommand,
   BatchCropCommand,
+  BatchFollowSubjectCommand,
 } from "./utils/undoRedo";
 import type { Photo } from "./types/photo";
-import type { CropTarget } from "./types/detection";
-import { blobToFile } from "./utils/blobToFile";
-import { scheduleThumbnailBackfill } from "./utils/thumbnailBackfill";
+import type { CropTarget, DetectedFace } from "./types/detection";
+import type {
+  BatchCropMode,
+  BatchCropRecipe,
+  BatchCropSelectPayload,
+  IdentityReferenceFace,
+} from "./types/batchCrop";
+import { buildGalleryFromPhotoIndices } from "./utils/identityAutoMultiView";
+import { blobToFile, resolveImageMimeType } from "./utils/blobToFile";
+import {
+  pauseThumbnailBackfill,
+  resumeThumbnailBackfill,
+  scheduleThumbnailBackfill,
+} from "./utils/thumbnailBackfill";
 import { applyDisplayInvalidation } from "./utils/thumbnailInvalidation";
 import { ingestAndPersistPhotos } from "./utils/import/ingestAndPersist";
 import { formatBatchEta, isBatchAborted } from "./utils/batchEditProgress";
+import { installDetectionLifecycle } from "./utils/detectionLifecycle";
+import { shutdownDetectionRuntime } from "./utils/detectionWorkerPool";
+import {
+  embedFacesInFile,
+  preloadDetectionRuntime,
+  preloadIdentityRuntime,
+} from "./utils/subjectDetection";
 
 const photoSizes = [
   { label: "XS", minSize: 180 },
@@ -525,9 +556,18 @@ const {
 const isBatchDeleting = ref(false);
 const showCropModal = ref(false);
 const showBatchCropSelector = ref(false);
+const pendingBatchCropMode = ref<BatchCropMode>("same-box");
+const identityReferenceGallery = ref<IdentityReferenceFace[]>([]);
+let identityGalleryAbort: AbortController | null = null;
 const cropImageSrc = ref("");
 let cropImageSrcURL: string | null = null; // Track URL for cleanup
 const cropIndex = ref(0);
+
+function clearIdentityGallery() {
+  identityGalleryAbort?.abort();
+  identityGalleryAbort = null;
+  identityReferenceGallery.value = [];
+}
 
 // Watch for changes to the photo at cropIndex when modal is open
 // This ensures the modal updates when edits are applied
@@ -550,7 +590,91 @@ watch(
   { deep: true }
 );
 const selectedIndices = ref<number[]>([]);
+/** Session-only: selected photos skipped by smart crop stay red until unchecked. */
+const identityMissPhotoIds = ref<Set<string>>(new Set());
 const dragSelectionCount = ref<number | null>(null);
+/** After batch crop: offer download + gated delete for successful crops. */
+const postCropCleanup = ref<{
+  successCount: number;
+  missCount: number;
+  successIds: Set<string>;
+} | null>(null);
+const postCropDeleteEnabled = ref(false);
+
+function clearIdentityMissForPhotoId(photoId: string | undefined): void {
+  if (!photoId || !identityMissPhotoIds.value.has(photoId)) return;
+  const next = new Set(identityMissPhotoIds.value);
+  next.delete(photoId);
+  identityMissPhotoIds.value = next;
+}
+
+function clearIdentityMissForIndex(index: number): void {
+  clearIdentityMissForPhotoId(photos.value[index]?.id);
+}
+
+function clearIdentityMissForIndices(indices: number[]): void {
+  if (!indices.length || identityMissPhotoIds.value.size === 0) return;
+  const next = new Set(identityMissPhotoIds.value);
+  let changed = false;
+  for (const index of indices) {
+    const id = photos.value[index]?.id;
+    if (id && next.delete(id)) changed = true;
+  }
+  if (changed) identityMissPhotoIds.value = next;
+}
+
+function clearPostCropCleanup(): void {
+  postCropCleanup.value = null;
+  postCropDeleteEnabled.value = false;
+}
+
+/**
+ * After a batch crop: keep the batch selected (misses stay red), open cleanup offer.
+ * When delete-enabled is on, download/delete only touch successful crops.
+ */
+function activatePostCropCleanup(
+  batchIndices: number[],
+  skippedPhotoIds: string[] = []
+): void {
+  const skipped = new Set(skippedPhotoIds);
+  const successIds = new Set<string>();
+  const keepSelected: number[] = [];
+
+  for (const index of batchIndices) {
+    const photo = photos.value[index];
+    if (!photo?.id) continue;
+    keepSelected.push(index);
+    if (!skipped.has(photo.id)) {
+      successIds.add(photo.id);
+    }
+  }
+
+  if (successIds.size === 0) {
+    clearPostCropCleanup();
+    return;
+  }
+
+  selectedIndices.value = keepSelected.sort((a, b) => a - b);
+  postCropDeleteEnabled.value = false;
+  postCropCleanup.value = {
+    successCount: successIds.size,
+    missCount: skipped.size,
+    successIds,
+  };
+}
+
+/** Indices for download/delete: successes only when post-crop delete mode is on. */
+function getBatchActionIndices(): number[] {
+  const indices = selectedIndices.value;
+  const offer = postCropCleanup.value;
+  if (!offer || !postCropDeleteEnabled.value) {
+    return [...indices];
+  }
+  return indices.filter((index) => {
+    const id = photos.value[index]?.id;
+    return id != null && offer.successIds.has(id);
+  });
+}
 const batchCropIndices = ref<number[]>([]);
 const isBatchCropMode = computed(() => batchCropIndices.value.length > 0);
 const copiedSettings = ref<CopiedSettings | null>(null);
@@ -592,6 +716,7 @@ const handleFeedbackSubmitted = () => {
 
 // Cleanup interval
 let cleanupInterval: ReturnType<typeof setInterval> | null = null;
+let storageStatusInterval: ReturnType<typeof setInterval> | null = null;
 
 const debounce = <T extends (...args: any[]) => void>(fn: T, delay: number) => {
   let timeout: ReturnType<typeof setTimeout>;
@@ -730,8 +855,11 @@ const applyFlipsRotationAndCrop = async (
   });
 };
 
-// Load photos from IndexedDB
+// Load photos from IndexedDB / OPFS cache
+const isLoadingPhotosFromStorage = ref(true);
+
 const loadPhotosFromStorage = async () => {
+  isLoadingPhotosFromStorage.value = true;
   try {
     await initDB();
     await cleanupExpiredPhotos();
@@ -740,17 +868,19 @@ const loadPhotosFromStorage = async () => {
     const loadedPhotos: Photo[] = [];
 
     for (const stored of storedPhotos) {
-      // Convert Blobs back to Files
       const originalFile = blobToFile(
         stored.original,
         stored.metadata.name,
-        stored.original.type || "image/jpeg"
+        resolveImageMimeType(stored.original, stored.metadata.name)
       );
-      const currentFile = blobToFile(
-        stored.current,
-        stored.metadata.name,
-        stored.current.type || "image/jpeg"
-      );
+      const currentFile =
+        stored.current === stored.original
+          ? originalFile
+          : blobToFile(
+              stored.current,
+              stored.metadata.name,
+              resolveImageMimeType(stored.current, stored.metadata.name)
+            );
 
       console.log(
         "Loading photo:",
@@ -764,11 +894,12 @@ const loadPhotosFromStorage = async () => {
         id: stored.id,
         original: originalFile,
         current: currentFile,
+        fileName: stored.metadata.name,
         thumbnail: stored.thumbnail
           ? blobToFile(
               stored.thumbnail,
               `thumb-${stored.metadata.name}`,
-              stored.thumbnail.type || "image/jpeg"
+              resolveImageMimeType(stored.thumbnail, stored.metadata.name)
             )
           : null,
         thumbhash: stored.metadata.thumbhash ?? null,
@@ -793,6 +924,8 @@ const loadPhotosFromStorage = async () => {
       "Failed to load photos from storage. Please refresh the page.",
       5000
     );
+  } finally {
+    isLoadingPhotosFromStorage.value = false;
   }
 };
 
@@ -855,7 +988,7 @@ const handleUpload = async (event: Event) => {
         "Import Incomplete",
         `Imported ${result.photos.length} of ${files.length}. ${
           result.stoppedEarly
-            ? "Stopped early due to storage limits."
+            ? "Stopped early due to app or browser storage limits (partial import kept)."
             : `${result.failedCount} file(s) failed.`
         }`,
         7000
@@ -867,6 +1000,7 @@ const handleUpload = async (event: Event) => {
   } finally {
     clearImportUiState();
     input.value = "";
+    scheduleThumbnailBackfill(photos, blobToFile);
   }
 };
 
@@ -892,6 +1026,7 @@ const handleVideoFramesExtracted = async (files: File[]) => {
     const result = await ingestAndPersistPhotos(files, {
       operationIdPrefix: "video-frames",
       preferLargerChunks: true,
+      fromVideoSession: true,
       signal: importAbortController.signal,
       onError: (title, message) => {
         console.error(`[Import][UI] ${title}: ${message}`);
@@ -953,7 +1088,9 @@ const handleVideoFramesExtracted = async (files: File[]) => {
         "warning",
         "Import Incomplete",
         `Only ${result.photos.length} of ${files.length} frames were added${
-          result.stoppedEarly ? " (storage limit reached)" : ""
+          result.stoppedEarly
+            ? " (app or browser storage limit — partial import kept)"
+            : ""
         }${
           result.failedCount > 0 ? ` (${result.failedCount} failed)` : ""
         }. Your remaining frames are still on the Video tab.`,
@@ -975,6 +1112,7 @@ const handleVideoFramesExtracted = async (files: File[]) => {
     throw error;
   } finally {
     clearImportUiState();
+    scheduleThumbnailBackfill(photos, blobToFile);
   }
 };
 
@@ -1060,10 +1198,14 @@ const handleCrop = async (
 const handleCropModalCropped = async (
   blob: Blob,
   crop: { x: number; y: number; width: number; height: number },
-  rotation: number
+  rotation: number,
+  recipe?: BatchCropRecipe
 ) => {
-  // Route to the appropriate handler based on batch mode
   if (isBatchCropMode.value) {
+    if (recipe && recipe.mode !== "same-box") {
+      await handleBatchSmartCrop(recipe);
+      return;
+    }
     await handleBatchCropNext(blob, crop, rotation);
   } else {
     await handleCrop(blob, crop, rotation);
@@ -1086,6 +1228,8 @@ const handleToggleSelectAll = debounce(async (checked: boolean) => {
     );
   } else {
     selectedIndices.value = [];
+    identityMissPhotoIds.value = new Set();
+    clearPostCropCleanup();
   }
 }, 100);
 
@@ -1095,6 +1239,7 @@ const handleToggleSelect = debounce((index: number, checked: boolean) => {
       selectedIndices.value = [...selectedIndices.value, index];
     }
   } else {
+    clearIdentityMissForIndex(index);
     selectedIndices.value = selectedIndices.value.filter((i) => i !== index);
   }
 }, 100);
@@ -1125,6 +1270,7 @@ const handleDeselectMultiple = (indices: number[]) => {
   if (!indices.length) {
     return;
   }
+  clearIdentityMissForIndices(indices);
   const indicesSet = new Set(indices);
   selectedIndices.value = selectedIndices.value
     .filter((index) => !indicesSet.has(index))
@@ -1195,22 +1341,78 @@ const handleBatchCrop = () => {
   }
 };
 
-const handleBatchCropImageSelect = (index: number) => {
-  cropIndex.value = index;
+const handleBatchCropImageSelect = async (payload: BatchCropSelectPayload) => {
+  const { mode, templateIndex, referencePhotoIndices } = payload;
+  pendingBatchCropMode.value = mode;
+  clearIdentityGallery();
+  cropIndex.value = templateIndex;
   if (cropImageSrcURL) {
     URL.revokeObjectURL(cropImageSrcURL);
   }
   cropImageSrcURL = URL.createObjectURL(photos.value[cropIndex.value].original);
   cropImageSrc.value = cropImageSrcURL;
   showBatchCropSelector.value = false;
+
+  if (mode !== "same-box") {
+    void preloadDetectionRuntime();
+  }
+
+  if (mode === "this-person") {
+    void preloadIdentityRuntime().catch((error) => {
+      console.warn("Identity preload failed:", error);
+    });
+    const indices =
+      referencePhotoIndices && referencePhotoIndices.length > 0
+        ? referencePhotoIndices
+        : [templateIndex];
+    identityGalleryAbort?.abort();
+    identityGalleryAbort = new AbortController();
+    const signal = identityGalleryAbort.signal;
+    beginBatchEditProgress("Finding faces in references", indices.length);
+    try {
+      const gallery = await buildGalleryFromPhotoIndices(indices, photos, {
+        signal,
+      });
+      if (signal.aborted) {
+        endBatchEditProgress();
+        return;
+      }
+      if (gallery.length === 0) {
+        showAlert(
+          "error",
+          "No faces found",
+          "Could not find a face in the selected reference images. Pick clearer frames and try again."
+        );
+        endBatchEditProgress();
+        batchCropIndices.value = [];
+        clearIdentityGallery();
+        return;
+      }
+      identityReferenceGallery.value = gallery;
+    } catch (error) {
+      console.error("Failed to build identity references:", error);
+      showAlert(
+        "error",
+        "Face matching unavailable",
+        "Could not prepare reference faces. Try again or use Follow subject."
+      );
+      endBatchEditProgress();
+      batchCropIndices.value = [];
+      clearIdentityGallery();
+      return;
+    }
+    endBatchEditProgress();
+  }
+
   showCropModal.value = true;
-  startCropSuggestionForIndex(index);
+  startCropSuggestionForIndex(templateIndex);
 };
 
 const handleBatchCropSelectorClose = () => {
-  // User cancelled the selector
   showBatchCropSelector.value = false;
   batchCropIndices.value = [];
+  clearIdentityGallery();
+  pendingBatchCropMode.value = "same-box";
 };
 
 const handleBatchCropNext = async (
@@ -1246,6 +1448,7 @@ const handleBatchCropNext = async (
     );
     await command.execute();
     trackEvent("crop");
+    activatePostCropCleanup(savedBatchCropIndices);
   } catch (error) {
     console.error("Failed to execute batch crop command:", error);
     showAlert(
@@ -1257,6 +1460,7 @@ const handleBatchCropNext = async (
     const { wasCancelled, snapshot } = endBatchEditProgress();
     if (wasCancelled && snapshot) {
       notifyBatchCancelled("Cropping", snapshot.current, snapshot.total);
+      clearPostCropCleanup();
     }
     await performanceLogger.endMeasurement(
       operationId,
@@ -1265,6 +1469,173 @@ const handleBatchCropNext = async (
       workerUsed
     );
     batchCropIndices.value = [];
+    pendingBatchCropMode.value = "same-box";
+    clearIdentityGallery();
+  }
+};
+
+const handleBatchSmartCrop = async (recipe: BatchCropRecipe) => {
+  const savedBatchCropIndices = [...batchCropIndices.value];
+  const operationId = `batch-smart-crop-${Date.now()}`;
+  performanceLogger.startMeasurement(operationId);
+
+  showCropModal.value = false;
+
+  let referenceEmbeddings: Float32Array[] | null = null;
+  if (recipe.mode === "this-person") {
+    const refs =
+      recipe.referenceFaces && recipe.referenceFaces.length > 0
+        ? recipe.referenceFaces
+        : identityReferenceGallery.value;
+    if (!refs.length) {
+      showAlert(
+        "error",
+        "Select a person",
+        "Add at least one reference face before applying to the batch."
+      );
+      return;
+    }
+    beginBatchEditProgress("Loading face matching", refs.length);
+    try {
+      const embeddings: Float32Array[] = [];
+      for (const ref of refs) {
+        const photo = photos.value[ref.photoIndex];
+        if (!photo?.id || photo.id !== ref.photoId) continue;
+        const referenceFace: DetectedFace = {
+          bbox: ref.bbox,
+          score: 1,
+          keypoints: ref.keypoints,
+        };
+        const embedded = await embedFacesInFile(photo.original, photo.id, [
+          referenceFace,
+        ]);
+        const emb = embedded.embeddings[0];
+        if (emb?.length) embeddings.push(emb);
+      }
+      if (embeddings.length === 0) {
+        showAlert(
+          "error",
+          "Face matching unavailable",
+          "Could not create face matches for the selected references."
+        );
+        endBatchEditProgress();
+        batchCropIndices.value = [];
+        clearIdentityGallery();
+        return;
+      }
+      referenceEmbeddings = embeddings;
+    } catch (error) {
+      console.error("Failed to embed reference faces:", error);
+      showAlert(
+        "error",
+        "Face matching unavailable",
+        "Could not load the identity model. Try Follow subject instead."
+      );
+      endBatchEditProgress();
+      batchCropIndices.value = [];
+      clearIdentityGallery();
+      return;
+    }
+    endBatchEditProgress();
+  }
+
+  beginBatchEditProgress("Finding subject", savedBatchCropIndices.length);
+
+  try {
+    const command = new BatchFollowSubjectCommand(
+      savedBatchCropIndices,
+      {
+        ...recipe,
+        referenceFaces:
+          recipe.mode === "this-person"
+            ? recipe.referenceFaces ?? identityReferenceGallery.value
+            : undefined,
+      },
+      referenceEmbeddings,
+      photos,
+      updatePhoto,
+      updatePhotosBatch,
+      applyFlipsRotationAndCrop,
+      (current, progressTotal) =>
+        updateBatchEditProgress(current, progressTotal),
+      (label) => {
+        if (batchEditProgress.value) {
+          batchEditProgress.value = {
+            ...batchEditProgress.value,
+            label,
+          };
+        }
+      },
+      batchEditAbortController?.signal
+    );
+    await command.execute();
+    trackEvent(
+      recipe.mode === "this-person" ? "batch_crop_identity" : "batch_crop_follow"
+    );
+    const result = command.result;
+    if (result && !result.cancelled && result.skippedCount > 0) {
+      const nextMisses = new Set(identityMissPhotoIds.value);
+      for (const id of result.skippedPhotoIds) {
+        nextMisses.add(id);
+      }
+      identityMissPhotoIds.value = nextMisses;
+    }
+    if (
+      result &&
+      (result.identityLoadModelMs || result.identityInferenceMs)
+    ) {
+      performanceLogger.recordDetectionStageTimings(operationId, {
+        identityLoadModelMs: result.identityLoadModelMs,
+        identityInferenceMs: result.identityInferenceMs,
+      });
+    }
+    if (result && !result.cancelled) {
+      activatePostCropCleanup(
+        savedBatchCropIndices,
+        result.skippedPhotoIds ?? []
+      );
+      if (
+        result.skippedCount > 0 ||
+        (result.neighborFilledCount ?? 0) > 0
+      ) {
+        const neighborNote =
+          (result.neighborFilledCount ?? 0) > 0
+            ? ` (${result.neighborFilledCount} via nearby frames)`
+            : "";
+        showAlert(
+          "info",
+          "Batch crop complete",
+          `Cropped ${result.croppedCount} of ${savedBatchCropIndices.length}${neighborNote}. ${result.skippedCount} had no match.`,
+          6000
+        );
+      }
+    }
+  } catch (error) {
+    console.error("Failed to execute smart batch crop:", error);
+    showAlert(
+      "error",
+      "Batch Crop Failed",
+      "Failed to crop selected photos. Please try again."
+    );
+  } finally {
+    const { wasCancelled, snapshot } = endBatchEditProgress();
+    if (wasCancelled && snapshot) {
+      notifyBatchCancelled(
+        snapshot.label || "Cropping",
+        snapshot.current,
+        snapshot.total
+      );
+      clearPostCropCleanup();
+    }
+    await performanceLogger.endMeasurement(
+      operationId,
+      "crop",
+      savedBatchCropIndices.length,
+      true
+    );
+    batchCropIndices.value = [];
+    pendingBatchCropMode.value = "same-box";
+    clearIdentityGallery();
   }
 };
 
@@ -1273,6 +1644,8 @@ const handleCropModalClose = () => {
   resetCropSuggestion();
   showCropModal.value = false;
   batchCropIndices.value = [];
+  clearIdentityGallery();
+  pendingBatchCropMode.value = "same-box";
   if (cropImageSrcURL) {
     URL.revokeObjectURL(cropImageSrcURL);
     cropImageSrcURL = null;
@@ -1280,7 +1653,7 @@ const handleCropModalClose = () => {
   cropImageSrc.value = "";
 };
 
-const handleNextBatchImage = () => {
+const handleNextBatchImage = async () => {
   if (
     isBatchCropMode.value &&
     batchCropIndices.value &&
@@ -1320,7 +1693,7 @@ const handleNextBatchImage = () => {
   }
 };
 
-const handlePreviousBatchImage = () => {
+const handlePreviousBatchImage = async () => {
   if (
     isBatchCropMode.value &&
     batchCropIndices.value &&
@@ -1372,7 +1745,8 @@ const downloadZip = async (zip: StreamingZipWriter, fileName: string) => {
 };
 
 const handleBatchDownload = async () => {
-  if (selectedIndices.value.length === 0) {
+  const indices = getBatchActionIndices();
+  if (indices.length === 0) {
     return;
   }
 
@@ -1386,13 +1760,13 @@ const handleBatchDownload = async () => {
     workerUsed: false,
   };
 
-  const indices = selectedIndices.value;
   beginBatchEditProgress("Preparing download", indices.length);
 
   try {
     const zip = createStreamingZip();
     const chunkSize = getExportStripChunkSize();
     const settings = exportSettings();
+    const stamp = createDownloadStamp();
     let completed = 0;
     const signal = batchEditAbortController?.signal;
 
@@ -1420,14 +1794,17 @@ const handleBatchDownload = async () => {
         else batchStats.slowPathCount++;
         if (prepared.workerUsed) batchStats.workerUsed = true;
 
-        zip.add(prepared.fileName, prepared.buffer);
+        zip.add(stampDownloadFileName(prepared.fileName, stamp), prepared.buffer);
       }
     }
 
     if (isBatchAborted(signal)) {
       // Still offer whatever was prepared
       if (completed > 0) {
-        await downloadZip(zip, `photos-${completed}-files.zip`);
+        await downloadZip(
+          zip,
+          stampDownloadZipName(`photos-${completed}-files.zip`, stamp)
+        );
       }
       return;
     }
@@ -1437,12 +1814,15 @@ const handleBatchDownload = async () => {
       ? { ...batchEditProgress.value, label: "Zipping" }
       : null;
 
-    await downloadZip(zip, `photos-${indices.length}-files.zip`);
+    await downloadZip(
+      zip,
+      stampDownloadZipName(`photos-${indices.length}-files.zip`, stamp)
+    );
     trackEvent("download");
   } catch (error) {
     console.error("Error creating ZIP file:", error);
     if (!isBatchAborted(batchEditAbortController?.signal)) {
-      for (const index of selectedIndices.value) {
+      for (const index of indices) {
         await handleDownload(index);
         await new Promise((resolve) => setTimeout(resolve, 150));
       }
@@ -1456,7 +1836,7 @@ const handleBatchDownload = async () => {
     await performanceLogger.endMeasurement(
       operationId,
       "download",
-      selectedIndices.value.length,
+      indices.length,
       batchStats.workerUsed
     );
   }
@@ -1495,13 +1875,18 @@ const handleBatchRevert = async () => {
 };
 
 const handleBatchDelete = async () => {
-  const indices = [...selectedIndices.value].sort((a, b) => b - a);
+  const indices = getBatchActionIndices().sort((a, b) => b - a);
   const deleteCount = indices.length;
+  if (deleteCount === 0) return;
+
+  const wasPostCropSuccessDelete =
+    Boolean(postCropCleanup.value) && postCropDeleteEnabled.value;
 
   const operationId = `batch-delete-${Date.now()}`;
   performanceLogger.startMeasurement(operationId);
 
   isBatchDeleting.value = true;
+  pauseThumbnailBackfill();
   beginBatchEditProgress("Deleting", deleteCount);
 
   try {
@@ -1525,6 +1910,11 @@ const handleBatchDelete = async () => {
     // 2. Batch DB delete
     if (idsToDelete.length > 0) {
       await deletePhotos(idsToDelete);
+      if (identityMissPhotoIds.value.size > 0) {
+        const next = new Set(identityMissPhotoIds.value);
+        for (const id of idsToDelete) next.delete(id);
+        identityMissPhotoIds.value = next;
+      }
     }
     updateBatchEditProgress(Math.max(1, Math.floor(deleteCount * 0.6)), deleteCount);
 
@@ -1543,7 +1933,7 @@ const handleBatchDelete = async () => {
       if (cropIndex.value > index) {
         cropIndex.value--;
       }
-      
+
       photos.value.splice(index, 1);
       removed += 1;
       updateBatchEditProgress(
@@ -1561,7 +1951,18 @@ const handleBatchDelete = async () => {
     showAlert("error", "Delete Failed", "Failed to delete photos. Please try again.");
   } finally {
     isBatchDeleting.value = false;
-    selectedIndices.value = [];
+    clearPostCropCleanup();
+    if (wasPostCropSuccessDelete && identityMissPhotoIds.value.size > 0) {
+      // Keep unsuccessful crops selected (red checks).
+      selectedIndices.value = photos.value
+        .map((photo, index) =>
+          photo.id && identityMissPhotoIds.value.has(photo.id) ? index : -1
+        )
+        .filter((index) => index >= 0);
+    } else {
+      selectedIndices.value = [];
+      identityMissPhotoIds.value = new Set();
+    }
     const { wasCancelled, snapshot } = endBatchEditProgress();
     if (wasCancelled && snapshot) {
       notifyBatchCancelled("Deleting", snapshot.current, snapshot.total);
@@ -1571,8 +1972,10 @@ const handleBatchDelete = async () => {
       operationId,
       "delete",
       deleteCount,
-      false 
+      false
     );
+    resumeThumbnailBackfill();
+    scheduleThumbnailBackfill(photos, blobToFile);
   }
 };
 
@@ -1585,7 +1988,10 @@ const handleDownload = async (index: number) => {
   try {
     const a = document.createElement("a");
     a.href = url;
-    a.download = prepared.fileName;
+    a.download = stampDownloadFileName(
+      prepared.fileName,
+      createDownloadStamp()
+    );
     a.click();
     trackEvent("download");
   } finally {
@@ -1595,6 +2001,7 @@ const handleDownload = async (index: number) => {
 
 const handleRevert = async (index: number) => {
   const photo = photos.value[index];
+  clearIdentityMissForPhotoId(photo?.id);
 
   // Deferred flips only: reset metadata without rewriting blobs / regenerating thumbs
   if (
@@ -1647,8 +2054,11 @@ const handleDelete = async (index: number) => {
   if (index >= 0 && index < photos.value.length) {
     const photo = photos.value[index];
 
+    pauseThumbnailBackfill();
+    try {
     // Delete from IndexedDB if photo has an ID
     if (photo.id) {
+      clearIdentityMissForPhotoId(photo.id);
       try {
         await deletePhoto(photo.id);
       } catch (error) {
@@ -1680,6 +2090,10 @@ const handleDelete = async (index: number) => {
     selectedIndices.value = selectedIndices.value
       .filter((i) => i !== index)
       .map((i) => (i > index ? i - 1 : i));
+    } finally {
+      resumeThumbnailBackfill();
+      scheduleThumbnailBackfill(photos, blobToFile);
+    }
   } else {
     console.warn("Invalid index in handleDelete:", index);
   }
@@ -1766,6 +2180,7 @@ const handlePasteSettings = async (singleIndex?: number) => {
 
 // Initialize storage and load photos on mount
 onMounted(async () => {
+  installDetectionLifecycle();
   try {
     await initDB();
 
@@ -1815,7 +2230,7 @@ onMounted(async () => {
     }, 60 * 60 * 1000); // 1 hour
 
     // Check storage status periodically
-    setInterval(async () => {
+    storageStatusInterval = setInterval(async () => {
       const status = await getStorageStatus();
       if (status.shouldWarn && status.message) {
         showAlert("warning", "Storage Warning", status.message, 6000);
@@ -1823,6 +2238,7 @@ onMounted(async () => {
     }, 15 * 60 * 1000); // Every 15 minutes
   } catch (error) {
     console.error("Failed to initialize storage:", error);
+    isLoadingPhotosFromStorage.value = false;
     showAlert(
       "error",
       "Storage Error",
@@ -1843,6 +2259,12 @@ onUnmounted(() => {
     clearInterval(cleanupInterval);
     cleanupInterval = null;
   }
+  if (storageStatusInterval) {
+    clearInterval(storageStatusInterval);
+    storageStatusInterval = null;
+  }
+  shutdownDetectionRuntime();
+  identityMissPhotoIds.value = new Set();
 });
 </script>
 

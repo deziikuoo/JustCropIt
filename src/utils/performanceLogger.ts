@@ -190,7 +190,10 @@ class PerformanceLogger {
     if (detectionStages && detectionStages.length > 0 && import.meta.env.DEV) {
       const last = detectionStages[detectionStages.length - 1];
       console.log(
-        `   Detection stages: downscale=${last.downscaleMs ?? 0}ms loadModel=${last.loadModelMs ?? 0}ms inference=${last.inferenceMs ?? 0}ms post=${last.postProcessMs ?? 0}ms`
+        `   Detection stages: downscale=${last.downscaleMs ?? 0}ms loadModel=${last.loadModelMs ?? 0}ms inference=${last.inferenceMs ?? 0}ms post=${last.postProcessMs ?? 0}ms` +
+          (last.identityLoadModelMs != null || last.identityInferenceMs != null
+            ? ` identityLoad=${last.identityLoadModelMs ?? 0}ms identityInfer=${last.identityInferenceMs ?? 0}ms`
+            : '')
       );
     }
     this.detectionStageTimings.delete(operationId);

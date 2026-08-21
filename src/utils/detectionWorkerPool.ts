@@ -1,12 +1,16 @@
 /**
- * Detection Worker Pool — singleton worker for ML face detection (Phase 4).
+ * Detection Worker Pool — singleton worker for MediaPipe portrait / identity.
  */
 
-import { DETECTION_WORKER_POOL_MAX } from '../constants/optimization';
+import { DETECTION_IDLE_TERMINATE_MS, DETECTION_WORKER_POOL_MAX } from '../constants/optimization';
 import type {
   DetectionWorkerRequest,
   DetectionWorkerResponse,
 } from '../types/detection';
+import { resetFaceDetectorSession } from './faceDetectorSession';
+import { resetFaceLandmarkerSession } from './faceLandmarkerSession';
+import { resetPoseLandmarkerSession } from './poseLandmarkerSession';
+import { shutdownIdentityRuntime } from './identityWorkerPool';
 
 interface PendingRequest {
   resolve: (value: DetectionWorkerResponse) => void;
@@ -20,12 +24,27 @@ class DetectionWorkerPool {
   private cancelledPhotoIds = new Set<string>();
   private requestCounter = 0;
   private initialized = false;
+  private idleTimer: ReturnType<typeof setTimeout> | null = null;
 
   isSupported(): boolean {
     return (
       typeof Worker !== 'undefined' &&
       typeof createImageBitmap !== 'undefined'
     );
+  }
+
+  private clearIdleTimer(): void {
+    if (this.idleTimer != null) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
+  }
+
+  private scheduleIdleTerminate(): void {
+    this.clearIdleTimer();
+    this.idleTimer = setTimeout(() => {
+      this.terminate();
+    }, DETECTION_IDLE_TERMINATE_MS);
   }
 
   private initWorker(): void {
@@ -46,6 +65,7 @@ class DetectionWorkerPool {
         pending.reject(new Error(`Detection worker error: ${error.message}`));
         this.pendingRequests.delete(id);
       }
+      this.scheduleIdleTerminate();
     };
 
     this.initialized = true;
@@ -61,6 +81,7 @@ class DetectionWorkerPool {
     ) {
       this.pendingRequests.delete(response.id);
       pending.reject(new Error('Detection cancelled'));
+      if (this.pendingRequests.size === 0) this.scheduleIdleTerminate();
       return;
     }
 
@@ -68,15 +89,18 @@ class DetectionWorkerPool {
 
     if (response.type === 'error') {
       pending.reject(new Error(response.error ?? 'Detection failed'));
+      if (this.pendingRequests.size === 0) this.scheduleIdleTerminate();
       return;
     }
 
     if (response.type === 'cancelled') {
       pending.reject(new Error('Detection cancelled'));
+      if (this.pendingRequests.size === 0) this.scheduleIdleTerminate();
       return;
     }
 
     pending.resolve(response);
+    if (this.pendingRequests.size === 0) this.scheduleIdleTerminate();
   }
 
   submitTask(
@@ -90,6 +114,7 @@ class DetectionWorkerPool {
       }
 
       if (!this.initialized) this.initWorker();
+      this.clearIdleTimer();
 
       const id = request.id ?? `detect-${++this.requestCounter}`;
       const fullRequest: DetectionWorkerRequest = { ...request, id };
@@ -121,6 +146,10 @@ class DetectionWorkerPool {
     }
   }
 
+  async warmup(): Promise<void> {
+    await this.submitTask({ type: 'warmup' });
+  }
+
   cancelRequest(requestId: string): void {
     if (!this.worker) return;
     this.worker.postMessage({
@@ -132,9 +161,11 @@ class DetectionWorkerPool {
       this.pendingRequests.delete(requestId);
       pending.reject(new Error('Detection cancelled'));
     }
+    if (this.pendingRequests.size === 0) this.scheduleIdleTerminate();
   }
 
   cancelForPhoto(photoId: string): void {
+    this.cancelledPhotoIds.add(photoId);
     for (const [id, pending] of this.pendingRequests) {
       if (pending.photoId === photoId) {
         this.cancelRequest(id);
@@ -147,6 +178,7 @@ class DetectionWorkerPool {
   }
 
   terminate(): void {
+    this.clearIdleTimer();
     if (this.worker) {
       this.worker.terminate();
       this.worker = null;
@@ -157,6 +189,9 @@ class DetectionWorkerPool {
     }
     this.pendingRequests.clear();
     this.cancelledPhotoIds.clear();
+    resetPoseLandmarkerSession();
+    resetFaceLandmarkerSession();
+    resetFaceDetectorSession();
   }
 
   get maxWorkers(): number {
@@ -165,3 +200,8 @@ class DetectionWorkerPool {
 }
 
 export const detectionWorkerPool = new DetectionWorkerPool();
+
+export function shutdownDetectionRuntime(): void {
+  detectionWorkerPool.terminate();
+  shutdownIdentityRuntime();
+}

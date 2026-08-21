@@ -59,7 +59,12 @@ import { GridUrlCache } from './gridUrlCache';
 import { createGridDecodeQueue } from './gridDecodeQueue';
 import { getPhotoCacheKey, syncGridUrlsForVisibility } from './gridUrlSync';
 import { imageWorkerPool } from './imageWorkerPool';
-import { updatePhotosBatch, deletePhotos, updatePhotoThumbnail } from './photoStorage';
+import {
+  updatePhotosBatch,
+  deletePhotos,
+  updatePhotoThumbnail,
+  createBulkPhotoSaver,
+} from './photoStorage';
 import { scheduleIdleTask, processInChunks } from './scheduler';
 import { useVirtualScroll } from '../composables/useVirtualScroll';
 import { createThumbhashFromBlob } from './thumbhashGenerator';
@@ -67,7 +72,11 @@ import { thumbhashToDataUrl } from './thumbhashDecode';
 import { invalidatePhotoDisplay } from './thumbnailInvalidation';
 import type { Photo } from '../types/photo';
 import { ingestPhotoFile } from './import/uploadIngest';
-import { isSupportedImportFile, detectImportFormat } from './import/formatDetector';
+import {
+  isSupportedImportFile,
+  detectImportFormat,
+  inferImportFormatFromNameAndType,
+} from './import/formatDetector';
 import { readExifOrientation } from './import/exifReader';
 import { uploadWorkerPool } from './uploadWorkerPool';
 import { prepareExportFile } from './export/prepareExportBlob';
@@ -625,13 +634,15 @@ export function runOptimizationChecks(): OptimizationCheckResult[] {
     typeof ingestPhotoFile === 'function' &&
     typeof isSupportedImportFile === 'function' &&
     typeof detectImportFormat === 'function' &&
-    typeof readExifOrientation === 'function';
+    typeof inferImportFormatFromNameAndType === 'function' &&
+    typeof readExifOrientation === 'function' &&
+    typeof createBulkPhotoSaver === 'function';
   results.push({
     id: 'phase1-ingest-module',
     name: 'Phase 1: Upload ingest module',
     status: ingestFnsOk ? 'pass' : 'fail',
     message: ingestFnsOk
-      ? 'ingestPhotoFile + formatDetector + exifReader wired'
+      ? 'ingestPhotoFile + formatDetector + bulk photo saver wired'
       : 'Missing upload ingest utilities',
   });
 

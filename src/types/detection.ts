@@ -44,6 +44,8 @@ export interface DetectionStageTimings {
   poseInferenceMs?: number;
   faceLandmarkInferenceMs?: number;
   faceDetectorInferenceMs?: number;
+  identityLoadModelMs?: number;
+  identityInferenceMs?: number;
 }
 
 export type PortraitDebugPointKind =
@@ -70,7 +72,29 @@ export interface PortraitDebugOverlay {
   imageSize: ImageDimensions;
 }
 
-export type DetectionWorkerRequestType = 'ping' | 'detect' | 'cancel';
+/** Pixel-space facial landmark used for ArcFace alignment. */
+export interface FaceKeypoint {
+  x: number;
+  y: number;
+}
+
+export interface DetectedFace {
+  bbox: BoundingBox;
+  score: number;
+  /**
+   * Optional BlazeFace keypoints in image pixels:
+   * right eye, left eye, nose tip, mouth, right ear, left ear.
+   */
+  keypoints?: FaceKeypoint[];
+}
+
+export type DetectionWorkerRequestType =
+  | 'ping'
+  | 'detect'
+  | 'portrait'
+  | 'detectFaces'
+  | 'warmup'
+  | 'cancel';
 
 export interface DetectionWorkerRequest {
   id: string;
@@ -80,6 +104,10 @@ export interface DetectionWorkerRequest {
   mimeType?: string;
   scaledWidth?: number;
   scaledHeight?: number;
+  target?: CropTarget;
+  hintBbox?: BoundingBox;
+  faces?: DetectedFace[];
+  includeDebug?: boolean;
 }
 
 export interface DetectionWorkerResponse {
@@ -87,8 +115,15 @@ export interface DetectionWorkerResponse {
   type: 'success' | 'error' | 'cancelled' | 'pong';
   photoId?: string;
   bbox?: BoundingBox | null;
+  faces?: DetectedFace[];
+  embeddings?: number[][];
+  method?: PortraitDetectionMethod | null;
   loadModelMs?: number;
   inferenceMs?: number;
+  poseInferenceMs?: number;
+  faceLandmarkInferenceMs?: number;
+  faceDetectorInferenceMs?: number;
+  debug?: PortraitDebugOverlay | null;
   error?: string;
 }
 

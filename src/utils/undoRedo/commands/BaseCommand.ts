@@ -7,7 +7,12 @@ import type { Ref } from "vue";
 import type { Command, PhotoState } from "../types";
 import type { Photo } from "../../../types/photo";
 import { updatePhoto, updatePhotoMetadata } from "../../photoStorage";
-import { applyDisplayInvalidation } from "../../thumbnailInvalidation";
+import {
+  applyDisplayInvalidation,
+  applyDisplayWithThumbnail,
+} from "../../thumbnailInvalidation";
+import { createThumbnailFromFile } from "../../thumbnailGenerator";
+import { photoFileName, resolveImageMimeType } from "../../blobToFile";
 import { usesDeferredFlips } from "../../editTransform";
 
 export type { Photo };
@@ -101,13 +106,18 @@ export abstract class BaseCommand implements Command {
     };
     const rotation = state.rotation || 0;
 
+    const mimeType = resolveImageMimeType(
+      photo.original,
+      photoFileName(photo)
+    );
+
     // Apply transformations
     const blob = await this.applyFlipsRotationAndCropFn(
       img,
       state.flips,
       rotation,
       crop,
-      photo.original.type
+      mimeType
     );
 
     // Cleanup
@@ -117,13 +127,14 @@ export abstract class BaseCommand implements Command {
       throw new Error("Failed to regenerate photo from state");
     }
 
-    return new File([blob], photo.original.name, {
-      type: photo.original.type,
+    return new File([blob], photoFileName(photo), {
+      type: mimeType,
     });
   }
 
   /**
-   * Update photo in the photos array and persist to IndexedDB
+   * Update photo in the photos array and persist to IndexedDB.
+   * Bakes a grid thumbnail from `newCurrent` so the cell isn't blank after crop.
    */
   protected async updatePhotoState(
     photoId: string,
@@ -140,21 +151,41 @@ export abstract class BaseCommand implements Command {
       throw new Error("Photo must have an ID to update");
     }
 
-    // Update in-memory photo
-    this.photos.value[photoIndex] = applyDisplayInvalidation(photo, {
+    const updates = {
       current: newCurrent,
       flips: newState.flips,
       crop: newState.crop,
       rotation: newState.rotation,
-    });
+    };
 
-    // Persist to IndexedDB
+    let thumbnail: File | undefined;
     try {
-      await this.updatePhotoFn(photo.id, newCurrent, {
-        flips: newState.flips,
-        crop: newState.crop,
-        rotation: newState.rotation,
+      const thumbBlob = await createThumbnailFromFile(newCurrent);
+      thumbnail = new File([thumbBlob], `thumb-${photoFileName(photo)}`, {
+        type: "image/jpeg",
       });
+    } catch (error) {
+      console.warn(
+        `[BaseCommand] Thumbnail bake failed for ${photoId}; grid will regenerate`,
+        error
+      );
+    }
+
+    this.photos.value[photoIndex] = thumbnail
+      ? applyDisplayWithThumbnail(photo, updates, thumbnail)
+      : applyDisplayInvalidation(photo, updates);
+
+    try {
+      await this.updatePhotoFn(
+        photo.id,
+        newCurrent,
+        {
+          flips: newState.flips,
+          crop: newState.crop,
+          rotation: newState.rotation,
+        },
+        thumbnail
+      );
     } catch (error) {
       console.error("Failed to update photo in storage:", error);
       // Revert in-memory change on IndexedDB failure

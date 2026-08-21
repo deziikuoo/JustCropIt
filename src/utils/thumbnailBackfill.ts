@@ -4,12 +4,39 @@ import { createThumbnailFromFile } from './thumbnailGenerator';
 import { createThumbhashFromBlob } from './thumbhashGenerator';
 import { updatePhotoThumbnail } from './photoStorage';
 import { processInChunks, scheduleIdleTask } from './scheduler';
-import type { BlobToFileFn } from './blobToFile';
+import { photoFileName, type BlobToFileFn } from './blobToFile';
 
 const BACKFILL_CHUNK_SIZE = 3;
 
 /** Photos whose bytes cannot be decoded — retrying every backfill pass only spams the console. */
 const undecodablePhotoIds = new Set<string>();
+
+let pauseCount = 0;
+let backfillEpoch = 0;
+let queued:
+  | { photos: Ref<Photo[]>; blobToFile: BlobToFileFn; hashesOnly?: boolean }
+  | null = null;
+
+export function pauseThumbnailBackfill(): void {
+  pauseCount += 1;
+  backfillEpoch += 1;
+}
+
+export function resumeThumbnailBackfill(): void {
+  pauseCount = Math.max(0, pauseCount - 1);
+  if (pauseCount > 0 || !queued) return;
+  const { photos, blobToFile, hashesOnly } = queued;
+  queued = null;
+  if (hashesOnly) {
+    scheduleThumbhashBackfill(photos, blobToFile);
+  } else {
+    scheduleThumbnailBackfill(photos, blobToFile);
+  }
+}
+
+function isBackfillPaused(): boolean {
+  return pauseCount > 0;
+}
 
 export interface GeneratedThumbnailResult {
   thumbnailFile: File;
@@ -28,9 +55,7 @@ export async function generateAndPersistThumbnail(
     const thumbBlob = await createThumbnailFromFile(photo.current);
     const thumbhash = await createThumbhashFromBlob(thumbBlob);
     await updatePhotoThumbnail(photo.id, thumbBlob, thumbhash ?? undefined);
-    const thumbName = photo.current.name
-      ? `thumb-${photo.current.name}`
-      : `thumb-${photo.id}.jpg`;
+    const thumbName = `thumb-${photoFileName(photo)}`;
     return {
       thumbnailFile: blobToFile(thumbBlob, thumbName, 'image/jpeg'),
       thumbhash,
@@ -54,6 +79,11 @@ export function scheduleThumbnailBackfill(
   photos: Ref<Photo[]>,
   blobToFile: BlobToFileFn
 ): void {
+  if (isBackfillPaused()) {
+    queued = { photos, blobToFile };
+    return;
+  }
+
   const indicesNeedingBackfill = photos.value
     .map((photo, index) => ({ photo, index }))
     .filter(({ photo }) => photo.id && !photo.thumbnail)
@@ -64,10 +94,19 @@ export function scheduleThumbnailBackfill(
     return;
   }
 
+  const epoch = backfillEpoch;
   scheduleIdleTask(async () => {
+    if (isBackfillPaused() || epoch !== backfillEpoch) {
+      queued = { photos, blobToFile };
+      return;
+    }
+
     await processInChunks(
       indicesNeedingBackfill,
       async (index) => {
+        if (isBackfillPaused() || epoch !== backfillEpoch) {
+          return null;
+        }
         const photo = photos.value[index];
         if (!photo?.id || photo.thumbnail) {
           return null;
@@ -85,14 +124,24 @@ export function scheduleThumbnailBackfill(
       },
       BACKFILL_CHUNK_SIZE
     );
+
+    if (isBackfillPaused() || epoch !== backfillEpoch) {
+      queued = { photos, blobToFile };
+      return;
+    }
     scheduleThumbhashBackfill(photos, blobToFile);
   }, { timeout: 2000 });
 }
 
 export function scheduleThumbhashBackfill(
   photos: Ref<Photo[]>,
-  _blobToFile: BlobToFileFn
+  blobToFile: BlobToFileFn
 ): void {
+  if (isBackfillPaused()) {
+    queued = { photos, blobToFile, hashesOnly: true };
+    return;
+  }
+
   const indicesNeedingHash = photos.value
     .map((photo, index) => ({ photo, index }))
     .filter(({ photo }) => photo.id && photo.thumbnail && !photo.thumbhash)
@@ -102,10 +151,19 @@ export function scheduleThumbhashBackfill(
     return;
   }
 
+  const epoch = backfillEpoch;
   scheduleIdleTask(async () => {
+    if (isBackfillPaused() || epoch !== backfillEpoch) {
+      queued = { photos, blobToFile, hashesOnly: true };
+      return;
+    }
+
     await processInChunks(
       indicesNeedingHash,
       async (index) => {
+        if (isBackfillPaused() || epoch !== backfillEpoch) {
+          return null;
+        }
         const photo = photos.value[index];
         if (!photo?.id || !photo.thumbnail || photo.thumbhash) {
           return null;

@@ -181,8 +181,8 @@
               >
                 <i class="fas fa-circle-question" aria-hidden="true"></i>
                 <span class="quality-help-tooltip">
-                  Smaller files and faster extraction. Best for long clips with many frames.
-                  Slight compression artifacts are possible.
+                  Smaller and faster — safer for long clips and large imports.
+                  Recommended default. Slight compression is fine for cropping.
                 </span>
               </span>
             </div>
@@ -204,8 +204,8 @@
               >
                 <i class="fas fa-circle-question" aria-hidden="true"></i>
                 <span class="quality-help-tooltip">
-                  Maximum fidelity with no compression loss. Larger files and slower.
-                  Best when every frame needs pixel-perfect quality.
+                  Lossless quality, but files are huge and slow to import.
+                  Higher risk of hitting browser storage limits on long clips.
                 </span>
               </span>
             </div>
@@ -331,6 +331,8 @@
               type="button"
               class="preview-frame"
               :data-frame-array-index="arrayIdx"
+              :data-frame-file-index="frame.index"
+              :ref="(el) => bindFramePreviewObserver(el, frame.index)"
               :class="{
                 'preview-frame--selected': selectedFrameIndices.has(frame.index),
                 'preview-frame--dragging-over': draggedOverArrayIndices.has(arrayIdx),
@@ -340,12 +342,12 @@
                 ? `${selectedFrameIndices.has(frame.index) ? 'Deselect' : 'Select'} frame at ${formatTimestamp(frame.timestamp)}`
                 : `Preview frame at ${formatTimestamp(frame.timestamp)}`"
               :aria-pressed="isSelectMode ? selectedFrameIndices.has(frame.index) : undefined"
-              @click="handleFrameClick(frame.index)"
+              @click="handleFrameClick(frame.index, arrayIdx, $event)"
               @mousedown="handleFrameMouseDown(arrayIdx, $event)"
               @touchstart.passive="handleFrameTouchStart(arrayIdx, $event)"
             >
               <img
-                :src="getFramePreviewUrl(frame)"
+                :src="framePreviewUrls.get(frame.index)"
                 :alt="`Frame ${frame.index + 1}`"
                 loading="lazy"
                 decoding="async"
@@ -374,6 +376,36 @@
               >
                 <i class="fas fa-check-double"></i>
                 Select
+              </button>
+              <button
+                class="frame-action-btn"
+                type="button"
+                :disabled="isDownloading || isAddingToPhotos || isAutoSelectingFrames || extractedFrames.length === 0"
+                title="Enter select mode with the first 100 frames selected"
+                @click="selectFirstFrames(100)"
+              >
+                <i class="fas fa-list-ol"></i>
+                First 100
+              </button>
+              <button
+                class="frame-action-btn"
+                type="button"
+                :disabled="isDownloading || isAddingToPhotos || isAutoSelectingFrames || extractedFrames.length === 0"
+                title="Enter select mode with the first 300 frames selected"
+                @click="selectFirstFrames(300)"
+              >
+                <i class="fas fa-list-ol"></i>
+                First 300
+              </button>
+              <button
+                class="frame-action-btn"
+                type="button"
+                :disabled="isDownloading || isAddingToPhotos || isAutoSelectingFrames || extractedFrames.length === 0"
+                title="Enter select mode with the first 500 frames selected"
+                @click="selectFirstFrames(500)"
+              >
+                <i class="fas fa-list-ol"></i>
+                First 500
               </button>
               <button
                 class="add-to-grid-btn"
@@ -409,7 +441,7 @@
               <button
                 class="frame-action-btn"
                 type="button"
-                :disabled="isDownloading || selectedCount === extractedFrames.length"
+                :disabled="isDownloading || isAddingToPhotos || selectedCount === extractedFrames.length"
                 @click="selectAllFrames"
               >
                 <i class="fas fa-check-square"></i>
@@ -418,7 +450,7 @@
               <button
                 class="frame-action-btn"
                 type="button"
-                :disabled="isDownloading || selectedCount === 0"
+                :disabled="isDownloading || isAddingToPhotos || selectedCount === 0"
                 title="Deselect all frames"
                 @click="clearFrameSelection"
               >
@@ -426,9 +458,25 @@
                 Deselect
               </button>
               <button
+                class="add-to-grid-btn"
+                type="button"
+                :disabled="isDownloading || isAddingToPhotos || selectedCount === 0"
+                :title="selectedCount === 0 ? 'Select frames first' : `Add ${selectedCount} frame(s) to Images`"
+                @click="handleAddSelectedToGrid"
+              >
+                <i :class="isAddingToPhotos ? 'fas fa-spinner fa-spin' : 'fas fa-plus'"></i>
+                {{
+                  isAddingToPhotos
+                    ? 'Adding to Images…'
+                    : selectedCount > 0
+                      ? `Add to Images (${selectedCount})`
+                      : 'Add to Images'
+                }}
+              </button>
+              <button
                 class="frame-action-btn frame-action-btn--primary"
                 type="button"
-                :disabled="isDownloading || selectedCount === 0"
+                :disabled="isDownloading || isAddingToPhotos || selectedCount === 0"
                 :title="selectedCount === 0 ? 'Select frames first' : `Download ${selectedCount} frame(s)`"
                 @click="handleDownloadSelected"
               >
@@ -438,7 +486,7 @@
               <button
                 class="frame-action-btn frame-action-btn--danger"
                 type="button"
-                :disabled="isDownloading || selectedCount === 0"
+                :disabled="isDownloading || isAddingToPhotos || selectedCount === 0"
                 :title="selectedCount === 0 ? 'Select frames first' : `Delete ${selectedCount} frame(s)`"
                 @click="handleDeleteSelectedFrames"
               >
@@ -448,7 +496,7 @@
               <button
                 class="frame-action-btn"
                 type="button"
-                :disabled="isDownloading"
+                :disabled="isDownloading || isAddingToPhotos"
                 @click="exitSelectMode"
               >
                 <i class="fas fa-times"></i>
@@ -491,6 +539,11 @@ import ConfirmDialog from './ConfirmDialog.vue';
 import ExtractedFramePreviewModal from './ExtractedFramePreviewModal.vue';
 import VideoTrimmer from './VideoTrimmer.vue';
 import { createStreamingZip } from '../utils/export/streamingZip';
+import {
+  createDownloadStamp,
+  stampDownloadFileName,
+  stampDownloadZipName,
+} from '../utils/downloadFileNames';
 
 const props = defineProps<{
   addToPhotos: (files: File[]) => Promise<void>;
@@ -532,11 +585,17 @@ const fileInputRef = ref<HTMLInputElement | null>(null);
 const videoRef = ref<HTMLVideoElement | null>(null);
 const isDragOver = ref(false);
 const framePreviewUrls = ref<Map<number, string>>(new Map());
+/** Pause new object-URL creation (e.g. during programmatic scroll). */
+const framePreviewLoadsPaused = ref(false);
+const isAutoSelectingFrames = ref(false);
+let framePreviewObserver: IntersectionObserver | null = null;
 const previewFrameIndex = ref<number | null>(null);
 const isPreviewingClip = ref(false);
 
 const isSelectMode = ref(false);
 const selectedFrameIndices = ref<Set<number>>(new Set());
+/** Array index of last non-shift click — used for Shift+click range select. */
+const selectionAnchorArrayIdx = ref<number | null>(null);
 const isDownloading = ref(false);
 const downloadCancelled = ref(false);
 const downloadProgress = ref<{ percent: number; message: string } | null>(null);
@@ -633,8 +692,10 @@ watch(extractedFrames, () => {
   // New extraction / restore — drop stale selection
   cleanupFrameDragSelection();
   selectedFrameIndices.value = new Set();
+  selectionAnchorArrayIdx.value = null;
   if (extractedFrames.value.length === 0) {
     isSelectMode.value = false;
+    teardownFramePreviewObserver();
   }
 });
 
@@ -708,7 +769,138 @@ function clearFramePreviewUrls() {
   for (const url of framePreviewUrls.value.values()) {
     URL.revokeObjectURL(url);
   }
-  framePreviewUrls.value.clear();
+  framePreviewUrls.value = new Map();
+}
+
+function createPreviewUrlForIndex(
+  frameIndex: number,
+  options?: { force?: boolean; frame?: ExtractedFrameFile }
+): void {
+  if (framePreviewUrls.value.has(frameIndex)) return;
+  if (framePreviewLoadsPaused.value && !options?.force) return;
+
+  const frame =
+    options?.frame ??
+    extractedFrames.value.find((entry) => entry.index === frameIndex);
+  if (!frame) return;
+
+  const url = URL.createObjectURL(frame.file);
+  const next = new Map(framePreviewUrls.value);
+  next.set(frameIndex, url);
+  framePreviewUrls.value = next;
+}
+
+function ensureFramePreviewObserver(): void {
+  if (framePreviewObserver || typeof IntersectionObserver === 'undefined') {
+    return;
+  }
+  const root = framesGridRef.value;
+  if (!root) return;
+
+  framePreviewObserver = new IntersectionObserver(
+    (entries) => {
+      if (framePreviewLoadsPaused.value) return;
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        const raw = (entry.target as HTMLElement).dataset.frameFileIndex;
+        if (raw == null) continue;
+        const frameIndex = Number(raw);
+        if (!Number.isFinite(frameIndex)) continue;
+        createPreviewUrlForIndex(frameIndex);
+      }
+    },
+    {
+      root,
+      rootMargin: '120px 0px',
+      threshold: 0.01,
+    }
+  );
+}
+
+function bindFramePreviewObserver(el: unknown, frameIndex: number): void {
+  if (!el || !(el instanceof HTMLElement)) return;
+  el.dataset.frameFileIndex = String(frameIndex);
+  ensureFramePreviewObserver();
+  if (!framePreviewObserver) {
+    // No IntersectionObserver / grid not ready — fall back to eager create.
+    createPreviewUrlForIndex(frameIndex);
+    return;
+  }
+  framePreviewObserver.observe(el);
+}
+
+function teardownFramePreviewObserver(): void {
+  framePreviewObserver?.disconnect();
+  framePreviewObserver = null;
+}
+
+/** After unpausing, create URLs only for frames currently near the viewport. */
+function flushVisibleFramePreviews(): void {
+  const grid = framesGridRef.value;
+  if (!grid) return;
+
+  const rootRect = grid.getBoundingClientRect();
+  const margin = 120;
+  const buttons = grid.querySelectorAll<HTMLElement>(
+    '.preview-frame[data-frame-file-index]'
+  );
+  for (const btn of buttons) {
+    const rect = btn.getBoundingClientRect();
+    const nearViewport =
+      rect.bottom >= rootRect.top - margin &&
+      rect.top <= rootRect.bottom + margin;
+    if (!nearViewport) continue;
+    const frameIndex = Number(btn.dataset.frameFileIndex);
+    if (Number.isFinite(frameIndex)) {
+      createPreviewUrlForIndex(frameIndex);
+    }
+  }
+}
+
+function scrollFrameArrayIndexIntoView(arrayIdx: number): Promise<void> {
+  return new Promise((resolve) => {
+    const grid = framesGridRef.value;
+    if (!grid) {
+      resolve();
+      return;
+    }
+
+    const el = grid.querySelector(
+      `[data-frame-array-index="${arrayIdx}"]`
+    ) as HTMLElement | null;
+    if (!el) {
+      resolve();
+      return;
+    }
+
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      grid.removeEventListener('scrollend', onScrollEnd);
+      window.clearTimeout(fallbackTimer);
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => resolve());
+      });
+    };
+
+    const onScrollEnd = () => finish();
+
+    const gridRect = grid.getBoundingClientRect();
+    const elRect = el.getBoundingClientRect();
+    const alreadyVisible =
+      elRect.top >= gridRect.top && elRect.bottom <= gridRect.bottom;
+
+    if (alreadyVisible) {
+      finish();
+      return;
+    }
+
+    grid.addEventListener('scrollend', onScrollEnd, { once: true });
+    // Instant jump — avoids decoding every thumbnail along a smooth scroll path.
+    el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'auto' });
+    const fallbackTimer = window.setTimeout(finish, 150);
+  });
 }
 
 function openFramePreview(index: number) {
@@ -794,12 +986,18 @@ async function clearVideoPage() {
 }
 
 function revokeFramePreviewUrls(indices: Iterable<number>): void {
+  let changed = false;
+  const next = new Map(framePreviewUrls.value);
   for (const index of indices) {
-    const url = framePreviewUrls.value.get(index);
+    const url = next.get(index);
     if (url) {
       URL.revokeObjectURL(url);
-      framePreviewUrls.value.delete(index);
+      next.delete(index);
+      changed = true;
     }
+  }
+  if (changed) {
+    framePreviewUrls.value = next;
   }
 }
 
@@ -895,10 +1093,7 @@ async function handleExtract() {
 }
 
 function getFramePreviewUrl(frame: ExtractedFrameFile): string {
-  if (!framePreviewUrls.value.has(frame.index)) {
-    const url = URL.createObjectURL(frame.file);
-    framePreviewUrls.value.set(frame.index, url);
-  }
+  createPreviewUrlForIndex(frame.index, { force: true, frame });
   return framePreviewUrls.value.get(frame.index)!;
 }
 
@@ -920,18 +1115,23 @@ function getPhaseLabel(phase: string): string {
   }
 }
 
-function handleFrameClick(index: number) {
+function handleFrameClick(index: number, arrayIdx: number, event: MouseEvent) {
   if (suppressNextFrameClick.value) {
     suppressNextFrameClick.value = false;
     return;
   }
   if (isSelectMode.value) {
-    toggleFrameSelection(index);
+    if (event.shiftKey && selectionAnchorArrayIdx.value !== null) {
+      selectFrameRange(selectionAnchorArrayIdx.value, arrayIdx);
+    } else {
+      toggleFrameSelection(index);
+      selectionAnchorArrayIdx.value = arrayIdx;
+    }
     return;
   }
-  const arrayIdx = extractedFrames.value.findIndex((frame) => frame.index === index);
-  if (arrayIdx >= 0) {
-    openFramePreview(arrayIdx);
+  const foundIdx = extractedFrames.value.findIndex((frame) => frame.index === index);
+  if (foundIdx >= 0) {
+    openFramePreview(foundIdx);
   }
 }
 
@@ -1186,6 +1386,8 @@ function handleFrameDragEnd() {
       }
     }
     selectedFrameIndices.value = next;
+    // Anchor at the end of the drag so Shift+click continues from there.
+    selectionAnchorArrayIdx.value = arrayIndices[arrayIndices.length - 1] ?? startIdx;
   } else if (
     !performedDragSelection &&
     startedFromTouch &&
@@ -1196,6 +1398,7 @@ function handleFrameDragEnd() {
       if (frame) {
         suppressNextFrameClick.value = true;
         toggleFrameSelection(frame.index);
+        selectionAnchorArrayIdx.value = startIdx;
       }
     }
   }
@@ -1203,6 +1406,8 @@ function handleFrameDragEnd() {
 
 function handleFrameMouseDown(arrayIdx: number, event: MouseEvent) {
   if (!isSelectMode.value || event.button !== 0) return;
+  // Shift+click is range-select via click handler; don't start a drag.
+  if (event.shiftKey) return;
   handleFrameDragStart(arrayIdx, event);
 }
 
@@ -1216,10 +1421,36 @@ function enterSelectMode() {
   closeFramePreview();
 }
 
+/** Enter select mode and select the first N frames (or all if fewer exist). */
+async function selectFirstFrames(count: number) {
+  if (extractedFrames.value.length === 0 || isAutoSelectingFrames.value) return;
+
+  const n = Math.min(count, extractedFrames.value.length);
+  const lastArrayIdx = n - 1;
+
+  isAutoSelectingFrames.value = true;
+  framePreviewLoadsPaused.value = true;
+  try {
+    selectedFrameIndices.value = new Set(
+      extractedFrames.value.slice(0, n).map((frame) => frame.index)
+    );
+    selectionAnchorArrayIdx.value = lastArrayIdx;
+    enterSelectMode();
+    await nextTick();
+    await scrollFrameArrayIndexIntoView(lastArrayIdx);
+  } finally {
+    framePreviewLoadsPaused.value = false;
+    await nextTick();
+    flushVisibleFramePreviews();
+    isAutoSelectingFrames.value = false;
+  }
+}
+
 function exitSelectMode() {
   cleanupFrameDragSelection();
   isSelectMode.value = false;
   selectedFrameIndices.value = new Set();
+  selectionAnchorArrayIdx.value = null;
 }
 
 function toggleFrameSelection(index: number) {
@@ -1232,14 +1463,29 @@ function toggleFrameSelection(index: number) {
   selectedFrameIndices.value = next;
 }
 
+/** Select every frame between two grid positions (inclusive), Explorer-style. */
+function selectFrameRange(fromArrayIdx: number, toArrayIdx: number) {
+  const start = Math.min(fromArrayIdx, toArrayIdx);
+  const end = Math.max(fromArrayIdx, toArrayIdx);
+  const next = new Set<number>();
+  for (let i = start; i <= end; i += 1) {
+    const frame = extractedFrames.value[i];
+    if (frame) next.add(frame.index);
+  }
+  selectedFrameIndices.value = next;
+}
+
 function selectAllFrames() {
   selectedFrameIndices.value = new Set(
     extractedFrames.value.map((frame) => frame.index)
   );
+  selectionAnchorArrayIdx.value =
+    extractedFrames.value.length > 0 ? 0 : null;
 }
 
 function clearFrameSelection() {
   selectedFrameIndices.value = new Set();
+  selectionAnchorArrayIdx.value = null;
 }
 
 function downloadBlob(blob: Blob, fileName: string): void {
@@ -1274,13 +1520,18 @@ async function downloadFramesAsZip(
     message: 'Preparing download...',
   };
 
+  const stamp = createDownloadStamp();
+
   try {
     if (frames.length === 1) {
       if (downloadCancelled.value) {
         downloadProgress.value = { percent: 0, message: 'Download cancelled' };
         return;
       }
-      downloadBlob(frames[0].file, frames[0].file.name);
+      downloadBlob(
+        frames[0].file,
+        stampDownloadFileName(frames[0].file.name, stamp)
+      );
       downloadProgress.value = {
         percent: 100,
         message: 'Download started',
@@ -1299,7 +1550,10 @@ async function downloadFramesAsZip(
       }
 
       const frame = frames[i];
-      zip.add(frame.file.name, await frame.file.arrayBuffer());
+      zip.add(
+        stampDownloadFileName(frame.file.name, stamp),
+        await frame.file.arrayBuffer()
+      );
 
       const done = i + 1;
       downloadProgress.value = {
@@ -1325,7 +1579,7 @@ async function downloadFramesAsZip(
       return;
     }
 
-    downloadBlob(blob, zipName);
+    downloadBlob(blob, stampDownloadZipName(zipName, stamp));
     downloadProgress.value = {
       percent: 100,
       message: `Downloaded ${total} frames`,
@@ -1381,7 +1635,26 @@ async function handleAddToGrid() {
   if (isDownloading.value || isAddingToPhotos.value) return;
   if (extractedFrames.value.length === 0) return;
 
-  const files = extractedFrames.value.map((frame) => frame.file);
+  await addFramesToPhotos(
+    extractedFrames.value.map((frame) => frame.file)
+  );
+}
+
+async function handleAddSelectedToGrid() {
+  if (isDownloading.value || isAddingToPhotos.value) return;
+  if (selectedCount.value === 0) return;
+
+  const files = extractedFrames.value
+    .filter((frame) => selectedFrameIndices.value.has(frame.index))
+    .map((frame) => frame.file);
+
+  if (files.length === 0) return;
+  await addFramesToPhotos(files);
+}
+
+async function addFramesToPhotos(files: File[]) {
+  if (files.length === 0) return;
+
   isAddingToPhotos.value = true;
   closeFramePreview();
   exitSelectMode();
@@ -1446,6 +1719,7 @@ onUnmounted(() => {
     resolveConfirm(false);
   }
   closeFramePreview();
+  teardownFramePreviewObserver();
   clearFramePreviewUrls();
 });
 </script>

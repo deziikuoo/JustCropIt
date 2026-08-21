@@ -1,7 +1,7 @@
 <template>
   <div v-if="show" class="modal-background" @click="$emit('close')">
     <div class="modal-content" @click.stop>
-      <div class="cropper-wrapper" :class="{ dragging: isDragging }">
+      <div class="cropper-wrapper" ref="cropperWrapper" :class="{ dragging: isDragging }">
         <div
           v-if="suggestionLoading"
           class="suggestion-overlay"
@@ -24,9 +24,9 @@
           }"
           @ready="onCropperReady"
         />
-        <!-- Arrow navigation buttons (show when there's more than one image) -->
+        <!-- Arrow navigation (same-box batch only) -->
         <button
-          v-if="totalBatchCount && totalBatchCount > 1"
+          v-if="showBatchNav"
           class="nav-arrow nav-arrow-left"
           @click="$emit('previous-image')"
           :disabled="currentBatchIndex === 0"
@@ -35,10 +35,10 @@
           <i class="fas fa-chevron-left"></i>
         </button>
         <button
-          v-if="totalBatchCount && totalBatchCount > 1"
+          v-if="showBatchNav"
           class="nav-arrow nav-arrow-right"
           @click="$emit('next-image')"
-          :disabled="currentBatchIndex === totalBatchCount - 1"
+          :disabled="currentBatchIndex === (totalBatchCount ?? 1) - 1"
           title="Next image"
         >
           <i class="fas fa-chevron-right"></i>
@@ -86,8 +86,15 @@
           >
             No subject detected — adjust stencil manually.
           </p>
+          <p
+            v-if="smartModeHint"
+            class="suggestion-message"
+            role="status"
+          >
+            {{ smartModeHint }}
+          </p>
           <div class="actions">
-            <button @click="cropImage">Done</button>
+            <button @click="cropImage" :disabled="!canConfirmSmartCrop">Done</button>
             <button @click="$emit('close')">Cancel</button>
           </div>
         </div>
@@ -178,9 +185,15 @@ import { Cropper } from "vue-advanced-cropper";
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from "vue";
 import "vue-advanced-cropper/dist/style.css";
 import type { CropTarget } from "../types/detection";
+import type {
+  BatchCropMode,
+  BatchCropRecipe,
+  IdentityReferenceFace,
+} from "../types/batchCrop";
 
 // Type alias to extend Cropper instance with custom methods and properties
 type CropperInstance = InstanceType<typeof Cropper> & {
+  $el?: HTMLElement;
   getResult: () => {
     canvas: HTMLCanvasElement | undefined;
     coordinates?: { left: number; top: number; width: number; height: number };
@@ -223,8 +236,11 @@ const {
   suggestionError,
   suggestionNoSubject,
   detectionSupported,
+  batchMode,
   currentBatchIndex,
   totalBatchCount,
+  batchCropMode = "same-box",
+  referenceFaces = [],
 } = defineProps<{
   show: boolean;
   imageSrc: string;
@@ -238,6 +254,8 @@ const {
   batchMode?: boolean;
   currentBatchIndex?: number;
   totalBatchCount?: number;
+  batchCropMode?: BatchCropMode;
+  referenceFaces?: IdentityReferenceFace[];
 }>();
 
 const emit = defineEmits<{
@@ -245,7 +263,8 @@ const emit = defineEmits<{
     e: "cropped",
     blob: Blob,
     crop: { x: number; y: number; width: number; height: number },
-    rotation: number
+    rotation: number,
+    recipe?: BatchCropRecipe
   ): void;
   (e: "close"): void;
   (e: "next-image"): void;
@@ -255,6 +274,7 @@ const emit = defineEmits<{
 }>();
 
 const cropper = ref<CropperInstance | null>(null);
+const cropperWrapper = ref<HTMLElement | null>(null);
 const selectedAspectRatio = ref<number | null>(null);
 const selectedCropTarget = ref<CropTarget | null>(null);
 const cropTargetOptions: { value: CropTarget; label: string; icon: string }[] = [
@@ -267,6 +287,40 @@ const cropTargetOptions: { value: CropTarget; label: string; icon: string }[] = 
 const currentImageSrc = ref<string>(imageSrc);
 const isDragging = ref(false); // Track if stencil is being dragged (for iOS-style overlay)
 const isRadialDragging = ref(false);
+
+const isSmartBatchMode = computed(
+  () =>
+    Boolean(batchMode) &&
+    (batchCropMode === "follow-subject" || batchCropMode === "this-person")
+);
+const isThisPersonMode = computed(
+  () => Boolean(batchMode) && batchCropMode === "this-person"
+);
+const showBatchNav = computed(
+  () =>
+    Boolean(batchMode) &&
+    batchCropMode === "same-box" &&
+    Boolean(totalBatchCount && totalBatchCount > 1)
+);
+const canConfirmSmartCrop = computed(() => {
+  if (!isSmartBatchMode.value) return true;
+  if (!selectedCropTarget.value) return false;
+  if (isThisPersonMode.value && referenceFaces.length < 1) return false;
+  return true;
+});
+const smartModeHint = computed(() => {
+  if (!isSmartBatchMode.value) return "";
+  if (!selectedCropTarget.value) {
+    return "Choose a crop target before applying to the batch.";
+  }
+  if (isThisPersonMode.value && referenceFaces.length < 1) {
+    return "No reference faces available. Go back and pick reference images.";
+  }
+  if (batchCropMode === "follow-subject") {
+    return "Each selected photo will be cropped around its own subject.";
+  }
+  return `Matching ${referenceFaces.length} reference${referenceFaces.length === 1 ? "" : "s"} across the batch.`;
+});
 
 const FINE_ROTATE_MIN = -45;
 const FINE_ROTATE_MAX = 45;
@@ -849,6 +903,7 @@ const onCropperReady = () => {
 };
 
 const cropImage = async () => {
+  if (!canConfirmSmartCrop.value) return;
   if (cropper.value) {
     const { canvas } = cropper.value.getResult();
     if (canvas) {
@@ -885,7 +940,28 @@ const cropImage = async () => {
           };
         }
 
-        emit("cropped", blob, naturalCoords, currentRotation.value);
+        emit(
+          "cropped",
+          blob,
+          naturalCoords,
+          currentRotation.value,
+          isSmartBatchMode.value
+            ? {
+                mode: batchCropMode,
+                cropTarget: selectedCropTarget.value,
+                aspectRatio: selectedAspectRatio.value,
+                rotation: currentRotation.value,
+                referenceFaces:
+                  isThisPersonMode.value && referenceFaces.length
+                    ? referenceFaces.map((face) => ({
+                        ...face,
+                        bbox: { ...face.bbox },
+                        keypoints: face.keypoints,
+                      }))
+                    : undefined,
+              }
+            : { mode: "same-box", cropTarget: selectedCropTarget.value, aspectRatio: selectedAspectRatio.value, rotation: currentRotation.value }
+        );
         emit("close");
       } else {
         console.warn("Failed to create blob in cropImage");

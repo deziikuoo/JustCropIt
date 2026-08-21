@@ -2,6 +2,7 @@ import type { Photo } from '../../types/photo';
 import type { PasteParams, WorkerRequest } from '../../types/worker';
 import { imageWorkerPool } from '../imageWorkerPool';
 import { hasPendingFlipBake } from '../editTransform';
+import { photoFileName, resolveImageMimeType } from '../blobToFile';
 
 /**
  * Bake deferred flips from original into an ArrayBuffer for export/download.
@@ -14,12 +15,12 @@ export async function bakeDeferredFlipsForExport(
     const buffer = await photo.current.arrayBuffer();
     return {
       buffer,
-      mimeType: photo.current.type || 'image/jpeg',
+      mimeType: resolveImageMimeType(photo.current, photoFileName(photo)),
       workerUsed: false,
     };
   }
 
-  const mimeType = photo.original.type || photo.current.type || 'image/jpeg';
+  const mimeType = resolveImageMimeType(photo.original, photoFileName(photo));
   const params: PasteParams = {
     flips: { ...photo.flips },
     rotation: 0,

@@ -8,6 +8,7 @@
 
 import { ref, computed, watch, onUnmounted, nextTick } from 'vue';
 import { videoWorkerPool } from '../utils/videoWorkerPool';
+import { pauseThumbnailBackfill, resumeThumbnailBackfill } from '../utils/thumbnailBackfill';
 import {
   saveVideoSession,
   loadVideoSession,
@@ -416,6 +417,7 @@ export function useVideoExtraction() {
     }
 
     isExtracting.value = true;
+    pauseThumbnailBackfill();
     extractedFrames.value = [];
     error.value = null;
     startEtaTimer();
@@ -483,6 +485,7 @@ export function useVideoExtraction() {
     } finally {
       isExtracting.value = false;
       stopEtaTimer();
+      resumeThumbnailBackfill();
     }
   }
 

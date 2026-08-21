@@ -7,6 +7,7 @@ import type { Ref } from "vue";
 import { BaseCommand, type Photo, type ApplyFlipsRotationAndCropFn } from "./BaseCommand";
 import type { PhotoState } from "../types";
 import { updatePhoto } from "../../photoStorage";
+import { photoFileName, resolveImageMimeType } from "../../blobToFile";
 
 export class CropCommand extends BaseCommand {
   private photoId: string;
@@ -51,8 +52,10 @@ export class CropCommand extends BaseCommand {
     };
 
     const newCurrent = this.bakedBlob
-      ? new File([this.bakedBlob], photo.original.name, {
-          type: this.bakedBlob.type || photo.original.type,
+      ? new File([this.bakedBlob], photoFileName(photo), {
+          type:
+            this.bakedBlob.type ||
+            resolveImageMimeType(photo.original, photoFileName(photo)),
         })
       : await this.regeneratePhotoFromState(photo, newState);
 

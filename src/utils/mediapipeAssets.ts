@@ -1,6 +1,10 @@
 export function getAssetBase(): string {
   const base = import.meta.env.BASE_URL;
-  return new URL(base, window.location.origin).href;
+  const origin =
+    typeof self !== 'undefined' && self.location?.origin
+      ? self.location.origin
+      : 'http://localhost';
+  return new URL(base, origin).href;
 }
 
 export function getWasmPath(): string {

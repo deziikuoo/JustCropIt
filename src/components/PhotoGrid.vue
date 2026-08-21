@@ -14,6 +14,15 @@
         </label>
         <p class="photo-input-hint">Photos are deleted after 24 hours</p>
       </div>
+      <div
+        v-if="isLoadingFromStorage"
+        class="grid-storage-loading"
+        role="status"
+        aria-live="polite"
+      >
+        <i class="fas fa-spinner fa-spin" aria-hidden="true"></i>
+        <span>Loading images</span>
+      </div>
     </div>
     <div class="grid-wrapper" ref="gridWrapperRef">
       <div class="grid-tools-wrapper" ref="gridToolsWrapperRef">
@@ -237,6 +246,27 @@
                     @change="stripExifOnExport = ($event.target as HTMLInputElement).checked"
                   />
                 </label>
+                <label
+                  v-if="postCropCleanup"
+                  class="post-crop-cleanup"
+                >
+                  <span class="post-crop-cleanup__row">
+                    <input
+                      type="checkbox"
+                      class="post-crop-cleanup__input"
+                      :checked="postCropDeleteEnabled"
+                      @change="onPostCropDeleteToggle(($event.target as HTMLInputElement).checked)"
+                    />
+                    <span class="post-crop-cleanup__text">
+                      <span class="post-crop-cleanup__title">
+                        Download and delete successfully cropped images
+                      </span>
+                      <span class="post-crop-cleanup__hint">
+                        Unsuccessfully cropped images remain in your grid.
+                      </span>
+                    </span>
+                  </span>
+                </label>
                 <button
                   class="tool-btn tool-btn--success tool-btn--wide"
                   :class="{ 'tool-btn--disabled': !hasSelection }"
@@ -248,6 +278,7 @@
                   <span class="tool-btn__label">Download</span>
                 </button>
                 <button
+                  v-if="showBatchDeleteButton"
                   class="tool-btn tool-btn--danger tool-btn--wide"
                   :class="{ 'tool-btn--disabled': !hasSelection }"
                   :disabled="!hasSelection"
@@ -331,6 +362,7 @@
             :is-loading="isLoading(visibleRange.start + index)"
             :placeholder-preview-url="getPlaceholderPreviewUrl(photo)"
             :selected="isSelected(visibleRange.start + index)"
+            :identity-miss="isIdentityMiss(photo)"
             :select-mode="selectMode"
             :has-copied-settings="hasCopiedSettings"
             :dragging-over="draggedOverIndices.has(visibleRange.start + index)"
@@ -408,6 +440,7 @@ const props = withDefaults(
   defineProps<{
     photos: Photo[];
     selectedIndices: number[];
+    identityMissPhotoIds?: Set<string>;
     hasSelection: boolean;
     allSelected: boolean;
     hasCopiedSettings: boolean;
@@ -415,12 +448,21 @@ const props = withDefaults(
     deletedPhotosCount?: number;
     dragSelectionCount?: number | null;
     selectedPhotoSize?: number;
+    /** After a smart/same-box crop: offer download + optional delete of successes. */
+    postCropCleanup?: {
+      successCount: number;
+      missCount: number;
+    } | null;
+    /** Hydrating photos from IndexedDB / OPFS on open or refresh. */
+    isLoadingFromStorage?: boolean;
   }>(),
   {
     newPhotosCount: 0,
     deletedPhotosCount: 0,
     dragSelectionCount: null,
     selectedPhotoSize: 2,
+    postCropCleanup: null,
+    isLoadingFromStorage: false,
   },
 );
 
@@ -457,7 +499,20 @@ const emit = defineEmits<{
   (e: "drag-selection-progress", count: number): void;
   (e: "photo-thumbnail-updated", index: number, thumbnail: File, thumbhash?: string | null): void;
   (e: "update:selectedPhotoSize", value: number): void;
+  (e: "update:postCropDeleteEnabled", value: boolean): void;
 }>();
+
+const postCropDeleteEnabled = ref(false);
+
+const showBatchDeleteButton = computed(() => {
+  if (!props.postCropCleanup) return true;
+  return postCropDeleteEnabled.value;
+});
+
+const onPostCropDeleteToggle = (checked: boolean) => {
+  postCropDeleteEnabled.value = checked;
+  emit("update:postCropDeleteEnabled", checked);
+};
 
 const isSmallScreen = useMediaQuery('(max-width: 480px)');
 const { isVirtualScrollEnabled } = useVirtualScrollThreshold(isSmallScreen);
@@ -674,6 +729,9 @@ onUnmounted(() => {
 const isSelected = (index: number): boolean =>
   props.selectedIndices.includes(index);
 
+const isIdentityMiss = (photo: Photo): boolean =>
+  !!photo.id && !!props.identityMissPhotoIds?.has(photo.id);
+
 const handleFloatingUpload = (event: Event) => {
   emit("upload", event);
 };
@@ -693,6 +751,18 @@ const isHolding = ref(false);
 const heldPhotoIndex = ref<number | null>(null);
 const justActivatedSelectMode = ref(false);
 const leftSidebarCollapsed = ref(true);
+
+watch(
+  () => props.postCropCleanup,
+  (offer) => {
+    postCropDeleteEnabled.value = false;
+    emit("update:postCropDeleteEnabled", false);
+    if (offer) {
+      leftSidebarCollapsed.value = false;
+      selectMode.value = true;
+    }
+  }
+);
 
 // Drag detection for activating select mode
 const dragDetectionActive = ref(false);
@@ -1439,19 +1509,65 @@ const handlePhotoCardClick = (index: number, event: Event) => {
 
 <style scoped>
 .header {
+  position: relative;
   margin: 60px 0 40px 0;
   text-align: center;
+}
+
+.grid-storage-loading {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(212, 175, 55, 0.4);
+  background: rgba(18, 18, 20, 0.88);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(10px);
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 0.85rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.grid-storage-loading i {
+  color: #e8c96a;
+  font-size: 0.95rem;
 }
 
 @media (max-width: 768px) {
   .header {
     margin: 20px 0 30px 0;
   }
+
+  .grid-storage-loading {
+    top: -4px;
+    right: 4px;
+    padding: 6px 10px;
+    font-size: 0.78rem;
+    gap: 6px;
+  }
 }
 
 @media (max-width: 480px) {
   .header {
     margin: 16px 0 24px 0;
+  }
+
+  .grid-storage-loading {
+    top: -2px;
+    right: 2px;
+    padding: 5px 8px;
+    font-size: 0.72rem;
+  }
+
+  .grid-storage-loading span {
+    max-width: 9.5rem;
   }
 }
 
@@ -2172,6 +2288,51 @@ const handlePhotoCardClick = (index: number, event: Event) => {
   height: 16px;
   accent-color: #d4af37;
   cursor: pointer;
+}
+
+.post-crop-cleanup {
+  display: block;
+  padding: 8px 10px;
+  background: rgba(212, 175, 55, 0.08);
+  border: 1px solid rgba(212, 175, 55, 0.28);
+  border-radius: var(--btn-radius);
+  cursor: pointer;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.post-crop-cleanup__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.post-crop-cleanup__input {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  accent-color: #d4af37;
+  cursor: pointer;
+}
+
+.post-crop-cleanup__text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.post-crop-cleanup__title {
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.post-crop-cleanup__hint {
+  font-size: 9px;
+  font-weight: 400;
+  line-height: 1.35;
+  color: rgba(255, 255, 255, 0.55);
 }
 
 /* ============================================

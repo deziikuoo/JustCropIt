@@ -128,8 +128,15 @@ export async function createThumbnailFromFile(
   maxEdge: number = THUMBNAIL_MAX_EDGE_PX,
   quality: number = THUMBNAIL_JPEG_QUALITY
 ): Promise<Blob> {
-  if (!file.type.startsWith('image/')) {
-    throw new Error(`Unsupported file type for thumbnail: ${file.type || 'unknown'}`);
+  const type = (file.type || '').toLowerCase();
+  // OPFS .bin blobs often come back as application/octet-stream. The decoder
+  // sniffs JPEG/PNG magic bytes — do not clone the File just to relabel MIME.
+  if (
+    type &&
+    !type.startsWith('image/') &&
+    type !== 'application/octet-stream'
+  ) {
+    throw new Error(`Unsupported file type for thumbnail: ${file.type}`);
   }
 
   try {

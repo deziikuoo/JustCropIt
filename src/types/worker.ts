@@ -38,5 +38,7 @@ export interface WorkerResponse {
   success: boolean;
   type: 'flip' | 'crop' | 'paste' | 'ping';
   result?: ArrayBuffer; // Processed image data
+  /** Grid JPEG thumbnail baked in the same pass as `result`. */
+  thumbnailBuffer?: ArrayBuffer;
   error?: string;
 }

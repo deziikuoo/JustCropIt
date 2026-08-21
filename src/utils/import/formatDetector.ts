@@ -77,7 +77,10 @@ async function sniffFormatFromBytes(file: File): Promise<ImportFormat | null> {
   return null;
 }
 
-export async function detectImportFormat(file: File): Promise<ImportFormat> {
+/**
+ * Format from name + MIME only (no byte sniff). Used for known video-frame dumps.
+ */
+export function inferImportFormatFromNameAndType(file: File): ImportFormat {
   const ext = extensionOf(file.name);
 
   if (HEIC_EXTENSIONS.has(ext)) return 'heic';
@@ -87,6 +90,21 @@ export async function detectImportFormat(file: File): Promise<ImportFormat> {
     const fromMime = mimeToFormat(file.type);
     if (fromMime) return fromMime;
   }
+
+  if (ext === 'jpg' || ext === 'jpeg') return 'jpeg';
+  if (ext === 'png') return 'png';
+  if (ext === 'webp') return 'webp';
+  if (ext === 'gif') return 'gif';
+  return 'unknown';
+}
+
+export function fileLooksLikeJpeg(file: File): boolean {
+  return inferImportFormatFromNameAndType(file) === 'jpeg';
+}
+
+export async function detectImportFormat(file: File): Promise<ImportFormat> {
+  const quick = inferImportFormatFromNameAndType(file);
+  if (quick !== 'unknown') return quick;
 
   const sniffed = await sniffFormatFromBytes(file);
   if (sniffed) return sniffed;

@@ -13,6 +13,7 @@ import { detectFaceInBitmap } from './faceDetectorSession';
 import { detectFaceLandmarksInBitmap } from './faceLandmarkerSession';
 import { detectPoseInBitmap } from './poseLandmarkerSession';
 import { faceBboxToHeadNeckBbox } from './cropSuggestion';
+import { expandHintToSearchRegion } from './faceIdentity';
 import {
   buildFullBodyBboxFromPose,
   buildFullHeadBboxFromLandmarks,
@@ -105,14 +106,47 @@ function emptyResult(
   };
 }
 
+export interface PortraitDetectOptions {
+  closeBitmap?: boolean;
+  hintBbox?: BoundingBox;
+}
+
 export async function detectPortraitInBitmap(
   bitmap: ImageBitmap,
-  target: CropTarget
+  target: CropTarget,
+  options: PortraitDetectOptions = {}
 ): Promise<PortraitDetectResult> {
+  const closeBitmap = options.closeBitmap ?? true;
+  const hintBbox = options.hintBbox;
+
   try {
     const width = bitmap.width;
     const height = bitmap.height;
     const imageSize = { width, height };
+
+    if (hintBbox) {
+      const region = expandHintToSearchRegion(hintBbox, imageSize, target);
+      const cropped = await createImageBitmap(
+        bitmap,
+        region.x,
+        region.y,
+        region.width,
+        region.height
+      );
+      const inner = await detectPortraitInBitmap(cropped, target, {
+        closeBitmap: true,
+      });
+      if (inner.bbox) {
+        inner.bbox = {
+          x: inner.bbox.x + region.x,
+          y: inner.bbox.y + region.y,
+          width: inner.bbox.width,
+          height: inner.bbox.height,
+        };
+      }
+      return inner;
+    }
+
     const inferenceStart = performance.now();
 
     const needPose = true;
@@ -289,6 +323,8 @@ export async function detectPortraitInBitmap(
       debug: buildDebug(null),
     });
   } finally {
-    bitmap.close();
+    if (closeBitmap) {
+      bitmap.close();
+    }
   }
 }

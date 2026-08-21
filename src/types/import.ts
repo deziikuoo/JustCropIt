@@ -57,7 +57,7 @@ export interface UploadWorkerResponse {
 export interface PersistedIngestPhoto {
   id: string;
   file: File;
-  thumbnailFile: File;
+  thumbnailFile?: File;
   thumbhash: string | null;
   sourceFormat: ImportFormat;
   exifNormalized: boolean;

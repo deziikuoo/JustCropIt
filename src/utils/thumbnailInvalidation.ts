@@ -19,6 +19,24 @@ export function invalidatePhotoDisplay(photo: Photo): {
   };
 }
 
+/** Bump revision and attach a freshly baked thumbnail (no black-cell gap). */
+export function applyDisplayWithThumbnail<T extends Photo>(
+  photo: T,
+  updates: Partial<T>,
+  thumbnail: File
+): T {
+  if (photo.id) {
+    clearThumbnailBackfillFailure(photo.id);
+  }
+  return {
+    ...photo,
+    ...updates,
+    thumbnail,
+    thumbhash: undefined,
+    thumbRevision: photo.thumbRevision + 1,
+  };
+}
+
 export function applyDisplayInvalidation<T extends Photo>(
   photo: T,
   updates: Partial<T>

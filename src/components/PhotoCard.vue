@@ -15,6 +15,7 @@
       :class="{
         selected,
         'select-mode': selectMode,
+        'identity-miss': identityMiss && selected,
         'dragging-over': draggingOver,
         'photo-card--entrance': showEntranceAnimation,
         'photo-card--no-transition': !allowTransition,
@@ -138,6 +139,7 @@ const props = defineProps<{
   isLoading: boolean;
   placeholderPreviewUrl: string | null;
   selected: boolean;
+  identityMiss?: boolean;
   selectMode: boolean;
   hasCopiedSettings: boolean;
   draggingOver: boolean;
@@ -264,6 +266,14 @@ defineEmits<{
     var(--shadow-md);
 }
 
+.photo-card.selected.identity-miss {
+  border-color: #fca5a5;
+  box-shadow:
+    0 0 0 3px rgba(239, 68, 68, 0.35),
+    0 0 12px rgba(239, 68, 68, 0.25),
+    var(--shadow-md);
+}
+
 .photo-card-wrapper:has(.photo-card.selected),
 .photo-card-wrapper:has(.photo-card:focus-within) {
   z-index: 4;
@@ -324,6 +334,14 @@ defineEmits<{
   box-shadow:
     0 0 8px rgba(255, 215, 0, 0.4),
     0 0 0 2px rgba(255, 215, 0, 0.2);
+}
+
+.photo-card.identity-miss .photo-checkbox:checked {
+  background: linear-gradient(135deg, #ef4444 0%, #b91c1c 100%);
+  border-color: #fecaca;
+  box-shadow:
+    0 0 8px rgba(239, 68, 68, 0.45),
+    0 0 0 2px rgba(239, 68, 68, 0.25);
 }
 
 .photo-checkbox:checked::after {

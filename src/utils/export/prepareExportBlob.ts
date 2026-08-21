@@ -4,6 +4,7 @@ import { mimeTypeCanCarryExif, stripExifFromBuffer } from './exifStrip';
 import { hasPixelEdits } from './hasPixelEdits';
 import { hasPendingFlipBake } from '../editTransform';
 import { bakeDeferredFlipsForExport } from './bakeDeferredFlips';
+import { photoFileName, resolveImageMimeType } from '../blobToFile';
 
 async function readFileBuffer(file: File): Promise<ArrayBuffer> {
   return file.arrayBuffer();
@@ -17,8 +18,8 @@ export async function prepareExportFile(
   photo: Photo,
   settings: ExportSettings
 ): Promise<PreparedExport> {
-  const fileName = photo.current.name;
-  let mimeType = photo.current.type || 'image/jpeg';
+  const fileName = photoFileName(photo);
+  let mimeType = resolveImageMimeType(photo.current, fileName);
   let buffer: ArrayBuffer;
   let workerUsed = false;
   let bakedPendingFlips = false;

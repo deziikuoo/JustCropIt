@@ -1,13 +1,25 @@
 /**
  * Image Processing Web Worker
- * 
+ *
  * Handles CPU-intensive image operations off the main thread.
  * Optimized for mobile/Pixel devices with memory management and transferables.
+ * Crop/flip/paste also bake a grid JPEG thumbnail in the same pass.
  */
 
 /// <reference lib="webworker" />
 
-import type { WorkerRequest, WorkerResponse, FlipParams, CropParams, PasteParams } from '../types/worker';
+import type {
+  WorkerRequest,
+  WorkerResponse,
+  FlipParams,
+  CropParams,
+  PasteParams,
+} from '../types/worker';
+import {
+  THUMBNAIL_JPEG_QUALITY,
+  THUMBNAIL_MAX_EDGE_PX,
+} from '../constants/optimization';
+import { computeThumbnailDimensions } from '../utils/thumbnailGenerator';
 
 const ctx: DedicatedWorkerGlobalScope = self as any;
 
@@ -25,52 +37,61 @@ ctx.onmessage = async (event: MessageEvent<WorkerRequest>) => {
       throw new Error('Missing image data or mime type');
     }
 
-    let resultBuffer: ArrayBuffer;
-
     const bitmap = await decodeWithRetry(imageData, mimeType);
 
     try {
+      let processed: { result: ArrayBuffer; thumbnail: ArrayBuffer };
+
       if (type === 'flip') {
         const p = params as FlipParams;
-        const flips = { 
-          horizontal: p.direction === 'horizontal', 
-          vertical: p.direction === 'vertical' 
+        const flips = {
+          horizontal: p.direction === 'horizontal',
+          vertical: p.direction === 'vertical',
         };
-        resultBuffer = await processImage(bitmap, flips, 0, undefined, mimeType);
+        processed = await processImage(bitmap, flips, 0, undefined, mimeType);
       } else if (type === 'crop') {
         const p = params as CropParams;
-        // Batch Crop ignores flips in the current App.vue implementation (uses applyRotationAndCrop)
+        // Batch Crop ignores flips in the current App.vue implementation
         const flips = { horizontal: false, vertical: false };
-        resultBuffer = await processImage(bitmap, flips, p.rotation || 0, p.crop, mimeType);
+        processed = await processImage(
+          bitmap,
+          flips,
+          p.rotation || 0,
+          p.crop,
+          mimeType
+        );
       } else if (type === 'paste') {
         const p = params as PasteParams;
-        resultBuffer = await processImage(bitmap, p.flips, p.rotation || 0, p.crop, mimeType);
+        processed = await processImage(
+          bitmap,
+          p.flips,
+          p.rotation || 0,
+          p.crop,
+          mimeType
+        );
       } else {
         throw new Error(`Unsupported operation: ${type}`);
       }
 
-      // Send success response with result buffer in transfer list (Zero-Copy)
       const response: WorkerResponse = {
         id,
         type,
         success: true,
-        result: resultBuffer
+        result: processed.result,
+        thumbnailBuffer: processed.thumbnail,
       };
-      
-      ctx.postMessage(response, [resultBuffer]);
 
+      ctx.postMessage(response, [processed.result, processed.thumbnail]);
     } finally {
-      // CRITICAL: Explicitly close the bitmap to free GPU memory immediately
       bitmap.close();
     }
-
   } catch (error) {
     console.error(`Worker error (${type}):`, error);
     const response: WorkerResponse = {
       id,
       type,
       success: false,
-      error: error instanceof Error ? error.message : String(error)
+      error: error instanceof Error ? error.message : String(error),
     };
     ctx.postMessage(response);
   }
@@ -79,11 +100,6 @@ ctx.onmessage = async (event: MessageEvent<WorkerRequest>) => {
 const DECODE_ATTEMPTS = 3;
 const DECODE_RETRY_DELAY_MS = 200;
 
-/**
- * `createImageBitmap` throws InvalidStateError when the browser cannot allocate
- * for the decode, not just when the bytes are bad. Retrying after a short pause
- * gives concurrent decodes time to release memory.
- */
 async function decodeWithRetry(
   imageData: ArrayBuffer,
   mimeType: string
@@ -99,19 +115,56 @@ async function decodeWithRetry(
     } catch (error) {
       lastError = error;
       if (attempt < DECODE_ATTEMPTS) {
-        await new Promise((resolve) => setTimeout(resolve, DECODE_RETRY_DELAY_MS * attempt));
+        await new Promise((resolve) =>
+          setTimeout(resolve, DECODE_RETRY_DELAY_MS * attempt)
+        );
       }
     }
   }
 
-  const reason = lastError instanceof Error ? lastError.message : String(lastError);
+  const reason =
+    lastError instanceof Error ? lastError.message : String(lastError);
   throw new Error(
     `Failed to decode ${mimeType || 'image'} (${imageData.byteLength} bytes) after ${DECODE_ATTEMPTS} attempts: ${reason}`
   );
 }
 
+async function encodeThumbnailFromCanvas(
+  source: OffscreenCanvas
+): Promise<ArrayBuffer> {
+  const dims = computeThumbnailDimensions(
+    source.width,
+    source.height,
+    THUMBNAIL_MAX_EDGE_PX
+  );
+  const thumbCanvas = new OffscreenCanvas(dims.width, dims.height);
+  const thumbCtx = thumbCanvas.getContext('2d');
+  if (!thumbCtx) throw new Error('Failed to get thumbnail context');
+  thumbCtx.drawImage(source, 0, 0, dims.width, dims.height);
+  const blob = await thumbCanvas.convertToBlob({
+    type: 'image/jpeg',
+    quality: THUMBNAIL_JPEG_QUALITY,
+  });
+  return blob.arrayBuffer();
+}
+
+async function canvasToResultAndThumb(
+  canvas: OffscreenCanvas,
+  mimeType: string
+): Promise<{ result: ArrayBuffer; thumbnail: ArrayBuffer }> {
+  const [resultBlob, thumbnail] = await Promise.all([
+    canvas.convertToBlob({ type: mimeType }),
+    encodeThumbnailFromCanvas(canvas),
+  ]);
+  return {
+    result: await resultBlob.arrayBuffer(),
+    thumbnail,
+  };
+}
+
 /**
- * Core image processing logic mirroring App.vue's applyFlipsRotationAndCrop
+ * Core image processing logic mirroring App.vue's applyFlipsRotationAndCrop.
+ * Also bakes a grid JPEG thumbnail from the final canvas.
  */
 async function processImage(
   bitmap: ImageBitmap,
@@ -119,19 +172,12 @@ async function processImage(
   rotation: number,
   crop: { x: number; y: number; width: number; height: number } | undefined,
   mimeType: string
-): Promise<ArrayBuffer> {
+): Promise<{ result: ArrayBuffer; thumbnail: ArrayBuffer }> {
   const imgWidth = bitmap.width;
   const imgHeight = bitmap.height;
 
-  // Normalize rotation
   const normalizedRotation = ((rotation % 360) + 360) % 360;
   const rotationRad = (normalizedRotation * Math.PI) / 180;
-
-  // Step 1: Apply flips
-  // We can use a temporary canvas for flips if we need to rotate/crop afterwards.
-  // Or we can combine transformations if possible. 
-  // App.vue uses separate canvases for clarity and correctness with the coordinate logic.
-  // We'll mirror that structure for 1:1 parity.
 
   const flipCanvas = new OffscreenCanvas(imgWidth, imgHeight);
   const flipCtx = flipCanvas.getContext('2d');
@@ -150,25 +196,21 @@ async function processImage(
     flipCtx.drawImage(bitmap, 0, 0);
   }
 
-  // If no rotation and no crop, we are done
   if (normalizedRotation === 0 && !crop) {
-    const blob = await flipCanvas.convertToBlob({ type: mimeType });
-    return await blob.arrayBuffer();
+    return canvasToResultAndThumb(flipCanvas, mimeType);
   }
 
-  // Step 2: Apply rotation
   let rotatedWidth: number;
   let rotatedHeight: number;
-  let cropX = 0, cropY = 0, cropWidth = 0, cropHeight = 0;
+  let cropX = 0,
+    cropY = 0,
+    cropWidth = 0,
+    cropHeight = 0;
 
-  // Determine dimensions after rotation
   if (normalizedRotation === 90 || normalizedRotation === 270) {
     rotatedWidth = imgHeight;
     rotatedHeight = imgWidth;
-  } else if (
-    normalizedRotation === 0 ||
-    normalizedRotation === 180
-  ) {
+  } else if (normalizedRotation === 0 || normalizedRotation === 180) {
     rotatedWidth = imgWidth;
     rotatedHeight = imgHeight;
   } else {
@@ -178,11 +220,10 @@ async function processImage(
     rotatedHeight = Math.round(imgWidth * sin + imgHeight * cos);
   }
 
-  // Prepare crop coordinates transform if crop exists
   if (crop) {
     cropWidth = crop.width;
     cropHeight = crop.height;
-    
+
     if (normalizedRotation === 90) {
       cropX = crop.y;
       cropY = imgWidth - crop.x - crop.width;
@@ -221,13 +262,10 @@ async function processImage(
   rotatedCtx.drawImage(flipCanvas, -imgWidth / 2, -imgHeight / 2);
   rotatedCtx.restore();
 
-  // If no crop, return rotated
   if (!crop) {
-    const blob = await rotatedCanvas.convertToBlob({ type: mimeType });
-    return await blob.arrayBuffer();
+    return canvasToResultAndThumb(rotatedCanvas, mimeType);
   }
 
-  // Step 3: Apply crop
   const finalCanvas = new OffscreenCanvas(cropWidth, cropHeight);
   const finalCtx = finalCanvas.getContext('2d');
   if (!finalCtx) throw new Error('Failed to get final context');
@@ -244,6 +282,5 @@ async function processImage(
     cropHeight
   );
 
-  const blob = await finalCanvas.convertToBlob({ type: mimeType });
-  return await blob.arrayBuffer();
+  return canvasToResultAndThumb(finalCanvas, mimeType);
 }

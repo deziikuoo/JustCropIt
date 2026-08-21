@@ -1,116 +1,68 @@
 /**
- * Detection Worker — MediaPipe Face Detector (lazy init, session-cached).
+ * Detection Worker — MediaPipe portrait and multi-face detection.
  */
 
 import './detectionWorkerPolyfills';
-import { FaceDetector, FilesetResolver } from '@mediapipe/tasks-vision';
 import type {
   DetectionWorkerRequest,
   DetectionWorkerResponse,
-  BoundingBox,
 } from '../types/detection';
+import { DETECTION_DEBUG_OVERLAY } from '../constants/optimization';
+import { detectPortraitInBitmap } from '../utils/portraitDetection';
+import { getPoseLandmarker } from '../utils/poseLandmarkerSession';
+import { getFaceLandmarker } from '../utils/faceLandmarkerSession';
 
-const MODEL_FILE = 'blaze_face_full_range.tflite';
-
-let faceDetector: FaceDetector | null = null;
-let initError: string | null = null;
-let lastModelLoadMs = 0;
 const cancelledIds = new Set<string>();
-
-function getAssetBase(): string {
-  const base = import.meta.env.BASE_URL;
-  return new URL(base, self.location.origin).href;
-}
-
-function getWasmPath(): string {
-  return new URL('mediapipe/wasm', getAssetBase()).href.replace(/\/$/, '');
-}
-
-function getModelUrl(): string {
-  return new URL(`mediapipe/models/${MODEL_FILE}`, getAssetBase()).href;
-}
-
-async function getFaceDetector(): Promise<FaceDetector> {
-  if (faceDetector) return faceDetector;
-  if (initError) {
-    throw new Error(initError);
-  }
-
-  const loadStart = performance.now();
-  try {
-    const wasmPath = getWasmPath();
-    const vision = await FilesetResolver.forVisionTasks(wasmPath);
-
-    faceDetector = await FaceDetector.createFromOptions(vision, {
-      baseOptions: {
-        modelAssetPath: getModelUrl(),
-        delegate: 'CPU',
-      },
-      runningMode: 'IMAGE',
-      minDetectionConfidence: 0.3,
-    });
-    lastModelLoadMs = performance.now() - loadStart;
-    return faceDetector;
-  } catch (error) {
-    initError = error instanceof Error ? error.message : String(error);
-    console.error('[DetectionWorker] Init failed:', initError);
-    throw error;
-  }
-}
-
-async function detectFace(
-  imageData: ArrayBuffer,
-  mimeType: string
-): Promise<{
-  bbox: BoundingBox | null;
-  inferenceMs: number;
-  loadModelMs: number;
-}> {
-  const inferenceStart = performance.now();
-  const bitmap = await createImageBitmap(
-    new Blob([imageData], { type: mimeType }),
-    { premultiplyAlpha: 'none', colorSpaceConversion: 'none' }
-  );
-
-  try {
-    const loadModelMs = faceDetector ? 0 : lastModelLoadMs;
-    const detector = await getFaceDetector();
-    const result = detector.detect(bitmap);
-    const inferenceMs = performance.now() - inferenceStart;
-
-    const detections = result.detections ?? [];
-    if (detections.length === 0) {
-      return { bbox: null, inferenceMs, loadModelMs };
-    }
-
-    const best = detections.reduce((a, b) => {
-      const aScore = a.categories?.[0]?.score ?? 0;
-      const bScore = b.categories?.[0]?.score ?? 0;
-      return bScore > aScore ? b : a;
-    });
-
-    const box = best.boundingBox;
-    if (!box) {
-      return { bbox: null, inferenceMs, loadModelMs };
-    }
-
-    return {
-      bbox: {
-        x: box.originX,
-        y: box.originY,
-        width: box.width,
-        height: box.height,
-      },
-      inferenceMs,
-      loadModelMs,
-    };
-  } finally {
-    bitmap.close();
-  }
-}
 
 function respond(response: DetectionWorkerResponse): void {
   self.postMessage(response);
+}
+
+async function bitmapFromRequest(
+  request: DetectionWorkerRequest
+): Promise<ImageBitmap> {
+  if (!request.imageData || !request.mimeType) {
+    throw new Error('Missing image data');
+  }
+  return createImageBitmap(new Blob([request.imageData], { type: request.mimeType }), {
+    premultiplyAlpha: 'none',
+    colorSpaceConversion: 'none',
+  });
+}
+
+async function handlePortrait(
+  request: DetectionWorkerRequest
+): Promise<DetectionWorkerResponse> {
+  if (!request.target) {
+    throw new Error('Missing crop target');
+  }
+  const bitmap = await bitmapFromRequest(request);
+  const result = await detectPortraitInBitmap(bitmap, request.target, {
+    closeBitmap: true,
+    hintBbox: request.hintBbox,
+  });
+  return {
+    id: request.id,
+    type: 'success',
+    photoId: request.photoId,
+    bbox: result.bbox,
+    method: result.method,
+    loadModelMs: result.loadModelMs || undefined,
+    inferenceMs: result.inferenceMs,
+    poseInferenceMs: result.poseInferenceMs,
+    faceLandmarkInferenceMs: result.faceLandmarkInferenceMs,
+    faceDetectorInferenceMs: result.faceDetectorInferenceMs,
+    debug:
+      request.includeDebug && DETECTION_DEBUG_OVERLAY ? result.debug : undefined,
+  };
+}
+
+async function handleWarmup(): Promise<void> {
+  // Face Detector must stay on the main thread (Tasks WASM uses importScripts).
+  await Promise.all([
+    getPoseLandmarker().catch(() => null),
+    getFaceLandmarker().catch(() => null),
+  ]);
 }
 
 self.onmessage = async (event: MessageEvent<DetectionWorkerRequest>) => {
@@ -126,53 +78,50 @@ self.onmessage = async (event: MessageEvent<DetectionWorkerRequest>) => {
     return;
   }
 
-  if (request.type === 'detect') {
-    if (!request.imageData || !request.mimeType) {
+  cancelledIds.delete(request.id);
+
+  try {
+    if (request.type === 'warmup') {
+      await handleWarmup();
+      if (cancelledIds.has(request.id)) {
+        cancelledIds.delete(request.id);
+        respond({ id: request.id, type: 'cancelled', photoId: request.photoId });
+        return;
+      }
+      respond({ id: request.id, type: 'success', photoId: request.photoId });
+      return;
+    }
+
+    let response: DetectionWorkerResponse;
+    if (request.type === 'portrait' || request.type === 'detect') {
+      response = await handlePortrait(request);
+    } else if (request.type === 'detectFaces') {
+      throw new Error(
+        'Face detection runs on the main thread (MediaPipe Tasks cannot importScripts in a module worker)'
+      );
+    } else {
+      throw new Error(`Unknown detection request: ${request.type}`);
+    }
+
+    if (cancelledIds.has(request.id)) {
+      cancelledIds.delete(request.id);
       respond({
         id: request.id,
-        type: 'error',
+        type: 'cancelled',
         photoId: request.photoId,
-        error: 'Missing image data',
       });
       return;
     }
 
-    const buffer = request.imageData;
-    cancelledIds.delete(request.id);
-
-    try {
-      const { bbox, inferenceMs, loadModelMs } = await detectFace(
-        buffer,
-        request.mimeType
-      );
-
-      if (cancelledIds.has(request.id)) {
-        cancelledIds.delete(request.id);
-        respond({
-          id: request.id,
-          type: 'cancelled',
-          photoId: request.photoId,
-        });
-        return;
-      }
-
-      respond({
-        id: request.id,
-        type: 'success',
-        photoId: request.photoId,
-        bbox,
-        loadModelMs: loadModelMs || undefined,
-        inferenceMs,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error('[DetectionWorker] Detect failed:', message);
-      respond({
-        id: request.id,
-        type: 'error',
-        photoId: request.photoId,
-        error: message,
-      });
-    }
+    respond(response);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('[DetectionWorker] Failed:', message);
+    respond({
+      id: request.id,
+      type: 'error',
+      photoId: request.photoId,
+      error: message,
+    });
   }
 };

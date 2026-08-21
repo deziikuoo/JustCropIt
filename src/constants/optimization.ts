@@ -41,7 +41,7 @@ export const MAIN_THREAD_CHUNK_SIZE = 5;
 // Grid display / thumbnail pipeline
 export const THUMBNAIL_MAX_EDGE_PX = 400;
 export const THUMBNAIL_JPEG_QUALITY = 0.82;
-export const GRID_URL_LRU_MAX = 48;
+export const GRID_URL_LRU_MAX = 96;
 export const GRID_DECODE_CONCURRENCY = 6;
 export const VIEWABILITY_THROTTLE_MS = 100;
 export const VIEWABILITY_ROOT_MARGIN = '200px';
@@ -75,10 +75,13 @@ export function getThumbnailCacheKey(
 // Upload ingest pipeline (Phase 1)
 export const UPLOAD_INGEST_CHUNK_SIZE = 1;
 export const UPLOAD_INGEST_CHUNK_SIZE_FAST = 4;
-/** Larger chunks for already-decoded video frame JPEGs/PNGs on higher-memory devices */
-export const UPLOAD_INGEST_CHUNK_SIZE_VIDEO_FRAMES = 8;
-/** Fallback chunk size for video frames on low-memory devices */
+/** Larger chunks for already-decoded video frame JPEGs on higher-memory devices */
+export const UPLOAD_INGEST_CHUNK_SIZE_VIDEO_FRAMES = 16;
+/** Fallback chunk size for video-frame JPEGs on low-memory devices */
 export const UPLOAD_INGEST_CHUNK_SIZE_VIDEO_FRAMES_LOW_MEMORY = 4;
+/** Conservative chunks when video frames are PNG (quota / memory risk) */
+export const UPLOAD_INGEST_CHUNK_SIZE_VIDEO_FRAMES_PNG = 4;
+export const UPLOAD_INGEST_CHUNK_SIZE_VIDEO_FRAMES_PNG_LOW_MEMORY = 1;
 export const UPLOAD_DECODE_JPEG_QUALITY = 0.92;
 export const UPLOAD_HEIC_MAX_CONCURRENT = 1;
 export const UPLOAD_WORKER_POOL_MAX = 11;
@@ -89,8 +92,10 @@ interface NavigatorWithMemory extends Navigator {
 
 export interface UploadIngestChunkOptions {
   hasSlowPathCandidate: boolean;
-  /** Video-frame dumps are already JPEG/PNG — allow larger parallel chunks */
+  /** Video-frame dumps — allow larger parallel chunks (JPEG only when filesAreJpeg) */
   preferLargerChunks?: boolean;
+  /** When preferLargerChunks, only raise size for JPEG batches; PNG stays conservative */
+  filesAreJpeg?: boolean;
 }
 
 /**
@@ -108,6 +113,11 @@ export function getUploadIngestChunkSize(
   const memory = nav.deviceMemory ?? 4;
 
   if (options.preferLargerChunks && !options.hasSlowPathCandidate) {
+    if (options.filesAreJpeg === false) {
+      return memory <= 4
+        ? UPLOAD_INGEST_CHUNK_SIZE_VIDEO_FRAMES_PNG_LOW_MEMORY
+        : UPLOAD_INGEST_CHUNK_SIZE_VIDEO_FRAMES_PNG;
+    }
     return memory <= 4
       ? UPLOAD_INGEST_CHUNK_SIZE_VIDEO_FRAMES_LOW_MEMORY
       : UPLOAD_INGEST_CHUNK_SIZE_VIDEO_FRAMES;
@@ -174,6 +184,58 @@ export const DETECTION_FACE_BOTTOM_EXTEND_RATIO = 0.4;
 export const DETECTION_FACE_SIDE_EXTEND_RATIO = 0.12;
 export const DETECTION_SUGGEST_DEBOUNCE_MS = 300;
 export const DETECTION_IDLE_TERMINATE_MS = 5 * 60 * 1000;
+export const IDENTITY_FACE_SIZE_PX = 112;
+export const IDENTITY_MATCH_MIN_COSINE = 0.58;
+/** Full ArcFace+detect every Nth frame when track is cold; healthy track stretches further. */
+export const IDENTITY_KEYFRAME_STRIDE = 6;
+/** Max consecutive ROI-only frames while a healthy track is held (stronger temporal tracking). */
+export const IDENTITY_TRACK_MAX_ROI_SKIPS = 12;
+/** Max faces kept in the This person reference gallery (auto + manual). */
+export const IDENTITY_REF_GALLERY_MAX = 5;
+/** How many batch photos to sample for auto multi-view seeding. */
+export const IDENTITY_AUTO_MULTIVIEW_SAMPLES = 4;
+/** Expand projected face box by this factor before ROI detect (~1.8× face). */
+export const IDENTITY_ROI_PAD_RATIO = 1.8;
+export const IDENTITY_MAX_FACES = 5;
+export const IDENTITY_CACHE_MAX_PHOTOS = 64;
+/** Safety cap for in-flight batch scratch (video extracts can be hundreds of frames). */
+export const IDENTITY_BATCH_SCRATCH_MAX = 2048;
+/**
+ * Source decode max edge for This person face detect.
+ * MediaPipe Face Detector always resizes the whole image internally, so a
+ * higher decode does not help small faces — tiling does (see below).
+ */
+export const IDENTITY_DETECT_MAX_EDGE_PX = 1280;
+/**
+ * MediaPipe Tasks Face Detector only accepts BlazeFace short-range (896 boxes).
+ * blaze_face_full_range.tflite outputs 2304 and crashes the Tasks graph.
+ */
+export const FACE_DETECTOR_MODEL_FILE = 'blaze_face_short_range.tflite';
+/** Overlapping tiles make mid/wide faces occupy more of the detector input. */
+export const IDENTITY_DETECT_TILE_COLS = 2;
+export const IDENTITY_DETECT_TILE_ROWS = 2;
+export const IDENTITY_DETECT_TILE_OVERLAP = 0.22;
+/** If the largest face is smaller than this fraction of min(image side), also tile. */
+export const IDENTITY_SMALL_FACE_MIN_SIDE_RATIO = 0.14;
+/** ± batch-order window for neighbor box fill after ArcFace miss. */
+export const IDENTITY_NEIGHBOR_WINDOW = 8;
+/** Max center distance vs projected neighbor box, as fraction of image min side. */
+export const IDENTITY_NEIGHBOR_MAX_CENTER_SHIFT_RATIO = 0.25;
+/** Face area vs neighbor projected area must stay within these ratios. */
+export const IDENTITY_NEIGHBOR_MIN_SIZE_RATIO = 0.5;
+export const IDENTITY_NEIGHBOR_MAX_SIZE_RATIO = 2.0;
+/** Reject neighbor projection when frame aspect ratios differ by more than this. */
+export const IDENTITY_NEIGHBOR_MAX_ASPECT_DELTA = 0.2;
+/** Minimum projected face edge (px) to accept a no-detection neighbor fill. */
+export const IDENTITY_NEIGHBOR_MIN_FACE_EDGE_PX = 24;
+/** Apache-2.0 FaceX MobileFaceNet-nano ArcFace ONNX. */
+export const IDENTITY_EMBEDDER_MODEL_FILE = 'facex_nano.onnx';
+export const IDENTITY_EMBEDDER_MODEL_ID = 'facex_nano_arcface';
+export const IDENTITY_EMBEDDING_DIM = 512;
+export const DETECTION_BATCH_DOWNSCALE_CONCURRENCY = 1;
+export const BATCH_CROP_MODE_STORAGE_KEY = 'justcropit.batchCropMode';
+/** Dev-only per-frame identity match logs. */
+export const IDENTITY_DEBUG_LOGS = import.meta.env.DEV;
 
 export function getDetectionConcurrency(): number {
   const nav = navigator as NavigatorWithMemory;
