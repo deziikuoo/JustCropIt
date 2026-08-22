@@ -1,6 +1,6 @@
 import type { BoundingBox, CropTarget, DetectedFace } from './detection';
 
-export type BatchCropMode = 'same-box' | 'follow-subject' | 'this-person' | 'trim-bars';
+export type BatchCropMode = 'same-box' | 'follow-subject' | 'this-person' | 'trim-bars' | 'crop-to-object';
 
 export type IdentityReferenceOrigin = 'auto' | 'manual';
 
@@ -10,6 +10,8 @@ export interface BatchCropSelectPayload {
   templateIndex: number;
   /** This person: photo indices chosen as identity references */
   referencePhotoIndices?: number[];
+  /** Crop-to-object: pixel pad around detected object */
+  objectPadPx?: number;
 }
 
 /** One face used as an identity reference for This person matching. */
@@ -32,6 +34,13 @@ export interface BatchCropRecipe {
 }
 
 export interface BatchTrimBarsResult {
+  croppedCount: number;
+  skippedCount: number;
+  skippedPhotoIds: string[];
+  cancelled: boolean;
+}
+
+export interface BatchObjectCropResult {
   croppedCount: number;
   skippedCount: number;
   skippedPhotoIds: string[];

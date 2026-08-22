@@ -114,7 +114,7 @@ onUnmounted(() => {
 .confirm-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 260;
+  z-index: 1700;
   display: flex;
   align-items: center;
   justify-content: center;

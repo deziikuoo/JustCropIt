@@ -27,11 +27,7 @@ withDefaults(defineProps<Props>(), {
   font-size: 0.9rem;
   font-weight: 700;
   font-family: "SF Pro Display", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-  background: linear-gradient(135deg, #ffffff 55%, #708090 90%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  -webkit-text-stroke: 1px gray;
+  color: #e8c96a;
   line-height: 1;
   margin-bottom: 1.5px;
   white-space: nowrap;
@@ -66,18 +62,14 @@ withDefaults(defineProps<Props>(), {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  color: rgba(255, 255, 255, 0.45);
-  -webkit-text-fill-color: rgba(255, 255, 255, 0.45);
+  color: #e8c96a;
   flex-shrink: 0;
 }
 
 .counter-value {
   font-size: 0.75rem;
   font-weight: 700;
-  background: linear-gradient(135deg, #ffffff 55%, #708090 90%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  color: #e8c96a;
   line-height: 1;
 }
 </style>

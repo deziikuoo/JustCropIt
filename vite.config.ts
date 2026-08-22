@@ -35,6 +35,7 @@ export default defineConfig(({ mode }) => ({
       "@ffmpeg/util",
       "@mediapipe/tasks-vision",
       "onnxruntime-web",
+      "sam-web",
       "web-demuxer",
     ],
   },

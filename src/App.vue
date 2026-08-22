@@ -49,6 +49,45 @@
       </div>
     </div>
     <div
+      v-else-if="samDownloadProgress"
+      class="import-progress-banner"
+      role="status"
+      aria-live="polite"
+    >
+      <div class="import-progress-banner__row">
+        <div class="import-progress-banner__meta">
+          <i
+            class="fas"
+            :class="samDownloadProgress.cancelling ? 'fa-circle-notch fa-spin' : 'fa-spinner fa-spin'"
+            aria-hidden="true"
+          ></i>
+          <span>{{ samDownloadStatusLabel }}</span>
+          <span
+            v-if="!samDownloadProgress.cancelling && samDownloadEtaLabel"
+            class="import-progress-banner__eta"
+          >
+            · {{ samDownloadEtaLabel }}
+          </span>
+        </div>
+        <button
+          type="button"
+          class="import-progress-banner__cancel"
+          :disabled="samDownloadProgress.cancelling"
+          title="Cancel download"
+          @click="cancelSamDownload"
+        >
+          <i class="fas fa-times" aria-hidden="true"></i>
+          Cancel
+        </button>
+      </div>
+      <div class="import-progress-banner__track">
+        <div
+          class="import-progress-banner__fill"
+          :style="{ width: `${samDownloadPercent}%` }"
+        ></div>
+      </div>
+    </div>
+    <div
       v-else-if="batchEditProgress"
       class="import-progress-banner"
       role="status"
@@ -189,6 +228,7 @@
           @toggle-select-all="handleToggleSelectAll"
           @toggle-select="handleToggleSelect"
           @batch-flip="handleBatchFlip"
+          @batch-rotate="handleBatchRotate"
           @batch-crop="handleBatchCrop"
           @batch-download="handleBatchDownload"
           @batch-revert="handleBatchRevert"
@@ -206,18 +246,17 @@
         <VideoExtractor :add-to-photos="handleVideoFramesExtracted" />
       </div>
     </main>
+    <FeedbackPanel
+      :open="showFeedbackPanel"
+      @close="showFeedbackPanel = false"
+      @submitted="handleFeedbackSubmitted"
+    />
     <BatchCropSelector
-      v-if="showBatchCropSelector"
       :show="showBatchCropSelector"
       :imageIndices="batchCropIndices"
       :photos="photos"
       @select="handleBatchCropImageSelect"
       @close="handleBatchCropSelectorClose"
-    />
-    <FeedbackPanel
-      :open="showFeedbackPanel"
-      @close="showFeedbackPanel = false"
-      @submitted="handleFeedbackSubmitted"
     />
     <CropModal
       v-if="showCropModal"
@@ -313,9 +352,11 @@ import {
   CropCommand,
   PasteSettingsCommand,
   BatchFlipCommand,
+  BatchRotateCommand,
   BatchCropCommand,
   BatchFollowSubjectCommand,
   BatchTrimBarsCommand,
+  BatchObjectCropCommand,
 } from "./utils/undoRedo";
 import type { Photo } from "./types/photo";
 import type { CropTarget, DetectedFace } from "./types/detection";
@@ -336,12 +377,20 @@ import { applyDisplayInvalidation } from "./utils/thumbnailInvalidation";
 import { ingestAndPersistPhotos } from "./utils/import/ingestAndPersist";
 import { formatBatchEta, isBatchAborted } from "./utils/batchEditProgress";
 import { installDetectionLifecycle } from "./utils/detectionLifecycle";
+import { installSamCacheLifecycle } from "./utils/samModelCache";
+import {
+  cancelSamModelDownload,
+  formatSamDownloadBytes,
+  subscribeSamDownloadProgress,
+  type SamDownloadProgress,
+} from "./utils/samModelDownload";
 import { shutdownDetectionRuntime } from "./utils/detectionWorkerPool";
 import {
   embedFacesInFile,
   preloadDetectionRuntime,
   preloadIdentityRuntime,
 } from "./utils/subjectDetection";
+import { clampObjectPadPx } from "./utils/objectMaskCrop";
 
 const photoSizes = [
   { label: "XS", minSize: 180 },
@@ -391,6 +440,43 @@ const clearImportUiState = () => {
   importProgress.value = null;
   importCancelling.value = false;
   importAbortController = null;
+};
+
+const samDownloadProgress = ref<SamDownloadProgress | null>(null);
+
+const samDownloadPercent = computed(() => {
+  if (!samDownloadProgress.value || samDownloadProgress.value.total <= 0) {
+    return 0;
+  }
+  if (samDownloadProgress.value.phase === "load") return 100;
+  return Math.min(
+    100,
+    Math.round(
+      (samDownloadProgress.value.current / samDownloadProgress.value.total) * 100
+    )
+  );
+});
+
+const samDownloadStatusLabel = computed(() => {
+  const state = samDownloadProgress.value;
+  if (!state) return "";
+  if (state.cancelling) {
+    return state.phase === "load"
+      ? "Cancelling…"
+      : `Cancelling… ${formatSamDownloadBytes(state.current)} / ${formatSamDownloadBytes(state.total)}`;
+  }
+  if (state.phase === "load") return `${state.label}…`;
+  return `${state.label} ${formatSamDownloadBytes(state.current)} / ${formatSamDownloadBytes(state.total)}`;
+});
+
+const samDownloadEtaLabel = computed(() => {
+  const state = samDownloadProgress.value;
+  if (!state || state.phase !== "download") return null;
+  return formatBatchEta(state.startedAt, state.current, state.total);
+});
+
+const cancelSamDownload = () => {
+  cancelSamModelDownload();
 };
 
 const batchEditProgress = ref<{
@@ -717,6 +803,7 @@ const handleFeedbackSubmitted = () => {
 
 // Cleanup interval
 let cleanupInterval: ReturnType<typeof setInterval> | null = null;
+let unsubscribeSamDownload: (() => void) | null = null;
 let storageStatusInterval: ReturnType<typeof setInterval> | null = null;
 
 const debounce = <T extends (...args: any[]) => void>(fn: T, delay: number) => {
@@ -1334,6 +1421,48 @@ const handleBatchFlip = async (direction: "horizontal" | "vertical") => {
   }
 };
 
+const handleBatchRotate = async (angle: 90 | -90) => {
+  const operationId = `batch-rotate-${angle}-${Date.now()}`;
+  performanceLogger.startMeasurement(operationId);
+
+  const total = selectedIndices.value.length;
+  const workerUsed = imageWorkerPool.shouldUseWorkers(total);
+  const label = angle === -90 ? "Rotating left" : "Rotating right";
+  beginBatchEditProgress(label, total);
+
+  try {
+    const command = new BatchRotateCommand(
+      selectedIndices.value,
+      angle,
+      photos,
+      updatePhoto,
+      applyFlipsRotationAndCrop,
+      (current, progressTotal) =>
+        updateBatchEditProgress(current, progressTotal),
+      batchEditAbortController?.signal
+    );
+    await command.execute();
+  } catch (error) {
+    console.error("Failed to execute batch rotate command:", error);
+    showAlert(
+      "error",
+      "Batch Rotate Failed",
+      "Failed to rotate selected photos. Please try again."
+    );
+  } finally {
+    const { wasCancelled, snapshot } = endBatchEditProgress();
+    if (wasCancelled && snapshot) {
+      notifyBatchCancelled(label, snapshot.current, snapshot.total);
+    }
+    await performanceLogger.endMeasurement(
+      operationId,
+      angle === -90 ? "rotate-left" : "rotate-right",
+      selectedIndices.value.length,
+      workerUsed
+    );
+  }
+};
+
 const handleBatchCrop = () => {
   if (selectedIndices.value.length > 0) {
     batchCropIndices.value = [...selectedIndices.value];
@@ -1350,6 +1479,11 @@ const handleBatchCropImageSelect = async (payload: BatchCropSelectPayload) => {
 
   if (mode === "trim-bars") {
     await handleBatchTrimBars();
+    return;
+  }
+
+  if (mode === "crop-to-object") {
+    await handleBatchObjectCrop(payload.objectPadPx ?? 0);
     return;
   }
 
@@ -1551,6 +1685,95 @@ const handleBatchTrimBars = async () => {
     if (wasCancelled && snapshot) {
       notifyBatchCancelled(
         snapshot.label || "Finding black bars",
+        snapshot.current,
+        snapshot.total
+      );
+      clearPostCropCleanup();
+    }
+    await performanceLogger.endMeasurement(
+      operationId,
+      "crop",
+      savedBatchCropIndices.length,
+      workerUsed
+    );
+    batchCropIndices.value = [];
+    pendingBatchCropMode.value = "same-box";
+    clearIdentityGallery();
+  }
+};
+
+const handleBatchObjectCrop = async (padPx: number) => {
+  const savedBatchCropIndices = [...batchCropIndices.value];
+  if (savedBatchCropIndices.length === 0) {
+    pendingBatchCropMode.value = "same-box";
+    return;
+  }
+
+  const pad = clampObjectPadPx(padPx);
+  const operationId = `batch-object-crop-${Date.now()}`;
+  performanceLogger.startMeasurement(operationId);
+  const workerUsed = imageWorkerPool.shouldUseWorkers(
+    savedBatchCropIndices.length
+  );
+
+  beginBatchEditProgress("Finding objects", savedBatchCropIndices.length);
+
+  try {
+    const command = new BatchObjectCropCommand(
+      savedBatchCropIndices,
+      pad,
+      photos,
+      updatePhoto,
+      updatePhotosBatch,
+      applyFlipsRotationAndCrop,
+      (current, progressTotal) =>
+        updateBatchEditProgress(current, progressTotal),
+      (label) => {
+        if (batchEditProgress.value) {
+          batchEditProgress.value = {
+            ...batchEditProgress.value,
+            label,
+          };
+        }
+      },
+      batchEditAbortController?.signal
+    );
+    await command.execute();
+    trackEvent("batch_crop_object");
+    const result = command.result;
+    if (result && !result.cancelled) {
+      activatePostCropCleanup(
+        savedBatchCropIndices,
+        result.skippedPhotoIds ?? []
+      );
+      if (result.croppedCount === 0) {
+        showAlert(
+          "info",
+          "No objects found",
+          "Could not detect a main object in any of the selected photos.",
+          5000
+        );
+      } else if (result.skippedCount > 0) {
+        showAlert(
+          "info",
+          "Cropped to object",
+          `Cropped ${result.croppedCount} of ${savedBatchCropIndices.length}. ${result.skippedCount} had no detectable object.`,
+          6000
+        );
+      }
+    }
+  } catch (error) {
+    console.error("Failed to crop to object:", error);
+    showAlert(
+      "error",
+      "Crop Failed",
+      "Failed to crop selected photos to their objects. Please try again."
+    );
+  } finally {
+    const { wasCancelled, snapshot } = endBatchEditProgress();
+    if (wasCancelled && snapshot) {
+      notifyBatchCancelled(
+        snapshot.label || "Finding objects",
         snapshot.current,
         snapshot.total
       );
@@ -2275,6 +2498,10 @@ const handlePasteSettings = async (singleIndex?: number) => {
 // Initialize storage and load photos on mount
 onMounted(async () => {
   installDetectionLifecycle();
+  installSamCacheLifecycle();
+  unsubscribeSamDownload = subscribeSamDownloadProgress((next) => {
+    samDownloadProgress.value = next;
+  });
   try {
     await initDB();
 
@@ -2349,6 +2576,8 @@ onUnmounted(() => {
   }
   importProgress.value = null;
   importCancelling.value = false;
+  unsubscribeSamDownload?.();
+  unsubscribeSamDownload = null;
   if (cleanupInterval) {
     clearInterval(cleanupInterval);
     cleanupInterval = null;

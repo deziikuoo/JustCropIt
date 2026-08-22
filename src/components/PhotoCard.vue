@@ -499,8 +499,8 @@ defineEmits<{
   align-items: center;
   justify-content: center;
   border-radius: 8px 8px 0 0;
-  background: rgba(18, 18, 26, 0.96);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: #0e0e0e;
+  border: 1px solid rgba(255, 255, 255, 0.35);
   border-bottom: none;
   color: rgba(255, 255, 255, 0.55);
   font-size: 0.55rem;
@@ -526,8 +526,8 @@ defineEmits<{
   box-sizing: border-box;
   padding: 5px;
   border-radius: 10px 10px 0 0;
-  background: rgba(18, 18, 26, 0.96);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: #0e0e0e;
+  border: 1px solid rgba(255, 255, 255, 0.35);
   border-bottom: none;
   box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.45);
   backdrop-filter: blur(16px);

@@ -18,6 +18,8 @@ export { PasteSettingsCommand } from "./commands/PasteSettingsCommand";
 export type { CopiedSettings } from "./commands/PasteSettingsCommand";
 export { BatchCommand } from "./commands/BatchCommand";
 export { BatchFlipCommand } from "./commands/BatchFlipCommand";
+export { BatchRotateCommand } from "./commands/BatchRotateCommand";
 export { BatchCropCommand } from "./commands/BatchCropCommand";
 export { BatchFollowSubjectCommand } from "./commands/BatchFollowSubjectCommand";
 export { BatchTrimBarsCommand } from "./commands/BatchTrimBarsCommand";
+export { BatchObjectCropCommand } from "./commands/BatchObjectCropCommand";

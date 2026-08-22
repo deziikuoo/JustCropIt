@@ -383,6 +383,9 @@ onUnmounted(() => {
 
 .select-counter.embedded .counter-icon {
   font-size: 0.7rem;
+  background: none;
+  -webkit-text-fill-color: #e8c96a;
+  color: #e8c96a;
 }
 
 .counter-icon {
@@ -405,6 +408,9 @@ onUnmounted(() => {
 
 .select-counter.embedded .counter-value {
   font-size: 0.65rem;
+  background: none;
+  -webkit-text-fill-color: #e8c96a;
+  color: #e8c96a;
 }
 
 .counter-value {
@@ -425,8 +431,12 @@ onUnmounted(() => {
   font-size: 1rem;
 }
 
+.select-counter.embedded .counter-value-wrapper.select-all .counter-icon,
 .select-counter.embedded .counter-value-wrapper.select-all .counter-value {
   font-size: 0.65rem;
+  background: none;
+  -webkit-text-fill-color: #e8c96a;
+  color: #e8c96a;
 }
 </style>
 

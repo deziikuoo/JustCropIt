@@ -1,150 +1,34 @@
 <template>
   <div class="photoGrid-container" ref="photoGridContainerRef" @dblclick="handleContainerDoubleClick">
-    <div class="header">
-      <div class="photo-input-wrapper" ref="photoInputWrapperRef">
-        <label class="photo-input-label">
-          <span class="photo-input-label__text">Choose Files</span>
-          <input
-            class="photo-input-native"
-            type="file"
-            multiple
-            accept="image/*,.heic,.heif,.avif"
-            @change="$emit('upload', $event)"
-          />
-        </label>
-        <p class="photo-input-hint">Photos are deleted after 24 hours</p>
-      </div>
+    <div class="photo-grid-layout">
       <div
-        v-if="isLoadingFromStorage"
-        class="grid-storage-loading"
-        role="status"
-        aria-live="polite"
+        v-show="photos.length > 0"
+        class="batch-edit-spacer"
+        ref="batchEditSpacerRef"
+        aria-hidden="true"
+      />
+      <aside
+        v-show="photos.length > 0"
+        class="batch-edit-panel"
+        :class="{ 'batch-edit-panel--fixed': batchPanelIsFixed }"
+        :style="batchPanelStyle"
+        role="toolbar"
+        aria-label="Batch editing tools"
       >
-        <i class="fas fa-spinner fa-spin" aria-hidden="true"></i>
-        <span>Loading images</span>
-      </div>
-    </div>
-    <div class="grid-wrapper" ref="gridWrapperRef">
-      <div class="grid-tools-wrapper" ref="gridToolsWrapperRef">
-        <div
-          v-show="photos.length > 0"
-          ref="toolsSidebarColumnRef"
-          class="tools-sidebar-column"
-          :class="{ 'tools-sidebar-column--expanded': !leftSidebarCollapsed }"
-        >
-          <div
-            ref="toolsSidebarStackRef"
-            class="tools-sidebar-stack"
-            :class="{ 'tools-sidebar-stack--in-flow': !toolsStackIsFixed }"
-            :style="toolsStackFixedStyle"
-          >
-            <div class="tools-sidebar-stack__group">
-              <div
-                ref="toolsSidebarControlsRef"
-                class="tools-sidebar-stack__controls"
-              >
-                <div
-                  class="tools-sidebar-stack__file"
-                  :class="{
-                    'is-active': floatingFileInputVisible,
-                    'fade-out': floatingFileInputFading,
-                  }"
-                >
-                  <label class="photo-input-label photo-input-label--floating">
-                    <span class="photo-input-label__text">Choose Files</span>
-                    <input
-                      class="photo-input-native"
-                      type="file"
-                      multiple
-                      accept="image/*,.heic,.heif,.avif"
-                      aria-label="Choose files"
-                      @change="handleFloatingUpload"
-                    />
-                  </label>
-                </div>
-
-                <button
-                  type="button"
-                  class="tools-panel__toggle"
-                  :class="{ 'tools-panel__toggle--expanded': !leftSidebarCollapsed }"
-                  @click="leftSidebarCollapsed ? expandToolkit() : collapseToolkit()"
-                  :aria-expanded="!leftSidebarCollapsed"
-                  aria-controls="tools-panel-content"
-                  title="Batch Edit"
-                >
-                  <i class="fas fa-wrench" aria-hidden="true"></i>
-                  <span class="tools-panel__toggle-label">Batch Edit</span>
-                </button>
-              </div>
-
-              <aside
-                v-show="!leftSidebarCollapsed"
-                class="tools-panel"
-                role="toolbar"
-                aria-label="Batch editing tools"
-              >
-            <!-- Panel Content -->
+        <div class="tools-panel">
+            <div class="batch-edit-panel__total">
+              <PrimaryPhotoCounter
+                embedded
+                header
+                :photo-count="photos.length"
+              />
+            </div>
             <div id="tools-panel-content" class="tools-panel__content">
               <div class="tools-panel__header">
-                <button
-                  v-show="!leftSidebarCollapsed"
-                  type="button"
-                  class="tools-panel__close"
-                  @click="collapseToolkit"
-                  aria-label="Collapse toolbar"
-                  title="Collapse toolbar"
-                >
-                  <i class="fas fa-xmark"></i>
-                </button>
-
-                <div class="tools-panel__total-count">
-                  <PrimaryPhotoCounter
-                    embedded
-                    header
-                    :photo-count="photos.length"
-                  />
-                </div>
-
                 <div
                   class="tools-panel__activity-row"
                   :class="{ 'is-dual': addedActivityVisible && deletedActivityVisible }"
                 >
-                  <div
-                    class="tools-panel__activity-slot"
-                    :class="{ 'is-visible': addedActivityVisible }"
-                  >
-                    <PhotoCounter
-                      embedded
-                      header
-                      :photo-count="photos.length"
-                      :new-photos-count="newPhotosCount"
-                      @visibility-change="addedActivityVisible = $event"
-                    />
-                  </div>
-                  <div
-                    class="tools-panel__activity-slot"
-                    :class="{ 'is-visible': deletedActivityVisible }"
-                  >
-                    <DeletedCounter
-                      embedded
-                      header
-                      :deleted-photos-count="deletedPhotosCount"
-                      @visibility-change="deletedActivityVisible = $event"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <!-- Select Mode Controls -->
-              <section
-                class="tools-section tools-section--select"
-                aria-labelledby="select-heading"
-              >
-                <h3 id="select-heading" class="tools-section__heading">
-                  <i class="fas fa-mouse-pointer"></i>
-                  <span>Selection</span>
-                </h3>
-                <div class="tools-panel__select-controls">
                   <label class="tools-panel__select-all">
                     <input
                       type="checkbox"
@@ -153,17 +37,45 @@
                     />
                     <span>{{ hasSelection ? "Deselect All" : "Select All" }}</span>
                   </label>
-                  <SelectCounter
-                    embedded
-                    inline
-                    :selected-count="displayedSelectedCount"
-                    :total-photos="photos.length"
-                  />
+
+                  <div class="tools-panel__activity-slots">
+                    <div
+                      class="tools-panel__activity-slot"
+                      :class="{ 'is-visible': addedActivityVisible }"
+                    >
+                      <PhotoCounter
+                        embedded
+                        header
+                        :photo-count="photos.length"
+                        :new-photos-count="newPhotosCount"
+                        @visibility-change="addedActivityVisible = $event"
+                      />
+                    </div>
+                    <div
+                      class="tools-panel__activity-slot"
+                      :class="{ 'is-visible': deletedActivityVisible }"
+                    >
+                      <DeletedCounter
+                        embedded
+                        header
+                        :deleted-photos-count="deletedPhotosCount"
+                        @visibility-change="deletedActivityVisible = $event"
+                      />
+                    </div>
+                  </div>
+
+                  <div class="tools-panel__counts">
+                    <SelectCounter
+                      embedded
+                      inline
+                      :selected-count="displayedSelectedCount"
+                      :total-photos="photos.length"
+                    />
+                  </div>
                 </div>
-              </section>
+              </div>
 
-              <div class="tools-divider" v-show="selectMode"></div>
-
+            <div class="tools-panel__body">
             <!-- Transform Tools Section -->
             <section
               class="tools-section"
@@ -196,6 +108,26 @@
                   <span class="tool-btn__label">Flip V</span>
                 </button>
                 <button
+                  class="tool-btn"
+                  :class="{ 'tool-btn--disabled': !hasSelection }"
+                  :disabled="!hasSelection"
+                  @click="$emit('batch-rotate', -90)"
+                  title="Rotate Left"
+                >
+                  <i class="fas fa-rotate-left" aria-hidden="true"></i>
+                  <span class="tool-btn__label">Rotate L</span>
+                </button>
+                <button
+                  class="tool-btn"
+                  :class="{ 'tool-btn--disabled': !hasSelection }"
+                  :disabled="!hasSelection"
+                  @click="$emit('batch-rotate', 90)"
+                  title="Rotate Right"
+                >
+                  <i class="fas fa-rotate-right" aria-hidden="true"></i>
+                  <span class="tool-btn__label">Rotate R</span>
+                </button>
+                <button
                   class="tool-btn tool-btn--primary"
                   :class="{ 'tool-btn--disabled': !hasSelection }"
                   :disabled="!hasSelection"
@@ -223,7 +155,7 @@
 
             <!-- Actions Section -->
             <section
-              class="tools-section"
+              class="tools-section tools-section--actions"
               v-show="selectMode"
               aria-labelledby="actions-heading"
             >
@@ -233,18 +165,16 @@
               </h3>
               <div class="tools-section__stack">
                 <label
-                  class="tools-export-toggle"
+                  class="tools-panel__select-all"
                   title="Remove GPS, device info, and timestamps from unedited JPEG/WebP downloads. Edited photos are already clean."
                 >
-                  <span class="tools-export-toggle__label">Strip metadata on export</span>
                   <input
                     type="checkbox"
-                    role="switch"
-                    class="tools-export-toggle__input"
                     :checked="stripExifOnExport"
                     :aria-checked="stripExifOnExport"
                     @change="stripExifOnExport = ($event.target as HTMLInputElement).checked"
                   />
+                  <span>Strip metadata on export</span>
                 </label>
                 <label
                   v-if="postCropCleanup"
@@ -267,6 +197,26 @@
                     </span>
                   </span>
                 </label>
+                <div
+                  class="batch-edit-panel__file"
+                  :class="{
+                    'is-active': floatingFileInputVisible,
+                    'fade-out': floatingFileInputFading,
+                  }"
+                >
+                  <label class="tool-btn tool-btn--wide photo-input-label--panel">
+                    <i class="fas fa-folder-open" aria-hidden="true"></i>
+                    <span class="tool-btn__label">Choose Files</span>
+                    <input
+                      class="photo-input-native"
+                      type="file"
+                      multiple
+                      accept="image/*,.heic,.heif,.avif"
+                      aria-label="Choose files"
+                      @change="handleFloatingUpload"
+                    />
+                  </label>
+                </div>
                 <button
                   class="tool-btn tool-btn--success tool-btn--wide"
                   :class="{ 'tool-btn--disabled': !hasSelection }"
@@ -322,13 +272,38 @@
                 </div>
               </section>
             </template>
-
-          </div>
-              </aside>
             </div>
+
           </div>
         </div>
+      </aside>
 
+      <div class="photo-grid-main">
+        <div class="header">
+          <div class="photo-input-wrapper" ref="photoInputWrapperRef">
+            <label class="photo-input-label">
+              <span class="photo-input-label__text">Choose Files</span>
+              <input
+                class="photo-input-native"
+                type="file"
+                multiple
+                accept="image/*,.heic,.heif,.avif"
+                @change="$emit('upload', $event)"
+              />
+            </label>
+            <p class="photo-input-hint">Photos are deleted after 24 hours</p>
+          </div>
+          <div
+            v-if="isLoadingFromStorage"
+            class="grid-storage-loading"
+            role="status"
+            aria-live="polite"
+          >
+            <i class="fas fa-spinner fa-spin" aria-hidden="true"></i>
+            <span>Loading images</span>
+          </div>
+        </div>
+        <div class="grid-wrapper" ref="gridWrapperRef">
         <div class="grid" :style="{ gridTemplateColumns: currentGridTemplate, '--item-size': gridCellSizePx + 'px', columnGap: gap + 'px', rowGap: rowGap + 'px' }" ref="gridRef">
           <div 
             v-if="spacerBeforeHeight > 0" 
@@ -393,6 +368,7 @@
             class="virtual-spacer" 
             :style="{ height: spacerAfterHeight + 'px', gridColumn: '1 / -1' }"
           ></div>
+        </div>
         </div>
       </div>
     </div>
@@ -489,6 +465,7 @@ const emit = defineEmits<{
   (e: "toggle-select-all", checked: boolean): void;
   (e: "toggle-select", index: number, checked: boolean): void;
   (e: "batch-flip", direction: "horizontal" | "vertical"): void;
+  (e: "batch-rotate", angle: 90 | -90): void;
   (e: "batch-crop"): void;
   (e: "batch-download"): void;
   (e: "batch-revert"): void;
@@ -554,93 +531,81 @@ const FLOATING_FILE_FADE_MS = 500;
 let floatingFileFadeTimer: ReturnType<typeof setTimeout> | null = null;
 
 const TOOLS_STACK_FIXED_BREAKPOINT = 900;
-const toolsSidebarColumnRef = ref<HTMLElement | null>(null);
-const toolsSidebarStackRef = ref<HTMLElement | null>(null);
+const batchEditSpacerRef = ref<HTMLElement | null>(null);
 const photoGridContainerRef = ref<HTMLElement | null>(null);
-const gridToolsWrapperRef = ref<HTMLElement | null>(null);
-const toolsStackLeftPx = ref(0);
-const toolsStackWidthPx = ref(0);
-const toolsStackIsFixed = ref(true);
-let toolsStackPositionObserver: ResizeObserver | null = null;
+const batchPanelIsFixed = ref(
+  typeof window !== "undefined" &&
+    window.innerWidth > TOOLS_STACK_FIXED_BREAKPOINT,
+);
+const batchPanelLeftPx = ref(0);
+let batchPanelPositionObserver: ResizeObserver | null = null;
 
-const isToolsStackFixedViewport = () =>
+const isBatchPanelFixedViewport = () =>
   typeof window !== "undefined" &&
   window.innerWidth > TOOLS_STACK_FIXED_BREAKPOINT;
 
-const updateToolsStackPosition = () => {
-  const columnEl = toolsSidebarColumnRef.value;
-  const fixed = isToolsStackFixedViewport();
-  toolsStackIsFixed.value = fixed;
+const updateBatchPanelPosition = () => {
+  const fixed = isBatchPanelFixedViewport() && props.photos.length > 0;
+  batchPanelIsFixed.value = fixed;
 
-  if (!columnEl || !fixed) {
-    toolsStackLeftPx.value = 0;
-    toolsStackWidthPx.value = 0;
+  if (!fixed) {
+    batchPanelLeftPx.value = 0;
     return;
   }
 
-  const stackEl = toolsSidebarStackRef.value;
-  const stackWidth = stackEl
-    ? Math.max(Math.round(stackEl.getBoundingClientRect().width), 1)
-    : 0;
+  const spacerEl = batchEditSpacerRef.value;
+  if (spacerEl) {
+    batchPanelLeftPx.value = Math.round(spacerEl.getBoundingClientRect().left);
+    return;
+  }
 
-  const containerLeft =
-    photoGridContainerRef.value?.getBoundingClientRect().left ?? 0;
-
-  const minLeft = 12;
-  const centeredLeft = Math.max(
-    minLeft,
-    Math.round((containerLeft - stackWidth) / 2),
+  const containerEl = photoGridContainerRef.value;
+  if (!containerEl) {
+    batchPanelLeftPx.value = 0;
+    return;
+  }
+  const padLeft = Number.parseFloat(getComputedStyle(containerEl).paddingLeft) || 0;
+  batchPanelLeftPx.value = Math.round(
+    containerEl.getBoundingClientRect().left + padLeft,
   );
-
-  toolsStackLeftPx.value = centeredLeft;
-  toolsStackWidthPx.value = stackWidth;
 };
 
-const throttledUpdateToolsStackPosition = useThrottleFn(
-  updateToolsStackPosition,
+const throttledUpdateBatchPanelPosition = useThrottleFn(
+  updateBatchPanelPosition,
   16,
 );
 
-const toolsStackFixedStyle = computed(() => {
-  if (!toolsStackIsFixed.value) {
+const batchPanelStyle = computed(() => {
+  if (!batchPanelIsFixed.value) {
     return undefined;
   }
   return {
-    left: `${toolsStackLeftPx.value}px`,
+    left: `${batchPanelLeftPx.value}px`,
   };
 });
 
 let photoInputObserver: IntersectionObserver | null = null;
 
-const observeToolsSidebarColumn = () => {
-  const columnEl = toolsSidebarColumnRef.value;
-  if (!columnEl) return;
+const observeBatchPanelPosition = () => {
+  const spacerEl = batchEditSpacerRef.value;
+  if (!spacerEl) return;
 
-  toolsStackPositionObserver?.disconnect();
-  toolsStackPositionObserver = new ResizeObserver(() =>
-    throttledUpdateToolsStackPosition(),
+  batchPanelPositionObserver?.disconnect();
+  batchPanelPositionObserver = new ResizeObserver(() =>
+    throttledUpdateBatchPanelPosition(),
   );
-  toolsStackPositionObserver.observe(columnEl);
-
-  if (gridToolsWrapperRef.value) {
-    toolsStackPositionObserver.observe(gridToolsWrapperRef.value);
-  }
+  batchPanelPositionObserver.observe(spacerEl);
 
   const containerEl = photoGridContainerRef.value;
   if (containerEl) {
-    toolsStackPositionObserver.observe(containerEl);
-  }
-
-  const stackEl = toolsSidebarStackRef.value;
-  if (stackEl) {
-    toolsStackPositionObserver.observe(stackEl);
+    batchPanelPositionObserver.observe(containerEl);
   }
 };
 
 onMounted(() => {
   requestAnimationFrame(() => {
-    observeToolsSidebarColumn();
-    updateToolsStackPosition();
+    observeBatchPanelPosition();
+    updateBatchPanelPosition();
 
     if (photoInputWrapperRef.value) {
       photoInputObserver = new IntersectionObserver(
@@ -653,10 +618,10 @@ onMounted(() => {
     }
   });
 
-  window.addEventListener("scroll", throttledUpdateToolsStackPosition, {
+  window.addEventListener("scroll", throttledUpdateBatchPanelPosition, {
     passive: true,
   });
-  window.addEventListener("resize", throttledUpdateToolsStackPosition, {
+  window.addEventListener("resize", throttledUpdateBatchPanelPosition, {
     passive: true,
   });
 });
@@ -665,8 +630,8 @@ watch(
   () => props.photos.length,
   async () => {
     await nextTick();
-    observeToolsSidebarColumn();
-    updateToolsStackPosition();
+    observeBatchPanelPosition();
+    updateBatchPanelPosition();
   },
 );
 
@@ -678,7 +643,7 @@ watch(showFloatingFileInput, (shouldShow) => {
     }
     floatingFileInputFading.value = false;
     floatingFileInputVisible.value = true;
-    requestAnimationFrame(updateToolsStackPosition);
+    requestAnimationFrame(updateBatchPanelPosition);
     return;
   }
 
@@ -716,10 +681,10 @@ onUnmounted(() => {
 
   photoInputObserver?.disconnect();
   photoInputObserver = null;
-  toolsStackPositionObserver?.disconnect();
-  toolsStackPositionObserver = null;
-  window.removeEventListener("scroll", throttledUpdateToolsStackPosition);
-  window.removeEventListener("resize", throttledUpdateToolsStackPosition);
+  batchPanelPositionObserver?.disconnect();
+  batchPanelPositionObserver = null;
+  window.removeEventListener("scroll", throttledUpdateBatchPanelPosition);
+  window.removeEventListener("resize", throttledUpdateBatchPanelPosition);
   if (floatingFileFadeTimer) {
     clearTimeout(floatingFileFadeTimer);
     floatingFileFadeTimer = null;
@@ -750,7 +715,7 @@ const holdTimeout = ref<ReturnType<typeof setTimeout> | null>(null);
 const isHolding = ref(false);
 const heldPhotoIndex = ref<number | null>(null);
 const justActivatedSelectMode = ref(false);
-const leftSidebarCollapsed = ref(true);
+const leftSidebarCollapsed = ref(false);
 
 watch(
   () => props.postCropCleanup,
@@ -781,6 +746,17 @@ const syncSelectModeWithToolkit = (collapsed: boolean) => {
 };
 
 watch(leftSidebarCollapsed, syncSelectModeWithToolkit, { immediate: true });
+
+watch(
+  () => props.photos.length,
+  (count) => {
+    if (count > 0) {
+      leftSidebarCollapsed.value = false;
+      selectMode.value = true;
+    }
+  },
+  { immediate: true }
+);
 
 watch(leftSidebarCollapsed, () => {
   requestAnimationFrame(updateToolsStackPosition);
@@ -1106,8 +1082,7 @@ const handleContainerDoubleClick = (event: MouseEvent) => {
     return;
   }
 
-  // Double-clicked outside photo cards and interactive elements - collapse toolkit
-  collapseToolkit();
+  // Keep the batch panel visible; ignore background double-clicks.
 };
 
 const handlePhotoCardMouseDown = (index: number, event: MouseEvent) => {
@@ -1510,7 +1485,7 @@ const handlePhotoCardClick = (index: number, event: Event) => {
 <style scoped>
 .header {
   position: relative;
-  margin: 60px 0 40px 0;
+  margin: 0 0 24px 0;
   text-align: center;
 }
 
@@ -1542,7 +1517,7 @@ const handlePhotoCardClick = (index: number, event: Event) => {
 
 @media (max-width: 768px) {
   .header {
-    margin: 20px 0 30px 0;
+    margin: 0 0 16px 0;
   }
 
   .grid-storage-loading {
@@ -1556,7 +1531,7 @@ const handlePhotoCardClick = (index: number, event: Event) => {
 
 @media (max-width: 480px) {
   .header {
-    margin: 16px 0 24px 0;
+    margin: 0 0 12px 0;
   }
 
   .grid-storage-loading {
@@ -1587,18 +1562,16 @@ const handlePhotoCardClick = (index: number, event: Event) => {
 
 
 .tools-sidebar-stack {
-  position: fixed;
-  top: calc(96px + env(safe-area-inset-top, 0px));
-  left: 0;
-  width: max-content;
-  max-width: calc(100vw - 24px);
+  position: relative;
+  top: auto;
+  left: auto;
+  width: 100%;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: stretch;
   gap: 8px;
-  z-index: 1101;
-  pointer-events: none;
+  z-index: 2;
 }
 
 .tools-sidebar-stack__group {
@@ -1670,23 +1643,21 @@ const handlePhotoCardClick = (index: number, event: Event) => {
 }
 
 .tools-panel {
-  --panel-bg: rgba(18, 18, 26, 0.98);
-  --panel-border: rgba(255, 255, 255, 0.08);
+  --panel-bg: #0e0e0e;
+  --panel-border: var(--surface-border);
   --panel-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
-  --section-gap: 8px;
+  --section-gap: 12px;
   --btn-radius: 6px;
   --transition-panel: 280ms cubic-bezier(0.4, 0, 0.2, 1);
 
   position: relative;
   top: auto;
   left: auto;
-  width: max-content;
+  width: 100%;
   min-width: 0;
-  max-width: calc(100vw - 24px);
+  max-width: none;
   height: fit-content;
-  max-height: calc(
-    100vh - 96px - env(safe-area-inset-top, 0px) - 48px - env(safe-area-inset-bottom, 0px)
-  );
+  max-height: none;
   display: flex;
   flex-direction: column;
   background: var(--panel-bg);
@@ -1696,13 +1667,13 @@ const handlePhotoCardClick = (index: number, event: Event) => {
   border: 1px solid var(--panel-border);
   box-shadow: var(--panel-shadow);
   overflow: visible;
-  z-index: 1100;
+  z-index: 1;
   transition:
     background var(--transition-panel),
     border-color var(--transition-panel),
     box-shadow var(--transition-panel);
   margin-right: 0;
-  will-change: top;
+  will-change: auto;
 }
 
 .photo-input-label--floating {
@@ -1826,34 +1797,32 @@ const handlePhotoCardClick = (index: number, event: Event) => {
 .tools-panel__header {
   position: relative;
   flex-shrink: 0;
-  padding-top: 20px;
+  padding-top: 2px;
   padding-bottom: 6px;
   margin-bottom: 2px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-.tools-panel__total-count {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  z-index: 2;
+.tools-panel__counts {
   display: flex;
   align-items: center;
-  pointer-events: none;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
-.tools-panel__total-count :deep(.primary-photo-counter.embedded) {
-  width: auto;
-  height: auto;
+.tools-panel__counts :deep(.counter-value),
+.tools-panel__counts :deep(.counter-icon) {
+  font-size: 0.72rem;
+  background: none;
+  -webkit-background-clip: unset;
+  background-clip: unset;
+  color: #e8c96a;
+  -webkit-text-fill-color: #e8c96a;
 }
 
-.tools-panel__total-count :deep(.counter-label) {
-  font-size: 0.52rem;
-  letter-spacing: 0.35px;
-}
-
-.tools-panel__total-count :deep(.counter-value) {
-  font-size: 0.65rem;
+.tools-panel__counts :deep(.select-counter.embedded.is-inline) {
+  margin-left: 0;
 }
 
 .tools-panel__activity-slot :deep(.counter-value) {
@@ -1864,13 +1833,23 @@ const handlePhotoCardClick = (index: number, event: Event) => {
   display: flex;
   flex-direction: row;
   align-items: center;
-  justify-content: center;
-  gap: 0;
+  justify-content: space-between;
+  gap: 8px;
   min-height: 22px;
   width: 100%;
 }
 
-.tools-panel__activity-row.is-dual {
+.tools-panel__activity-slots {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  flex: 1;
+  min-width: 0;
+}
+
+.tools-panel__activity-row.is-dual .tools-panel__activity-slots {
   gap: 8px;
 }
 
@@ -1916,14 +1895,151 @@ const handlePhotoCardClick = (index: number, event: Event) => {
   flex-direction: column;
   min-height: 100vh;
   width: 100%;
-  max-width: 1400px;
+  max-width: 1720px;
   margin-left: auto;
   margin-right: auto;
   padding: env(safe-area-inset-top, 0px) calc(20px + env(safe-area-inset-right, 0px)) 0 calc(20px + env(safe-area-inset-left, 0px));
 }
 
+.photo-grid-layout {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+  width: 100%;
+}
+
+.batch-edit-spacer {
+  width: 240px;
+  flex-shrink: 0;
+  height: 0;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.batch-edit-panel {
+  --batch-panel-inset: calc(84px + env(safe-area-inset-top, 0px));
+  width: 240px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 18px;
+  box-sizing: border-box;
+  overflow: visible;
+  z-index: 1;
+}
+
+.batch-edit-panel--fixed {
+  position: fixed;
+  top: var(--batch-panel-inset);
+  height: calc(
+    100dvh - var(--batch-panel-inset) - 84px - env(safe-area-inset-bottom, 0px)
+  );
+  max-height: calc(
+    100dvh - var(--batch-panel-inset) - 84px - env(safe-area-inset-bottom, 0px)
+  );
+}
+
+.batch-edit-panel__total {
+  position: absolute;
+  top: -18px;
+  left: 4px;
+  right: auto;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.batch-edit-panel__total :deep(.primary-photo-counter.embedded) {
+  width: auto;
+  height: auto;
+}
+
+.batch-edit-panel__total :deep(.counter-label) {
+  font-size: 0.52rem;
+  letter-spacing: 0.35px;
+  color: #e8c96a;
+}
+
+.batch-edit-panel__total :deep(.counter-value) {
+  font-size: 0.72rem;
+  color: #e8c96a;
+}
+
+.batch-edit-panel .tools-panel {
+  flex: 1;
+  height: auto;
+  min-height: 0;
+}
+
+.batch-edit-panel__file {
+  width: 132px;
+  height: 32px;
+  min-height: 32px;
+  flex-shrink: 0;
+  opacity: 0;
+  visibility: hidden;
+  overflow: visible;
+  transition:
+    opacity 0.35s ease-out,
+    visibility 0.35s ease-out;
+  pointer-events: none;
+}
+
+.batch-edit-panel__file.is-active {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.batch-edit-panel__file.fade-out {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.photo-input-label--panel {
+  position: relative;
+  width: 132px;
+  margin: 0;
+  cursor: pointer;
+}
+
+.photo-input-label--panel .photo-input-native {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  font-size: 0;
+}
+
+.photo-grid-main {
+  flex: 1;
+  min-width: 0;
+}
+
 /* Narrow screens: tools row above grid */
 @media (max-width: 900px) {
+  .photo-grid-layout {
+    flex-direction: column;
+  }
+
+  .batch-edit-spacer {
+    display: none;
+  }
+
+  .batch-edit-panel {
+    width: 100%;
+    position: relative;
+    height: auto;
+    max-height: none;
+    left: auto !important;
+  }
+
+  .batch-edit-panel__total {
+    top: -16px;
+  }
+
   .grid-tools-wrapper {
     flex-direction: column;
     gap: 10px;
@@ -2025,12 +2141,7 @@ const handlePhotoCardClick = (index: number, event: Event) => {
   }
 
   .tools-panel__header {
-    padding-top: 22px;
-  }
-
-  .tools-panel__total-count {
-    top: 6px;
-    right: 6px;
+    padding-top: 4px;
   }
 
   .tools-panel__activity-row {
@@ -2110,7 +2221,7 @@ const handlePhotoCardClick = (index: number, event: Event) => {
 }
 
 .photo-input-wrapper {
-  margin-top: 16px;
+  margin-top: 0;
   display: inline-flex;
   flex-direction: column;
   align-items: center;
@@ -2173,7 +2284,7 @@ const handlePhotoCardClick = (index: number, event: Event) => {
   display: flex;
   flex-direction: column;
   gap: var(--section-gap);
-  padding: 10px 8px;
+  padding: 12px 10px;
   overflow-y: auto;
   overflow-x: hidden;
   flex: 1;
@@ -2213,20 +2324,21 @@ const handlePhotoCardClick = (index: number, event: Event) => {
 /* Section Divider */
 .tools-divider {
   height: 1px;
+  flex: 0 0 auto;
   background: linear-gradient(
     90deg,
     transparent,
     rgba(255, 255, 255, 0.1),
     transparent
   );
-  margin: 4px 0;
+  margin: 0;
 }
 
 /* Tools Section */
 .tools-section {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 10px;
 }
 
 .tools-section__heading {
@@ -2251,43 +2363,53 @@ const handlePhotoCardClick = (index: number, event: Event) => {
 /* Grid Layout for Tool Buttons (2x2) */
 .tools-section__grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 5px;
+  grid-template-columns: repeat(2, max-content);
+  justify-content: center;
+  align-content: space-evenly;
+  align-items: center;
+  flex: 1;
+  gap: 12px 14px;
 }
 
 /* Stack Layout for Full-Width Buttons */
 .tools-section__stack {
   display: flex;
   flex-direction: column;
-  gap: 5px;
-}
-
-.tools-export-toggle {
-  display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 8px 10px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: var(--btn-radius);
-  cursor: pointer;
-  color: rgba(255, 255, 255, 0.85);
-  font-size: 10px;
-  line-height: 1.3;
-}
-
-.tools-export-toggle__label {
+  justify-content: space-evenly;
   flex: 1;
-  text-align: left;
+  gap: 12px;
 }
 
-.tools-export-toggle__input {
-  flex-shrink: 0;
-  width: 16px;
-  height: 16px;
-  accent-color: #d4af37;
-  cursor: pointer;
+.tools-panel__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 18px;
+}
+
+.tools-panel__body > .tools-section {
+  flex: 1 1 0;
+  min-height: 0;
+  justify-content: center;
+}
+
+.tools-section--actions {
+  display: flex;
+  flex-direction: column;
+}
+
+.tools-section--actions .tools-section__stack {
+  align-items: center;
+}
+
+.tools-section--actions .tools-section__stack > .tools-panel__select-all {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  padding: 0 4px;
 }
 
 .post-crop-cleanup {
@@ -2345,8 +2467,9 @@ const handlePhotoCardClick = (index: number, event: Event) => {
   align-items: center;
   justify-content: center;
   gap: 3px;
-  padding: 7px 4px;
-  min-height: 42px;
+  width: 68px;
+  padding: 6px 4px;
+  min-height: 40px;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: var(--btn-radius);
@@ -2411,10 +2534,11 @@ const handlePhotoCardClick = (index: number, event: Event) => {
 /* Wide Button Variant */
 .tool-btn--wide {
   flex-direction: row;
-  justify-content: flex-start;
+  justify-content: center;
+  width: 132px;
   gap: 7px;
-  padding: 8px 8px;
-  min-height: 34px;
+  padding: 7px 10px;
+  min-height: 32px;
 }
 
 .tool-btn--wide i {

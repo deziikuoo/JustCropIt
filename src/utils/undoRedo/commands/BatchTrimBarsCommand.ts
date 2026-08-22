@@ -88,7 +88,7 @@ export class BatchTrimBarsCommand extends BaseCommand {
   }
 
   getDescription(): string {
-    return `Trim black bars (${this.indices.length} photos)`;
+    return `Remove Letterboxing (${this.indices.length} photos)`;
   }
 
   captureState(): Map<string, PhotoState> {

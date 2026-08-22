@@ -15,7 +15,7 @@ export interface IngestStageTimings {
 }
 
 export interface PerformanceMetrics {
-  operationType: 'flip-horizontal' | 'flip-vertical' | 'crop' | 'paste' | 'download' | 'delete' | 'upload' | 'upload-ingest' | 'select-drag' | 'select-all' | 'revert' | 'video-extract' | 'history-navigate' | 'crop-suggest';
+  operationType: 'flip-horizontal' | 'flip-vertical' | 'rotate-left' | 'rotate-right' | 'crop' | 'paste' | 'download' | 'delete' | 'upload' | 'upload-ingest' | 'select-drag' | 'select-all' | 'revert' | 'video-extract' | 'history-navigate' | 'crop-suggest';
   batchSize: number;
   totalTime: number; // Total operation time in milliseconds
   perImageTime: number; // Average time per image in milliseconds

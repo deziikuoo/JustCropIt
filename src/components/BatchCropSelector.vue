@@ -1,10 +1,35 @@
 <template>
-  <div v-if="show" class="modal-background" @click="$emit('close')">
-    <div class="modal-content" @click.stop>
-      <h2 class="modal-title">{{ modalTitle }}</h2>
+  <Teleport to="body">
+    <div v-if="show" class="modal-background" @click="$emit('close')">
+      <div class="modal-content" @click.stop>
+        <h2 class="modal-title">{{ modalTitle }}</h2>
       <p class="modal-description">
         {{ modeDescription }}
       </p>
+      <div v-if="isObjectCropMode" class="object-pad-row">
+        <label for="batch-object-pad">Padding around object</label>
+        <input
+          id="batch-object-pad"
+          v-model.number="objectPadPx"
+          type="number"
+          min="0"
+          max="500"
+          step="1"
+          class="object-pad-input"
+          @change="onObjectPadChange"
+        />
+        <span>px</span>
+        <button
+          v-if="samModelCached"
+          type="button"
+          class="remove-model-btn"
+          :disabled="samModelRemoving"
+          title="Delete the object finder from this browser"
+          @click="showRemoveSamConfirm = true"
+        >
+          Remove model
+        </button>
+      </div>
       <div class="mode-group" role="radiogroup" aria-label="Batch crop mode">
         <button
           v-for="option in modeOptions"
@@ -13,8 +38,12 @@
           class="mode-btn"
           role="radio"
           :aria-checked="selectedMode === option.value"
-          :class="{ 'mode-btn--active': selectedMode === option.value }"
+          :class="{
+            'mode-btn--active': selectedMode === option.value,
+            'mode-btn--dev': option.inDevelopment,
+          }"
           :disabled="
+            option.inDevelopment ||
             (option.needsDetection && !detectionSupported) ||
             (option.value === 'this-person' && !identitySupportedByBrowser)
           "
@@ -22,6 +51,7 @@
           @click="selectMode(option.value)"
         >
           {{ option.label }}
+          <span v-if="option.inDevelopment" class="mode-badge">In development</span>
         </button>
       </div>
       <p v-if="!detectionSupported" class="mode-hint">
@@ -79,7 +109,7 @@
           :key="index"
           class="thumbnail-item"
           :class="thumbnailItemClass(index)"
-          @click="isTrimBarsMode ? undefined : selectImage(index)"
+          @click="isTrimBarsMode || isObjectCropMode ? undefined : selectImage(index)"
         >
           <div class="thumbnail-wrapper">
             <img
@@ -114,6 +144,22 @@
       </div>
     </div>
   </div>
+  </Teleport>
+  <ObjectModelConsent
+    :show="showSamConsent"
+    @choose="onSamConsentChoose"
+    @cancel="showSamConsent = false"
+  />
+  <ConfirmDialog
+    :show="showRemoveSamConfirm"
+    title="Remove object finder?"
+    message="This deletes the downloaded model from this browser. Crop to object will download it again the next time you use it."
+    confirm-label="Remove"
+    cancel-label="Keep"
+    variant="danger"
+    @confirm="onRemoveSamModel"
+    @cancel="showRemoveSamConfirm = false"
+  />
 </template>
 
 <script setup lang="ts">
@@ -129,6 +175,23 @@ import {
   preloadDetectionRuntime,
   preloadIdentityRuntime,
 } from "../utils/subjectDetection";
+import { preloadObjectCropRuntime } from "../utils/objectCrop";
+import ObjectModelConsent from "./ObjectModelConsent.vue";
+import ConfirmDialog from "./ConfirmDialog.vue";
+import {
+  acceptSamModelConsent,
+  deleteSamModelFromDevice,
+  hasSamConsentThisSession,
+  isSamModelCached,
+  needsSamModelConsent,
+  type SamRetention,
+} from "../utils/samModelCache";
+import { subscribeSamDownloadProgress } from "../utils/samModelDownload";
+import {
+  loadObjectCropPadPx,
+  saveObjectCropPadPx,
+} from "../utils/objectCropPad";
+import { clampObjectPadPx } from "../utils/objectMaskCrop";
 import { identityWorkerPool } from "../utils/identityWorkerPool";
 import {
   autoReferenceSampleCount,
@@ -163,8 +226,9 @@ const identityAvailable = ref(identitySupportedByBrowser);
 const identityLoading = ref(false);
 const storedBatchMode = loadBatchCropMode();
 const selectedMode = ref<BatchCropMode>(
-  !detectionSupported &&
-    (storedBatchMode === "follow-subject" || storedBatchMode === "this-person")
+  storedBatchMode === "crop-to-object" ||
+    (!detectionSupported &&
+      (storedBatchMode === "follow-subject" || storedBatchMode === "this-person"))
     ? "same-box"
     : storedBatchMode
 );
@@ -172,6 +236,12 @@ const selectedMode = ref<BatchCropMode>(
 const maxRefs = IDENTITY_REF_GALLERY_MAX;
 const isThisPersonMode = computed(() => selectedMode.value === "this-person");
 const isTrimBarsMode = computed(() => selectedMode.value === "trim-bars");
+const isObjectCropMode = computed(() => selectedMode.value === "crop-to-object");
+const objectPadPx = ref(loadObjectCropPadPx());
+const showSamConsent = ref(false);
+const showRemoveSamConfirm = ref(false);
+const samModelCached = ref(false);
+const samModelRemoving = ref(false);
 
 const modeOptions = computed(() => [
   { value: "same-box" as const, label: "Same crop box", needsDetection: false },
@@ -198,8 +268,15 @@ const modeOptions = computed(() => [
             : "Lock onto the person across frames",
   },
   {
+    value: "crop-to-object" as const,
+    label: "Crop to object",
+    needsDetection: false,
+    inDevelopment: true,
+    disabledReason: "Batch crop to object is in development",
+  },
+  {
     value: "trim-bars" as const,
-    label: "Trim black bars",
+    label: "Remove Letterboxing",
     needsDetection: false,
     disabledReason: "Remove letterbox and pillarbox padding from each photo",
   },
@@ -207,7 +284,8 @@ const modeOptions = computed(() => [
 
 const modalTitle = computed(() => {
   if (isThisPersonMode.value) return "Select Reference Images";
-  if (isTrimBarsMode.value) return "Trim Black Bars";
+  if (isTrimBarsMode.value) return "Remove Letterboxing";
+  if (isObjectCropMode.value) return "Crop To Object";
   return "Select Template Image";
 });
 
@@ -222,17 +300,21 @@ const modeDescription = computed(() => {
   if (selectedMode.value === "trim-bars") {
     return `Each of the ${count} selected photos will be scanned for letterbox or pillarbox padding — the black bands editors add when a photo is too small for the frame — and cropped to the real picture.`;
   }
+  if (selectedMode.value === "crop-to-object") {
+    return `Each of the ${count} photos is read one at a time with the Tiny object finder, then cropped around the main subject with ${objectPadPx.value}px padding. Tiny is the only size we use for batches — Base and Large are hundreds of megabytes and too slow or memory-heavy. For busy shots with many objects, crop one photo at a time and draw a box around the target.`;
+  }
   return `Choose an image to use as the template for batch cropping. The crop box from this image will be applied to all ${count} selected images.`;
 });
 
 const confirmLabel = computed(() => {
   if (isThisPersonMode.value) return "Continue";
-  if (isTrimBarsMode.value) return "Trim Black Bars";
+  if (isTrimBarsMode.value) return "Remove Letterboxing";
+  if (isObjectCropMode.value) return "Crop To Object";
   return "Use This Image";
 });
 
 const canConfirm = computed(() => {
-  if (isTrimBarsMode.value) {
+  if (isTrimBarsMode.value || isObjectCropMode.value) {
     return props.imageIndices.length > 0;
   }
   if (isThisPersonMode.value) {
@@ -264,7 +346,7 @@ function thumbnailItemClass(photoIndex: number): Record<string, boolean> {
     selected: origin != null,
     "selected--auto": origin === "auto",
     "selected--manual": origin === "manual",
-    "thumbnail-item--static": isTrimBarsMode.value,
+    "thumbnail-item--static": isTrimBarsMode.value || isObjectCropMode.value,
   };
 }
 
@@ -291,6 +373,12 @@ function clearReferences() {
 
 async function preloadForMode(mode: BatchCropMode) {
   if (mode === "same-box" || mode === "trim-bars") return;
+  if (mode === "crop-to-object") {
+    if (hasSamConsentThisSession()) {
+      void preloadObjectCropRuntime();
+    }
+    return;
+  }
   void preloadDetectionRuntime();
   if (mode !== "this-person") return;
 
@@ -316,6 +404,7 @@ async function preloadForMode(mode: BatchCropMode) {
 
 function selectMode(mode: BatchCropMode) {
   const option = modeOptions.value.find((item) => item.value === mode);
+  if (option?.inDevelopment) return;
   if (option?.needsDetection && !detectionSupported) return;
   selectedMode.value = mode;
   saveBatchCropMode(mode);
@@ -347,6 +436,7 @@ watch(
       if (selectedMode.value !== "same-box" && selectedMode.value !== "trim-bars") {
         void preloadForMode(selectedMode.value);
       }
+      void refreshSamModelCached();
     }
   },
   { immediate: true }
@@ -402,6 +492,52 @@ const removeReference = (photoIndex: number) => {
   );
 };
 
+function onObjectPadChange() {
+  objectPadPx.value = clampObjectPadPx(objectPadPx.value);
+  saveObjectCropPadPx(objectPadPx.value);
+}
+
+function emitObjectCrop() {
+  const pad = clampObjectPadPx(objectPadPx.value);
+  objectPadPx.value = pad;
+  saveObjectCropPadPx(pad);
+  emit("select", {
+    mode: selectedMode.value,
+    templateIndex: props.imageIndices[0] ?? 0,
+    objectPadPx: pad,
+  });
+}
+
+async function confirmObjectCrop() {
+  if (await needsSamModelConsent()) {
+    showSamConsent.value = true;
+    return;
+  }
+  emitObjectCrop();
+}
+
+function onSamConsentChoose(retention: SamRetention) {
+  acceptSamModelConsent(retention);
+  showSamConsent.value = false;
+  emitObjectCrop();
+}
+
+async function refreshSamModelCached() {
+  samModelCached.value = await isSamModelCached();
+}
+
+async function onRemoveSamModel() {
+  showRemoveSamConfirm.value = false;
+  if (samModelRemoving.value) return;
+  samModelRemoving.value = true;
+  try {
+    await deleteSamModelFromDevice();
+    samModelCached.value = false;
+  } finally {
+    samModelRemoving.value = false;
+  }
+}
+
 const confirmSelection = () => {
   saveBatchCropMode(selectedMode.value);
   if (isTrimBarsMode.value) {
@@ -409,6 +545,10 @@ const confirmSelection = () => {
       mode: selectedMode.value,
       templateIndex: props.imageIndices[0] ?? 0,
     });
+    return;
+  }
+  if (isObjectCropMode.value) {
+    void confirmObjectCrop();
     return;
   }
   if (isThisPersonMode.value) {
@@ -432,16 +572,31 @@ const confirmSelection = () => {
 };
 
 const handleEsc = (event: KeyboardEvent) => {
-  if (event.key === "Escape" && props.show) {
-    emit("close");
+  if (event.key !== "Escape" || !props.show) return;
+  if (showRemoveSamConfirm.value) {
+    showRemoveSamConfirm.value = false;
+    return;
   }
+  if (showSamConsent.value) {
+    showSamConsent.value = false;
+    return;
+  }
+  emit("close");
 };
+
+let unsubscribeSamDownload: (() => void) | null = null;
 
 onMounted(() => {
   window.addEventListener("keydown", handleEsc);
+  unsubscribeSamDownload = subscribeSamDownloadProgress((next) => {
+    if (!next) void refreshSamModelCached();
+  });
+  void refreshSamModelCached();
 });
 
 onUnmounted(() => {
+  unsubscribeSamDownload?.();
+  unsubscribeSamDownload = null;
   window.removeEventListener("keydown", handleEsc);
 });
 </script>
@@ -461,7 +616,7 @@ onUnmounted(() => {
   display: flex;
   justify-content: center;
   align-items: center;
-  z-index: 250;
+  z-index: 1600;
 }
 
 .modal-content {
@@ -493,6 +648,43 @@ onUnmounted(() => {
   line-height: 1.5;
 }
 
+.object-pad-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.object-pad-row label {
+  font-size: 0.95rem;
+  color: var(--text-secondary);
+}
+
+.object-pad-input {
+  width: 72px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--surface-border);
+  background: var(--surface-color);
+  color: var(--text-primary);
+}
+
+.remove-model-btn {
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  background: rgba(239, 68, 68, 0.12);
+  color: #fca5a5;
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.remove-model-btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
 .mode-group {
   display: flex;
   flex-wrap: wrap;
@@ -500,6 +692,10 @@ onUnmounted(() => {
 }
 
 .mode-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   padding: 8px 14px;
   border-radius: var(--border-radius-sm);
   border: 1px solid var(--surface-border);
@@ -519,6 +715,23 @@ onUnmounted(() => {
 .mode-btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+.mode-btn--dev:disabled {
+  opacity: 1;
+  color: rgba(255, 255, 255, 0.42);
+}
+
+.mode-badge {
+  font-size: 0.62rem;
+  font-weight: 700;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 999px;
+  background: rgba(234, 88, 12, 0.28);
+  border: 1px solid rgba(249, 115, 22, 0.75);
+  color: #fb923c;
+  white-space: nowrap;
 }
 
 .mode-hint {

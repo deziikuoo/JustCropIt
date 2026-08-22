@@ -6,6 +6,7 @@ const MODES: BatchCropMode[] = [
   'follow-subject',
   'this-person',
   'trim-bars',
+  'crop-to-object',
 ];
 
 export function loadBatchCropMode(): BatchCropMode {

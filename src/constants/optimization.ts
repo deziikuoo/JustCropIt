@@ -234,6 +234,47 @@ export const IDENTITY_EMBEDDER_MODEL_ID = 'facex_nano_arcface';
 export const IDENTITY_EMBEDDING_DIM = 512;
 export const DETECTION_BATCH_DOWNSCALE_CONCURRENCY = 1;
 export const BATCH_CROP_MODE_STORAGE_KEY = 'justcropit.batchCropMode';
+/** Interactive segmenter model (MagicTouch, unused by crop-to-object). */
+export const INTERACTIVE_SEGMENTER_MODEL_FILE = 'magic_touch.tflite';
+/**
+ * WebSAM-class SAM 2 Tiny via sam-web. Base (~340 MB) and Large (~880 MB)
+ * are too slow and memory-heavy for batches — Tiny only.
+ */
+export const SAM_OBJECT_MODEL_ID = 'sam2_tiny';
+export const SAM_RETENTION_STORAGE_KEY = 'justcropit.samModelRetention';
+export const SAM_CONSENT_SESSION_KEY = 'justcropit.samModelConsentSession';
+/** OPFS root filenames written by sam-web for SAM 2 Tiny. */
+export const SAM_MODEL_CACHE_FILES = [
+  'sam2_hiera_tiny_encoder.with_runtime_opt.ort',
+  'sam2_hiera_tiny_decoder_pr1.onnx',
+] as const;
+/** Fallback totals when the download response has no Content-Length. */
+export const SAM_MODEL_EXPECTED_BYTES: Record<string, number> = {
+  'sam2_hiera_tiny_encoder.with_runtime_opt.ort': 148 * 1024 * 1024,
+  'sam2_hiera_tiny_decoder_pr1.onnx': 16 * 1024 * 1024,
+};
+/** Persisted pixel pad for crop-to-object (single + batch). */
+export const OBJECT_CROP_PAD_STORAGE_KEY = 'justcropit.objectCropPadPx';
+export const OBJECT_CROP_PAD_DEFAULT = 0;
+export const OBJECT_CROP_PAD_MIN = 0;
+export const OBJECT_CROP_PAD_MAX = 500;
+/** Foreground confidence threshold for MagicTouch mask → bbox. */
+export const OBJECT_MASK_CONFIDENCE_THRESHOLD = 0.4;
+/** Accept auto-detected masks between these fractions of image area. */
+export const OBJECT_MASK_MIN_AREA_RATIO = 0.005;
+export const OBJECT_MASK_MAX_AREA_RATIO = 0.85;
+/** Looser bounds when the user drew a mark around the target. */
+export const OBJECT_MASK_GUIDED_CONFIDENCE_THRESHOLD = 0.5;
+export const OBJECT_MASK_GUIDED_MIN_AREA_RATIO = 0.001;
+export const OBJECT_MASK_GUIDED_MAX_AREA_RATIO = 0.75;
+/** Scribble stroke sent to MagicTouch (normalized points). */
+export const OBJECT_SCRIBBLE_MAX_POINTS = 48;
+export const OBJECT_SCRIBBLE_MIN_POINTS = 6;
+/** Inset grid for auto object seeding (normalized 0–1). */
+export const OBJECT_AUTO_SEED_INSET = 0.15;
+export const OBJECT_AUTO_SEED_GRID = 3;
+/** Batch crop-to-object detect concurrency. SAM encode is per-image and heavy. */
+export const OBJECT_CROP_DETECT_CONCURRENCY_MAX = 1;
 /** Max RGB channel still treated as letterbox/pillarbox black (ffmpeg cropdetect). */
 export const LETTERBOX_BLACK_LIMIT = 24;
 /** Share of pixels in an edge line that must be near-black to count as a bar. */
@@ -258,6 +299,10 @@ export const IDENTITY_DEBUG_LOGS = import.meta.env.DEV;
 export function getLetterboxDetectConcurrency(): number {
   const cores = navigator.hardwareConcurrency || 4;
   return Math.max(1, Math.min(LETTERBOX_DETECT_CONCURRENCY_MAX, cores - 1));
+}
+
+export function getObjectCropDetectConcurrency(): number {
+  return OBJECT_CROP_DETECT_CONCURRENCY_MAX;
 }
 
 export function getDetectionConcurrency(): number {

@@ -1,15 +1,23 @@
 <template>
-  <div v-if="show" class="modal-background" @click="$emit('close')">
-    <div class="modal-content" @click.stop>
-      <div class="cropper-wrapper" ref="cropperWrapper" :class="{ dragging: isDragging }">
+  <Teleport to="body">
+    <div v-if="show" class="modal-background" @click="$emit('close')">
+      <div class="modal-content" @click.stop>
+      <div
+        class="cropper-wrapper"
+        ref="cropperWrapper"
+        :class="{
+          dragging: isDragging,
+          'cropper-wrapper--mark': objectMarkMode,
+        }"
+      >
         <div
-          v-if="suggestionLoading || trimLoading"
+          v-if="suggestionLoading || trimLoading || objectCropLoading"
           class="suggestion-overlay"
           role="status"
           aria-live="polite"
         >
           <i class="fas fa-spinner fa-spin" aria-hidden="true"></i>
-          <span>{{ trimLoading ? "Finding black bars..." : "Finding target..." }}</span>
+          <span>{{ objectCropStatusLabel }}</span>
         </div>
         <Cropper
           ref="cropper"
@@ -23,6 +31,28 @@
             scalable: true,
           }"
           @ready="onCropperReady"
+        />
+        <canvas
+          v-show="objectMarkMode"
+          ref="objectDrawCanvas"
+          class="object-draw-overlay"
+          aria-hidden="true"
+          @pointerdown.prevent="onObjectDrawPointerDown"
+          @pointermove.prevent="onObjectDrawPointerMove"
+          @pointerup.prevent="onObjectDrawPointerUp"
+          @pointercancel.prevent="onObjectDrawPointerUp"
+        />
+        <canvas
+          ref="objectOverlayCanvas"
+          class="object-mask-overlay"
+          :class="{ 'object-mask-overlay--hidden': !objectMaskVisible }"
+          aria-hidden="true"
+        />
+        <div
+          v-if="objectMarkerStyle"
+          class="object-marker"
+          :style="objectMarkerStyle"
+          aria-hidden="true"
         />
         <!-- Arrow navigation (same-box batch only) -->
         <button
@@ -43,157 +73,261 @@
         >
           <i class="fas fa-chevron-right"></i>
         </button>
+        <p
+          v-if="cropperStatusText"
+          class="cropper-status"
+          :class="{ 'cropper-status--error': cropperStatusIsError }"
+          role="status"
+        >
+          {{ cropperStatusText }}
+        </p>
       </div>
       <div class="controls">
-        <div class="controls-row">
-          <label for="aspect-ratio">Aspect Ratio:</label>
-          <select id="aspect-ratio" v-model="selectedAspectRatio">
-            <option :value="null">Freeform</option>
-            <option :value="1">1:1</option>
-            <option :value="4 / 3">4:3</option>
-            <option :value="16 / 9">16:9</option>
-          </select>
+        <div class="tool-categories" role="tablist" aria-label="Edit tools">
           <button
             type="button"
-            class="control-icon-btn"
-            title="Rotate left"
-            aria-label="Rotate left"
-            @click="rotate(-90)"
+            role="tab"
+            class="tool-category"
+            :class="{ 'tool-category--active': activeToolPanel === 'crop' }"
+            :aria-selected="activeToolPanel === 'crop'"
+            title="Crop"
+            aria-label="Crop"
+            @click="setToolPanel('crop')"
           >
-            <i class="fas fa-rotate-left" aria-hidden="true"></i>
+            <i class="fas fa-crop-simple" aria-hidden="true"></i>
+          </button>
+          <button
+            v-if="objectCropSupported"
+            type="button"
+            role="tab"
+            class="tool-category"
+            :class="{ 'tool-category--active': activeToolPanel === 'object' }"
+            :aria-selected="activeToolPanel === 'object'"
+            title="Object"
+            aria-label="Object"
+            @click="setToolPanel('object')"
+          >
+            <i class="fas fa-expand" aria-hidden="true"></i>
           </button>
           <button
             type="button"
-            class="control-icon-btn"
-            title="Rotate right"
-            aria-label="Rotate right"
-            @click="rotate(90)"
+            role="tab"
+            class="tool-category"
+            :class="{ 'tool-category--active': activeToolPanel === 'rotate' }"
+            :aria-selected="activeToolPanel === 'rotate'"
+            title="Rotate"
+            aria-label="Rotate"
+            @click="setToolPanel('rotate')"
           >
-            <i class="fas fa-rotate-right" aria-hidden="true"></i>
+            <i class="fas fa-rotate" aria-hidden="true"></i>
           </button>
-          <button @click="reset">Reset</button>
-          <button
-            type="button"
-            :disabled="trimLoading || suggestionLoading"
-            title="Remove letterbox and pillarbox padding"
-            @click="trimBlackBars"
-          >
-            Trim bars
-          </button>
-          <p
-            v-if="suggestionError"
-            class="suggestion-message suggestion-message--error"
-            role="status"
-          >
-            {{ suggestionError }}
-          </p>
-          <p
-            v-else-if="trimMessage"
-            class="suggestion-message"
-            :class="{ 'suggestion-message--error': trimFailed }"
-            role="status"
-          >
-            {{ trimMessage }}
-          </p>
-          <p
-            v-else-if="suggestionNoSubject"
-            class="suggestion-message"
-            role="status"
-          >
-            No subject detected — adjust stencil manually.
-          </p>
-          <p
-            v-if="smartModeHint"
-            class="suggestion-message"
-            role="status"
-          >
-            {{ smartModeHint }}
-          </p>
-          <div class="actions">
-            <button @click="cropImage" :disabled="!canConfirmSmartCrop">Done</button>
-            <button @click="$emit('close')">Cancel</button>
-          </div>
         </div>
-        <div v-if="detectionSupported" class="crop-target-bar">
+        <button
+          v-show="showUninstallModel"
+          type="button"
+          class="action-uninstall"
+          :disabled="objectCropLoading || samModelRemoving"
+          title="Delete the object finder from this browser"
+          @click="showRemoveSamConfirm = true"
+        >
+          Uninstall model
+        </button>
+
+        <div class="tool-stage">
           <div
-            class="crop-target-group"
-            role="radiogroup"
-            aria-label="Crop target"
+            v-show="activeToolPanel === 'crop'"
+            class="tool-panel tool-panel--crop"
+            :class="{ 'tool-panel--crop-simple': !detectionSupported }"
+            role="tabpanel"
+          >
+            <div class="crop-panel-slot crop-panel-slot--aspect">
+              <div class="aspect-ratio-grid" role="radiogroup" aria-label="Aspect ratio">
+                <button
+                  v-for="option in aspectRatioOptions"
+                  :key="option.label"
+                  type="button"
+                  class="aspect-ratio-btn"
+                  role="radio"
+                  :aria-checked="selectedAspectRatio === option.value"
+                  :class="{ 'aspect-ratio-btn--active': selectedAspectRatio === option.value }"
+                  @click="selectedAspectRatio = option.value"
+                >
+                  {{ option.label }}
+                </button>
+              </div>
+            </div>
+            <div
+              v-if="detectionSupported"
+              class="crop-panel-divider"
+              aria-hidden="true"
+            />
+            <div
+              v-if="detectionSupported"
+              class="crop-panel-slot crop-panel-slot--targets"
+            >
+              <div
+                class="crop-target-group"
+                role="radiogroup"
+                aria-label="Crop target"
+              >
+                <button
+                  v-for="option in cropTargetOptions"
+                  :key="option.value"
+                  type="button"
+                  class="crop-target-btn"
+                  role="radio"
+                  :aria-checked="selectedCropTarget === option.value"
+                  :class="{ 'crop-target-btn--active': selectedCropTarget === option.value }"
+                  :disabled="suggestionLoading"
+                  :title="option.label"
+                  :aria-label="option.label"
+                  @click="selectCropTarget(option.value)"
+                >
+                  <i :class="option.icon" aria-hidden="true"></i>
+                </button>
+              </div>
+            </div>
+            <div class="crop-panel-divider" aria-hidden="true" />
+            <div class="crop-panel-slot crop-panel-slot--trim">
+              <button
+                type="button"
+                :disabled="trimLoading || suggestionLoading || objectCropLoading"
+                title="Remove letterbox and pillarbox padding"
+                @click="trimBlackBars"
+              >
+                Remove Letterboxing
+              </button>
+            </div>
+          </div>
+
+          <div v-show="activeToolPanel === 'object'" class="tool-panel tool-panel--object" role="tabpanel">
+            <button
+              type="button"
+              :disabled="trimLoading || suggestionLoading || objectCropLoading || !objectCropSupported"
+              title="Drag a box around an object. First use downloads a local model."
+              @click="cropToObject"
+            >
+              Box Outline
+            </button>
+            <label class="object-pad-label" for="object-pad">
+              Padding
+              <input
+                id="object-pad"
+                v-model.number="objectPadPx"
+                type="number"
+                min="0"
+                max="500"
+                step="1"
+                class="object-pad-input"
+                :disabled="objectCropLoading"
+                @change="onObjectPadChange"
+              />
+              px
+            </label>
+          </div>
+
+          <div
+            v-show="activeToolPanel === 'rotate'"
+            class="tool-panel tool-panel--rotate"
+            role="tabpanel"
           >
             <button
-              v-for="option in cropTargetOptions"
-              :key="option.value"
               type="button"
-              class="crop-target-btn"
-              role="radio"
-              :aria-checked="selectedCropTarget === option.value"
-              :class="{ 'crop-target-btn--active': selectedCropTarget === option.value }"
-              :disabled="suggestionLoading"
-              :title="option.label"
-              :aria-label="option.label"
-              @click="selectCropTarget(option.value)"
+              class="control-icon-btn"
+              title="Rotate left"
+              aria-label="Rotate left"
+              @click="rotate(-90)"
             >
-              <i :class="option.icon" aria-hidden="true"></i>
+              <i class="fas fa-rotate-left" aria-hidden="true"></i>
+            </button>
+            <div
+              class="rotate-radial"
+              role="slider"
+              tabindex="0"
+              aria-label="Rotate"
+              :aria-valuemin="FINE_ROTATE_MIN"
+              :aria-valuemax="FINE_ROTATE_MAX"
+              :aria-valuenow="Math.round(fineRotation)"
+              :aria-valuetext="`${fineRotationLabel} degrees`"
+              @pointerdown.stop="onRadialPointerDown"
+              @pointermove="onRadialPointerMove"
+              @pointerup="onRadialPointerUp"
+              @pointercancel="onRadialPointerUp"
+              @wheel.prevent="onRadialWheel"
+              @keydown="onRadialKeydown"
+            >
+              <div class="rotate-radial__value">{{ fineRotationLabel }}°</div>
+              <svg
+                class="rotate-radial__svg"
+                :viewBox="`0 0 ${RADIAL_VIEW_W} ${RADIAL_VIEW_H}`"
+                aria-hidden="true"
+              >
+                <path class="rotate-radial__arc" :d="radialArcPath" fill="none" />
+                <g v-for="tick in radialTicks" :key="tick.angle">
+                  <line
+                    :x1="tick.x1"
+                    :y1="tick.y1"
+                    :x2="tick.x2"
+                    :y2="tick.y2"
+                    class="rotate-radial__tick"
+                    :class="{ 'rotate-radial__tick--major': tick.major }"
+                  />
+                  <text
+                    v-if="tick.major"
+                    :x="tick.labelX"
+                    :y="tick.labelY"
+                    class="rotate-radial__label"
+                    text-anchor="middle"
+                    dominant-baseline="middle"
+                    :opacity="tick.labelOpacity"
+                  >
+                    {{ tick.angle }}
+                  </text>
+                </g>
+                <polygon
+                  class="rotate-radial__indicator"
+                  :points="radialIndicatorPoints"
+                />
+              </svg>
+            </div>
+            <button
+              type="button"
+              class="control-icon-btn"
+              title="Rotate right"
+              aria-label="Rotate right"
+              @click="rotate(90)"
+            >
+              <i class="fas fa-rotate-right" aria-hidden="true"></i>
             </button>
           </div>
         </div>
-        <div
-          class="rotate-radial"
-          role="slider"
-          tabindex="0"
-          aria-label="Rotate"
-          :aria-valuemin="FINE_ROTATE_MIN"
-          :aria-valuemax="FINE_ROTATE_MAX"
-          :aria-valuenow="Math.round(fineRotation)"
-          :aria-valuetext="`${fineRotationLabel} degrees`"
-          @pointerdown.stop="onRadialPointerDown"
-          @pointermove="onRadialPointerMove"
-          @pointerup="onRadialPointerUp"
-          @pointercancel="onRadialPointerUp"
-          @wheel.prevent="onRadialWheel"
-          @keydown="onRadialKeydown"
-        >
-          <div class="rotate-radial__value">{{ fineRotationLabel }}°</div>
-          <svg
-            class="rotate-radial__svg"
-            :viewBox="`0 0 ${RADIAL_VIEW_W} ${RADIAL_VIEW_H}`"
-            aria-hidden="true"
-          >
-            <path
-              class="rotate-radial__arc"
-              :d="radialArcPath"
-              fill="none"
-            />
-            <g v-for="tick in radialTicks" :key="tick.angle">
-              <line
-                :x1="tick.x1"
-                :y1="tick.y1"
-                :x2="tick.x2"
-                :y2="tick.y2"
-                class="rotate-radial__tick"
-                :class="{ 'rotate-radial__tick--major': tick.major }"
-              />
-              <text
-                v-if="tick.major"
-                :x="tick.labelX"
-                :y="tick.labelY"
-                class="rotate-radial__label"
-                text-anchor="middle"
-                dominant-baseline="middle"
-                :opacity="tick.labelOpacity"
-              >
-                {{ tick.angle }}
-              </text>
-            </g>
-            <polygon
-              class="rotate-radial__indicator"
-              :points="radialIndicatorPoints"
-            />
-          </svg>
+
+        <div class="actions">
+          <button type="button" class="action-crop" @click="cropImage" :disabled="!canConfirmSmartCrop">
+            Crop
+          </button>
+          <button type="button" class="action-reset" @click="reset">Reset</button>
+          <button type="button" class="action-cancel" @click="$emit('close')">Cancel</button>
         </div>
       </div>
     </div>
   </div>
+  </Teleport>
+  <ObjectModelConsent
+    :show="showSamConsent"
+    @choose="onSamConsentChoose"
+    @cancel="showSamConsent = false"
+  />
+  <ConfirmDialog
+    :show="showRemoveSamConfirm"
+    title="Uninstall object finder?"
+    message="This deletes the downloaded model from this browser. Box Outline will download it again the next time you use it."
+    confirm-label="Uninstall"
+    cancel-label="Keep"
+    variant="danger"
+    @confirm="onRemoveSamModel"
+    @cancel="showRemoveSamConfirm = false"
+  />
 </template>
 
 <script setup lang="ts">
@@ -207,6 +341,40 @@ import type {
   IdentityReferenceFace,
 } from "../types/batchCrop";
 import { detectLetterboxFromUrl } from "../utils/letterboxDetect";
+import {
+  detectObjectFromUrl,
+  isObjectCropSupported,
+  preloadObjectCropImage,
+  preloadObjectCropRuntime,
+} from "../utils/objectCrop";
+import ObjectModelConsent from "./ObjectModelConsent.vue";
+import ConfirmDialog from "./ConfirmDialog.vue";
+import {
+  acceptSamModelConsent,
+  deleteSamModelFromDevice,
+  isSamModelCached,
+  needsSamModelConsent,
+  type SamRetention,
+} from "../utils/samModelCache";
+import { subscribeSamDownloadProgress } from "../utils/samModelDownload";
+import {
+  getSamProgressStage,
+  samStatusLabel,
+  subscribeSamProgress,
+  type SamProgressStage,
+} from "../utils/webSamSession";
+import {
+  clampObjectPadPx,
+  padCropBox,
+  buildMaskOverlayRgba,
+  normalizeNormalizedBox,
+  type NormalizedKeypoint,
+} from "../utils/objectMaskCrop";
+import {
+  loadObjectCropPadPx,
+  saveObjectCropPadPx,
+} from "../utils/objectCropPad";
+import type { SegmentMaskPayload } from "../utils/interactiveSegmenterSession";
 
 // Type alias to extend Cropper instance with custom methods and properties
 type CropperInstance = InstanceType<typeof Cropper> & {
@@ -292,19 +460,52 @@ const emit = defineEmits<{
 
 const cropper = ref<CropperInstance | null>(null);
 const cropperWrapper = ref<HTMLElement | null>(null);
+type CropToolPanel = "crop" | "object" | "rotate";
+
 const selectedAspectRatio = ref<number | null>(null);
 const selectedCropTarget = ref<CropTarget | null>(null);
+const activeToolPanel = ref<CropToolPanel>("crop");
+const aspectRatioOptions: { value: number | null; label: string }[] = [
+  { value: null, label: "Free" },
+  { value: 1, label: "1:1" },
+  { value: 4 / 3, label: "4:3" },
+  { value: 16 / 9, label: "16:9" },
+];
 const cropTargetOptions: { value: CropTarget; label: string; icon: string }[] = [
   { value: 'full-body', label: 'Full body', icon: 'fas fa-person' },
   { value: 'upper-body', label: 'Upper body', icon: 'fas fa-user' },
-  { value: 'lower-body', label: 'Lower body', icon: 'fas fa-person-walking' },
+  { value: 'lower-body', label: 'Lower body', icon: 'fas fa-shoe-prints' },
   { value: 'head-shoulders', label: 'Head and shoulders', icon: 'fas fa-portrait' },
-  { value: 'head', label: 'Head', icon: 'fas fa-circle-user' },
+  { value: 'head', label: 'Head', icon: 'fas fa-face-smile' },
 ];
 const currentImageSrc = ref<string>(imageSrc);
 const trimLoading = ref(false);
 const trimMessage = ref<string | null>(null);
 const trimFailed = ref(false);
+const objectCropLoading = ref(false);
+const objectCropMessage = ref<string | null>(null);
+const objectCropFailed = ref(false);
+const objectMarkMode = ref(false);
+const objectPadPx = ref(loadObjectCropPadPx());
+const objectCropSupported = isObjectCropSupported();
+const lastObjectBbox = ref<{ x: number; y: number; width: number; height: number } | null>(null);
+const lastObjectKeypoint = ref<NormalizedKeypoint | null>(null);
+const lastObjectMask = ref<SegmentMaskPayload | null>(null);
+const objectOverlayCanvas = ref<HTMLCanvasElement | null>(null);
+const objectDrawCanvas = ref<HTMLCanvasElement | null>(null);
+const objectMaskVisible = ref(false);
+const objectMarkerStyle = ref<Record<string, string> | null>(null);
+const objectStrokePoints = ref<NormalizedKeypoint[]>([]);
+const objectDrawing = ref(false);
+const objectOverlayThreshold = ref(0.35);
+const showSamConsent = ref(false);
+const showRemoveSamConfirm = ref(false);
+const samModelCached = ref(false);
+const samModelRemoving = ref(false);
+const showUninstallModel = computed(
+  () => activeToolPanel.value === "object" && samModelCached.value
+);
+const samProgressStage = ref<SamProgressStage>(getSamProgressStage());
 const isDragging = ref(false); // Track if stencil is being dragged (for iOS-style overlay)
 const isRadialDragging = ref(false);
 
@@ -328,6 +529,26 @@ const canConfirmSmartCrop = computed(() => {
   if (isThisPersonMode.value && referenceFaces.length < 1) return false;
   return true;
 });
+const cropperStatusText = computed(() => {
+  if (suggestionError) return suggestionError;
+  if (trimMessage.value) return trimMessage.value;
+  if (objectMarkMode.value && objectMarkHint.value) return objectMarkHint.value;
+  if (objectCropMessage.value && !objectMarkMode.value) return objectCropMessage.value;
+  if (suggestionNoSubject) return "No subject detected — adjust stencil manually.";
+  return smartModeHint.value || null;
+});
+const cropperStatusIsError = computed(
+  () => Boolean(suggestionError) || trimFailed.value || objectCropFailed.value
+);
+
+function setToolPanel(panel: CropToolPanel) {
+  activeToolPanel.value = panel;
+  if (panel !== "object" && objectMarkMode.value) {
+    objectMarkMode.value = false;
+    clearObjectDrawCanvas();
+  }
+}
+
 const smartModeHint = computed(() => {
   if (!isSmartBatchMode.value) return "";
   if (!selectedCropTarget.value) {
@@ -544,8 +765,460 @@ function clearTrimStatus() {
   trimLoading.value = false;
 }
 
+function clearObjectCropUi() {
+  objectCropMessage.value = null;
+  objectCropFailed.value = false;
+  objectCropLoading.value = false;
+  objectMarkMode.value = false;
+  objectDrawing.value = false;
+  objectStrokePoints.value = [];
+  lastObjectBbox.value = null;
+  lastObjectKeypoint.value = null;
+  lastObjectMask.value?.overlayBitmap?.close();
+  lastObjectMask.value = null;
+  objectMaskVisible.value = false;
+  objectMarkerStyle.value = null;
+  clearObjectDrawCanvas();
+  const canvas = objectOverlayCanvas.value;
+  if (canvas) {
+    const ctx = canvas.getContext("2d");
+    ctx?.clearRect(0, 0, canvas.width, canvas.height);
+  }
+}
+
+function clearObjectDrawCanvas() {
+  const canvas = objectDrawCanvas.value;
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+}
+
+const objectMarkHint = computed(() => {
+  if (currentRotation.value !== 0) {
+    return "Reset rotation, then draw around the object you want to crop.";
+  }
+  return "Drag a box around the object. Any corner works — left-to-right or right-to-left.";
+});
+
+const objectCropStatusLabel = computed(() => {
+  if (objectCropLoading.value) {
+    return samStatusLabel(samProgressStage.value, "Finding object...");
+  }
+  if (trimLoading.value) return "Finding black bars...";
+  return "Finding target...";
+});
+
+interface ImageAreaMapping {
+  destX: number;
+  destY: number;
+  destW: number;
+  destH: number;
+}
+
+function resolveCropperImageElement(): HTMLImageElement | HTMLCanvasElement | null {
+  const image = cropper.value?.image as unknown;
+  if (image instanceof HTMLImageElement || image instanceof HTMLCanvasElement) {
+    return image;
+  }
+  const cropperEl = (cropper.value as { $el?: HTMLElement } | null)?.$el;
+  if (!cropperEl) return null;
+  return (
+    cropperEl.querySelector<HTMLImageElement>(".vue-advanced-cropper__image") ??
+    cropperEl.querySelector<HTMLImageElement | HTMLCanvasElement>("img, canvas")
+  );
+}
+
+function getImageAreaMapping(): ImageAreaMapping | null {
+  const wrapper = cropperWrapper.value;
+  const inst = cropper.value;
+  if (!wrapper || !inst) return null;
+
+  const wrapperRect = wrapper.getBoundingClientRect();
+  const imageEl = resolveCropperImageElement();
+  if (imageEl) {
+    const imageRect = imageEl.getBoundingClientRect();
+    if (imageRect.width > 8 && imageRect.height > 8) {
+      return {
+        destX: imageRect.left - wrapperRect.left,
+        destY: imageRect.top - wrapperRect.top,
+        destW: imageRect.width,
+        destH: imageRect.height,
+      };
+    }
+  }
+
+  const va = inst.visibleArea;
+  const imageSize = inst.imageSize;
+  if (va && imageSize?.width && imageSize?.height && va.width > 0 && va.height > 0) {
+    const scale = Math.min(
+      wrapperRect.width / va.width,
+      wrapperRect.height / va.height
+    );
+    const viewW = va.width * scale;
+    const viewH = va.height * scale;
+    return {
+      destX: (wrapperRect.width - viewW) / 2 - va.left * scale,
+      destY: (wrapperRect.height - viewH) / 2 - va.top * scale,
+      destW: imageSize.width * scale,
+      destH: imageSize.height * scale,
+    };
+  }
+
+  return {
+    destX: 0,
+    destY: 0,
+    destW: wrapperRect.width,
+    destH: wrapperRect.height,
+  };
+}
+
+function syncObjectDrawCanvas() {
+  const canvas = objectDrawCanvas.value;
+  const wrapper = cropperWrapper.value;
+  if (!canvas || !wrapper) return;
+
+  const wrapperRect = wrapper.getBoundingClientRect();
+  canvas.width = Math.max(1, Math.round(wrapperRect.width));
+  canvas.height = Math.max(1, Math.round(wrapperRect.height));
+  canvas.style.width = `${wrapperRect.width}px`;
+  canvas.style.height = `${wrapperRect.height}px`;
+  redrawObjectStroke();
+}
+
+function clientToNormalized(
+  clientX: number,
+  clientY: number,
+  clamp = false
+): NormalizedKeypoint | null {
+  if (!cropper.value || currentRotation.value !== 0) return null;
+  const wrapper = cropperWrapper.value;
+  const mapping = getImageAreaMapping();
+  if (!wrapper || !mapping || mapping.destW <= 0 || mapping.destH <= 0) return null;
+
+  const wrapperRect = wrapper.getBoundingClientRect();
+  const localX = clientX - wrapperRect.left;
+  const localY = clientY - wrapperRect.top;
+  const relX = (localX - mapping.destX) / mapping.destW;
+  const relY = (localY - mapping.destY) / mapping.destH;
+  if (!clamp && (relX < 0 || relX > 1 || relY < 0 || relY > 1)) return null;
+
+  return {
+    x: Math.min(1, Math.max(0, relX)),
+    y: Math.min(1, Math.max(0, relY)),
+  };
+}
+
+function normalizedToCanvasPoint(point: NormalizedKeypoint): { x: number; y: number } | null {
+  const mapping = getImageAreaMapping();
+  if (!mapping) return null;
+  return {
+    x: mapping.destX + point.x * mapping.destW,
+    y: mapping.destY + point.y * mapping.destH,
+  };
+}
+
+function redrawObjectStroke() {
+  const canvas = objectDrawCanvas.value;
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const points = objectStrokePoints.value;
+  if (points.length < 2) return;
+  const box = normalizeNormalizedBox(points[0], points[points.length - 1]);
+  if (!box) return;
+  const tl = normalizedToCanvasPoint({ x: box.x, y: box.y });
+  const br = normalizedToCanvasPoint({
+    x: box.x + box.width,
+    y: box.y + box.height,
+  });
+  if (!tl || !br) return;
+
+  ctx.strokeStyle = "rgba(232, 201, 106, 0.95)";
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6, 4]);
+  ctx.strokeRect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
+  ctx.setLineDash([]);
+  ctx.fillStyle = "rgba(232, 201, 106, 0.12)";
+  ctx.fillRect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
+}
+
+function onObjectDrawPointerDown(event: PointerEvent) {
+  if (!objectMarkMode.value || objectCropLoading.value || currentRotation.value !== 0) return;
+  const point = clientToNormalized(event.clientX, event.clientY, true);
+  if (!point) return;
+
+  objectDrawing.value = true;
+  objectStrokePoints.value = [point];
+  objectDrawCanvas.value?.setPointerCapture(event.pointerId);
+  syncObjectDrawCanvas();
+  redrawObjectStroke();
+}
+
+function onObjectDrawPointerMove(event: PointerEvent) {
+  if (!objectDrawing.value || !objectMarkMode.value) return;
+  const point = clientToNormalized(event.clientX, event.clientY, true);
+  if (!point) return;
+
+  const start = objectStrokePoints.value[0];
+  if (!start) return;
+  objectStrokePoints.value = [start, point];
+  redrawObjectStroke();
+}
+
+async function onObjectDrawPointerUp(event: PointerEvent) {
+  if (!objectDrawing.value) return;
+  objectDrawing.value = false;
+  objectDrawCanvas.value?.releasePointerCapture(event.pointerId);
+
+  const points = objectStrokePoints.value;
+  const box =
+    points.length >= 2
+      ? normalizeNormalizedBox(points[0], points[points.length - 1])
+      : null;
+  if (!box) {
+    objectCropMessage.value = "Drag a larger box around the object and release.";
+    objectCropFailed.value = true;
+    return;
+  }
+
+  await runObjectDetection({ box });
+}
+
+function applyObjectPadToStencil() {
+  if (!lastObjectBbox.value) return;
+  const img = cropper.value?.image;
+  const naturalWidth = img?.naturalWidth ?? cropper.value?.imageSize?.width;
+  const naturalHeight = img?.naturalHeight ?? cropper.value?.imageSize?.height;
+  if (!naturalWidth || !naturalHeight) return;
+  const padded = padCropBox(
+    lastObjectBbox.value,
+    naturalWidth,
+    naturalHeight,
+    objectPadPx.value
+  );
+  applyCoordinatesToCropper(padded, false);
+}
+
+async function updateObjectOverlay() {
+  const wrapper = cropperWrapper.value;
+  const mask = lastObjectMask.value;
+  if (!wrapper || !mask || !cropper.value) {
+    objectMaskVisible.value = false;
+    return;
+  }
+
+  objectMaskVisible.value = true;
+  await nextTick();
+
+  const canvas = objectOverlayCanvas.value;
+  if (!canvas) return;
+
+  const wrapperRect = wrapper.getBoundingClientRect();
+  canvas.width = Math.max(1, Math.round(wrapperRect.width));
+  canvas.height = Math.max(1, Math.round(wrapperRect.height));
+  canvas.style.width = `${wrapperRect.width}px`;
+  canvas.style.height = `${wrapperRect.height}px`;
+
+  const mapping = getImageAreaMapping();
+  if (!mapping) {
+    objectMaskVisible.value = false;
+    return;
+  }
+
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+
+  const destX = mapping.destX;
+  const destY = mapping.destY;
+  const destW = mapping.destW;
+  const destH = mapping.destH;
+
+  const overlay = buildMaskOverlayRgba(
+    mask.confidenceMask,
+    mask.maskWidth,
+    mask.maskHeight,
+    mask.overlayThreshold ?? objectOverlayThreshold.value,
+    mask.componentMask
+  );
+  const offscreen = document.createElement("canvas");
+  offscreen.width = mask.maskWidth;
+  offscreen.height = mask.maskHeight;
+  const offCtx = offscreen.getContext("2d");
+  if (!offCtx) return;
+  offCtx.putImageData(new ImageData(overlay, mask.maskWidth, mask.maskHeight), 0, 0);
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(destX, destY, destW, destH);
+  ctx.clip();
+  ctx.drawImage(offscreen, destX, destY, destW, destH);
+  ctx.restore();
+
+  if (lastObjectKeypoint.value) {
+    objectMarkerStyle.value = {
+      left: `${mapping.destX + lastObjectKeypoint.value.x * mapping.destW - 8}px`,
+      top: `${mapping.destY + lastObjectKeypoint.value.y * mapping.destH - 8}px`,
+    };
+  }
+}
+
+async function runObjectDetection(options: {
+  keypoint?: NormalizedKeypoint;
+  scribble?: NormalizedKeypoint[];
+  box?: { x: number; y: number; width: number; height: number };
+} = {}) {
+  if (!currentImageSrc.value || objectCropLoading.value) return;
+  objectCropLoading.value = true;
+  objectCropMessage.value = null;
+  objectCropFailed.value = false;
+
+  try {
+    await preloadObjectCropRuntime();
+    const pad = clampObjectPadPx(objectPadPx.value);
+    objectPadPx.value = pad;
+    saveObjectCropPadPx(pad);
+
+    const detectOptions = {
+      keypoint: options.keypoint,
+      scribble: options.scribble,
+      box: options.box,
+      padPx: pad,
+    };
+    const result = await detectObjectFromUrl(currentImageSrc.value, detectOptions);
+    if (!result) {
+      objectCropMessage.value =
+        "Could not find that object — drag a tighter box around it and try again.";
+      objectCropFailed.value = true;
+      objectMarkMode.value = true;
+      objectMaskVisible.value = false;
+      objectMarkerStyle.value = null;
+      await nextTick();
+      syncObjectDrawCanvas();
+      return;
+    }
+
+    emit("cancel-suggest");
+    selectedCropTarget.value = null;
+    selectedAspectRatio.value = null;
+    lastObjectBbox.value = { ...result.bbox };
+    lastObjectKeypoint.value = { ...result.keypoint };
+    lastObjectMask.value?.overlayBitmap?.close();
+    lastObjectMask.value = result.mask;
+    objectOverlayThreshold.value = result.mask?.overlayThreshold ?? 0;
+    objectMarkMode.value = false;
+    clearObjectDrawCanvas();
+    await nextTick();
+    applyCoordinatesToCropper(result.padded, false);
+    await nextTick();
+    await updateObjectOverlay();
+    requestAnimationFrame(() => {
+      void updateObjectOverlay();
+    });
+    objectCropMessage.value =
+      pad > 0
+        ? `Object found with ${pad}px padding. Click Box Outline to mark a different one.`
+        : "Object found. Click Box Outline to mark a different one.";
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      objectCropMessage.value = "Object finder download cancelled.";
+      objectCropFailed.value = true;
+      return;
+    }
+    console.error("Crop to object failed:", error);
+    objectCropMessage.value = "Could not detect an object in this image.";
+    objectCropFailed.value = true;
+    objectMarkMode.value = true;
+    await nextTick();
+    syncObjectDrawCanvas();
+  } finally {
+    objectCropLoading.value = false;
+  }
+}
+
+async function enterObjectMarkMode() {
+  clearTrimStatus();
+  clearObjectCropUi();
+  objectMarkMode.value = true;
+  objectCropMessage.value = null;
+  objectCropFailed.value = false;
+  setFullImageCoordinates();
+  void preloadObjectCropRuntime()
+    .then(() => {
+      if (currentImageSrc.value) {
+        void preloadObjectCropImage(currentImageSrc.value);
+      }
+    })
+    .catch((error) => {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      console.error("Object finder failed to load:", error);
+    });
+  await nextTick();
+  syncObjectDrawCanvas();
+}
+
+async function cropToObject() {
+  activeToolPanel.value = "object";
+  if (currentRotation.value !== 0) {
+    objectCropMessage.value = "Reset rotation before marking an object.";
+    objectCropFailed.value = true;
+    return;
+  }
+  if (await needsSamModelConsent()) {
+    showSamConsent.value = true;
+    return;
+  }
+  await enterObjectMarkMode();
+}
+
+function onSamConsentChoose(retention: SamRetention) {
+  acceptSamModelConsent(retention);
+  showSamConsent.value = false;
+  void enterObjectMarkMode();
+}
+
+async function refreshSamModelCached() {
+  samModelCached.value = await isSamModelCached();
+}
+
+async function onRemoveSamModel() {
+  showRemoveSamConfirm.value = false;
+  if (samModelRemoving.value) return;
+  samModelRemoving.value = true;
+  try {
+    await deleteSamModelFromDevice();
+    samModelCached.value = false;
+    objectCropMessage.value = "Object finder removed from this browser.";
+    objectCropFailed.value = false;
+  } catch (error) {
+    console.error("Failed to remove object finder:", error);
+    objectCropMessage.value = "Could not remove the object finder.";
+    objectCropFailed.value = true;
+  } finally {
+    samModelRemoving.value = false;
+  }
+}
+
+function onObjectPadChange() {
+  objectPadPx.value = clampObjectPadPx(objectPadPx.value);
+  saveObjectCropPadPx(objectPadPx.value);
+  if (lastObjectBbox.value) {
+    applyObjectPadToStencil();
+    objectCropMessage.value =
+      objectPadPx.value > 0
+        ? `Padding set to ${objectPadPx.value}px around the object.`
+        : "Padding removed — crop fits the object.";
+  }
+}
+
 async function trimBlackBars() {
   if (!currentImageSrc.value || trimLoading.value) return;
+  clearObjectCropUi();
   trimLoading.value = true;
   trimMessage.value = null;
   trimFailed.value = false;
@@ -585,7 +1258,9 @@ watch([() => imageSrc, () => initialRotation], ([newSrc, newRotation]) => {
   applySplit(newRotation || 0);
   appliedRotation = currentRotation.value;
   selectedCropTarget.value = null;
+  activeToolPanel.value = "crop";
   clearTrimStatus();
+  clearObjectCropUi();
 });
 
 // Helper function to apply rotation to the cropper
@@ -608,16 +1283,40 @@ const applyRotationToCropper = (rotation: number) => {
 };
 
 const handleEsc = (event: KeyboardEvent) => {
-  if (event.key === "Escape") {
-    emit("close");
+  if (event.key !== "Escape") return;
+  if (showSamConsent.value) {
+    event.preventDefault();
+    showSamConsent.value = false;
+    return;
   }
+  if (showRemoveSamConfirm.value) {
+    event.preventDefault();
+    showRemoveSamConfirm.value = false;
+    return;
+  }
+  emit("close");
 };
+
+let unsubscribeSamProgress: (() => void) | null = null;
+let unsubscribeSamDownload: (() => void) | null = null;
 
 onMounted(() => {
   window.addEventListener("keydown", handleEsc);
+  unsubscribeSamProgress = subscribeSamProgress((stage) => {
+    samProgressStage.value = stage;
+    if (stage === "ready") void refreshSamModelCached();
+  });
+  unsubscribeSamDownload = subscribeSamDownloadProgress((next) => {
+    if (!next) void refreshSamModelCached();
+  });
+  void refreshSamModelCached();
 });
 
 onUnmounted(() => {
+  unsubscribeSamProgress?.();
+  unsubscribeSamProgress = null;
+  unsubscribeSamDownload?.();
+  unsubscribeSamDownload = null;
   window.removeEventListener("keydown", handleEsc);
   if (dragListenerCleanup) {
     dragListenerCleanup();
@@ -1100,6 +1799,7 @@ const reset = async () => {
   selectedAspectRatio.value = null;
   selectedCropTarget.value = null;
   clearTrimStatus();
+  clearObjectCropUi();
   applySplit(initialRotation || 0);
   await nextTick();
 
@@ -1127,14 +1827,14 @@ const reset = async () => {
   display: flex;
   justify-content: center;
   align-items: center;
-  z-index: 200;
+  z-index: 1650;
 }
 
 .modal-content {
   background: var(--surface-color);
   border: 1px solid var(--surface-border);
   border-radius: var(--border-radius);
-  padding: 24px;
+  padding: 24px 24px 0;
   width: 92vw;
   max-width: 1200px;
   height: 88vh;
@@ -1146,10 +1846,63 @@ const reset = async () => {
 
 .cropper-wrapper {
   flex: 1;
+  min-height: 0;
   position: relative;
   width: 100%;
   border-radius: var(--border-radius-sm);
   overflow: hidden;
+}
+
+.cropper-wrapper--mark {
+  cursor: crosshair;
+}
+
+.object-draw-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 14;
+  touch-action: none;
+}
+
+.object-mask-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  pointer-events: none;
+}
+
+.object-mask-overlay--hidden {
+  opacity: 0;
+}
+
+.object-marker {
+  position: absolute;
+  z-index: 13;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  background: rgba(56, 189, 248, 0.85);
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+.object-pad-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.object-pad-input {
+  width: 64px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--surface-border);
+  background: rgba(0, 0, 0, 0.25);
+  color: inherit;
+  text-align: center;
 }
 
 :deep(.vue-advanced-cropper) {
@@ -1236,18 +1989,30 @@ const reset = async () => {
   position: relative;
 }
 
-.crop-target-bar {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 12px;
-  flex-wrap: wrap;
-  width: 100%;
+.cropper-status {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 10px;
+  z-index: 15;
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  text-align: center;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.88);
+  background: rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+}
+
+.cropper-status--error {
+  color: #fca5a5;
 }
 
 .crop-target-group {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
 }
 
@@ -1301,29 +2066,144 @@ const reset = async () => {
 }
 
 .controls {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-rows: repeat(3, 1fr);
+  grid-template-areas:
+    "cats stage actions"
+    ". stage actions"
+    "uninst stage actions";
   align-items: stretch;
-  gap: 10px;
-  padding: 12px 0 0;
+  flex-shrink: 0;
+  height: 148px;
+  column-gap: 12px;
+  padding: 0;
+  box-sizing: border-box;
   border-top: 1px solid var(--surface-border);
 }
 
-.controls-row {
+.tool-categories {
+  grid-area: cats;
   display: flex;
-  gap: 12px;
+  align-items: center;
+  align-self: center;
+  gap: 6px;
+}
+
+.tool-category {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  flex-wrap: wrap;
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 8px;
+}
+
+.tool-category i {
+  font-size: 0.85rem;
+}
+
+.tool-category--active {
+  background: rgba(212, 175, 55, 0.22);
+  border-color: rgba(212, 175, 55, 0.5);
+  color: #e8c96a;
+}
+
+.tool-stage {
+  grid-column: 2;
+  grid-row: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 0;
+}
+
+.tool-panel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.tool-panel--crop {
+  width: max-content;
+  max-width: 100%;
+  display: grid;
+  grid-template-columns: auto auto auto auto auto;
+  align-items: center;
+  justify-content: center;
+  justify-self: center;
+  margin-inline: auto;
+  column-gap: 26px;
+}
+
+.crop-panel-slot {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.crop-panel-slot--aspect,
+.crop-panel-slot--targets,
+.crop-panel-slot--trim {
+  justify-content: center;
+}
+
+.crop-panel-divider {
+  width: 1px;
+  height: 52px;
+  background: rgba(255, 255, 255, 0.85);
+  flex-shrink: 0;
+}
+
+.tool-panel--crop-simple {
+  grid-template-columns: auto auto auto;
+}
+
+.tool-panel--object {
+  gap: 36px;
+}
+
+.tool-panel--rotate {
+  flex-wrap: nowrap;
+  gap: 8px;
+  width: 100%;
+}
+
+.aspect-ratio-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 52px);
+  grid-template-rows: repeat(2, 28px);
+  gap: 4px;
+}
+
+.aspect-ratio-btn {
+  height: 28px;
+  min-width: 0;
+  padding: 0 4px;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.aspect-ratio-btn--active {
+  background: rgba(212, 175, 55, 0.22);
+  border-color: rgba(212, 175, 55, 0.5);
+  color: #e8c96a;
 }
 
 .rotate-radial {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: flex-end;
-  width: min(100%, 480px);
-  margin: auto auto 0;
+  justify-content: center;
+  width: 420px;
+  max-width: calc(100% - 88px);
+  flex: 0 1 auto;
+  margin: 0;
   padding: 0;
   outline: none;
   cursor: ew-resize;
@@ -1395,6 +2275,7 @@ const reset = async () => {
   min-width: 40px;
   height: 40px;
   padding: 0;
+  flex-shrink: 0;
   white-space: nowrap;
 }
 
@@ -1402,37 +2283,65 @@ const reset = async () => {
   font-size: 0.95rem;
 }
 
-.controls-row button:disabled {
+.tool-panel button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
 
 .actions {
-  display: flex;
-  gap: 12px;
-  margin-left: 24px;
-  padding-left: 24px;
-  border-left: 1px solid var(--surface-border);
+  grid-area: actions;
+  display: grid;
+  grid-template-rows: repeat(3, 1fr);
+  align-items: center;
+  width: 118px;
 }
 
-.actions button:first-child {
+.actions button {
+  width: 100%;
+  height: 32px;
+  min-height: 32px;
+  padding: 0 12px;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.action-crop {
   background: rgba(255, 255, 255, 0.15);
   border-color: #888;
 }
 
-.actions button:first-child:hover {
-  background: rgba(255, 255, 255, 0.25);
-  border-color: #aaa;
+.action-crop:hover:not(:disabled) {
+  background: rgba(212, 175, 55, 0.28);
+  border-color: rgba(212, 175, 55, 0.7);
+  color: #e8c96a;
 }
 
-.actions button:last-child:hover {
+.action-cancel:hover:not(:disabled) {
   background: var(--danger-color);
   border-color: var(--danger-color);
 }
 
+.action-uninstall {
+  grid-area: uninst;
+  justify-self: start;
+  align-self: center;
+  width: max-content;
+  font-size: 0.7rem;
+  padding: 6px 8px;
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.2);
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.action-uninstall:hover:not(:disabled) {
+  background: rgba(234, 88, 12, 0.28);
+  border-color: rgba(249, 115, 22, 0.7);
+  color: #fb923c;
+}
+
 @media (max-width: 768px) {
   .modal-content {
-    padding: 16px;
+    padding: 16px 16px 0;
     height: 92vh;
     width: 96vw;
   }
@@ -1446,19 +2355,23 @@ const reset = async () => {
     gap: 8px;
   }
 
+  .controls {
+    height: 168px;
+  }
+
   .actions {
-    margin-left: 0;
-    padding-left: 0;
-    border-left: none;
-    margin-top: 8px;
-    width: 100%;
-    justify-content: center;
+    width: 110px;
   }
 
   .actions button {
-    min-height: 40px;
-    padding: 10px 16px;
-    font-size: 0.875rem;
+    min-height: 0;
+    padding: 7px 10px;
+    font-size: 0.8rem;
+  }
+
+  .action-uninstall {
+    font-size: 0.65rem;
+    padding: 5px 6px;
   }
 }
 
@@ -1468,7 +2381,7 @@ const reset = async () => {
   }
 
   .modal-content {
-    padding: 12px;
+    padding: 12px 12px 0;
     height: 100vh;
     width: 100vw;
     border-radius: 0;
@@ -1476,8 +2389,8 @@ const reset = async () => {
   }
 
   .controls {
-    gap: 6px;
-    padding: 10px 0 0;
+    height: 176px;
+    padding: 0;
   }
 
   .controls label {
@@ -1485,7 +2398,8 @@ const reset = async () => {
   }
 
   .rotate-radial {
-    width: min(100%, 360px);
+    width: 360px;
+    max-width: calc(100% - 88px);
   }
 
   .rotate-radial__svg {
@@ -1493,15 +2407,18 @@ const reset = async () => {
   }
 
   .actions {
-    margin-top: 6px;
-    gap: 8px;
+    width: 102px;
   }
 
   .actions button {
-    min-height: 44px;
-    padding: 10px 14px;
-    font-size: 0.8rem;
-    flex: 1;
+    min-height: 0;
+    padding: 6px 8px;
+    font-size: 0.75rem;
+  }
+
+  .action-uninstall {
+    font-size: 0.62rem;
+    padding: 4px 4px;
   }
 
   :deep(.vue-advanced-cropper) {
