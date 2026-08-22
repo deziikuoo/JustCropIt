@@ -2702,7 +2702,7 @@ onUnmounted(() => {
   width: 100%;
   display: flex;
   flex-direction: column;
-  padding-top: calc(72px + env(safe-area-inset-top, 0px));
+  padding-top: calc(92px + env(safe-area-inset-top, 0px));
 }
 
 .video-page {
@@ -2710,7 +2710,7 @@ onUnmounted(() => {
   width: 100%;
   display: flex;
   justify-content: center;
-  padding-top: calc(72px + env(safe-area-inset-top, 0px));
+  padding-top: calc(92px + env(safe-area-inset-top, 0px));
   padding-bottom: 56px;
 }
 

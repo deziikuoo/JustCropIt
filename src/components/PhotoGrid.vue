@@ -1917,7 +1917,7 @@ const handlePhotoCardClick = (index: number, event: Event) => {
 }
 
 .batch-edit-panel {
-  --batch-panel-inset: calc(84px + env(safe-area-inset-top, 0px));
+  --batch-panel-inset: calc(104px + env(safe-area-inset-top, 0px));
   width: 240px;
   flex-shrink: 0;
   display: flex;

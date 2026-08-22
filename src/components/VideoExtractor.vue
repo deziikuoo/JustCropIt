@@ -2207,10 +2207,10 @@ onUnmounted(() => {
   gap: 20px;
   margin-top: 8px;
   padding: 16px 20px;
-  background: rgba(99, 102, 241, 0.1);
-  border: 1px solid rgba(99, 102, 241, 0.2);
+  background: rgba(249, 115, 22, 0.12);
+  border: 1px solid rgba(249, 115, 22, 0.35);
   border-radius: 10px;
-  color: #a5b4fc;
+  color: #fdba74;
   font-size: 0.9rem;
 }
 
@@ -2234,10 +2234,11 @@ onUnmounted(() => {
 
 .estimated-frames i {
   font-size: 1rem;
+  color: #fb923c;
 }
 
 .estimated-frames strong {
-  color: #fff;
+  color: #fb923c;
   font-size: 1.1rem;
 }
 
