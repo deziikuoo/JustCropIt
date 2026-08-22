@@ -42,7 +42,10 @@ export interface PhotoData {
     thumbhash?: string;
     sourceFormat?: string;
     exifNormalized?: boolean;
+    importOrigin?: "device" | "video";
   };
+  /** Chromium File System Access handle; structured-cloneable in IndexedDB. */
+  fileHandle?: FileSystemFileHandle;
 }
 
 interface PhotoStorageDB extends DBSchema {
@@ -323,6 +326,7 @@ export type PhotoSaveMetadata = {
   thumbhash?: string;
   sourceFormat?: string;
   exifNormalized?: boolean;
+  importOrigin?: "device" | "video";
 };
 
 export interface BulkPhotoSaveRequest {
@@ -330,6 +334,7 @@ export interface BulkPhotoSaveRequest {
   current: File;
   metadata: PhotoSaveMetadata;
   thumbnail?: Blob;
+  fileHandle?: FileSystemFileHandle;
 }
 
 function newPhotoId(): string {
@@ -419,6 +424,7 @@ export function createBulkPhotoSaver(): {
       current: idbCurrent,
       storage,
       ...(request.thumbnail ? { thumbnail: request.thumbnail } : {}),
+      ...(request.fileHandle ? { fileHandle: request.fileHandle } : {}),
       metadata: {
         ...request.metadata,
         uploadedAt: now,
@@ -446,6 +452,7 @@ export const savePhoto = async (
     thumbhash?: string;
     sourceFormat?: string;
     exifNormalized?: boolean;
+    importOrigin?: "device" | "video";
   },
   thumbnail?: Blob
 ): Promise<string> => {
@@ -575,6 +582,7 @@ export const updatePhoto = async (
             thumbhash: clearThumbMeta ? undefined : existing.metadata.thumbhash,
             sourceFormat: existing.metadata.sourceFormat,
             exifNormalized: existing.metadata.exifNormalized,
+            importOrigin: existing.metadata.importOrigin,
           },
         };
         await database.put(STORE_NAME, updated);
@@ -596,6 +604,7 @@ export const updatePhoto = async (
         thumbhash: clearThumbMeta ? undefined : existing.metadata.thumbhash,
         sourceFormat: existing.metadata.sourceFormat,
         exifNormalized: existing.metadata.exifNormalized,
+        importOrigin: existing.metadata.importOrigin,
       },
     };
 
@@ -773,6 +782,7 @@ export const updatePhotosBatch = async (
               : existing.metadata.thumbhash,
             sourceFormat: existing.metadata.sourceFormat,
             exifNormalized: existing.metadata.exifNormalized,
+            importOrigin: existing.metadata.importOrigin,
           },
         };
 

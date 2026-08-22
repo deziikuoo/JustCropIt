@@ -177,6 +177,21 @@
                   <span>Strip metadata on export</span>
                 </label>
                 <label
+                  class="tools-panel__download-dest"
+                  title="Replace overwrites the original file when this browser granted a writable handle. Otherwise it saves with the original name, usually in Downloads."
+                >
+                  <span>On download</span>
+                  <select
+                    class="tools-panel__download-dest-select"
+                    :value="exportDestination"
+                    @change="exportDestination = ($event.target as HTMLSelectElement).value as ExportDestination"
+                  >
+                    <option value="ask">Ask each time</option>
+                    <option value="replace">Replace originals</option>
+                    <option value="copy">Make copies</option>
+                  </select>
+                </label>
+                <label
                   v-if="postCropCleanup"
                   class="post-crop-cleanup"
                 >
@@ -204,18 +219,25 @@
                     'fade-out': floatingFileInputFading,
                   }"
                 >
-                  <label class="tool-btn tool-btn--wide photo-input-label--panel">
+                  <button
+                    type="button"
+                    class="tool-btn tool-btn--wide"
+                    aria-label="Choose files"
+                    @click="choosePanelFiles"
+                  >
                     <i class="fas fa-folder-open" aria-hidden="true"></i>
                     <span class="tool-btn__label">Choose Files</span>
-                    <input
-                      class="photo-input-native"
-                      type="file"
-                      multiple
-                      accept="image/*,.heic,.heif,.avif"
-                      aria-label="Choose files"
-                      @change="handleFloatingUpload"
-                    />
-                  </label>
+                  </button>
+                  <input
+                    ref="panelFileInputRef"
+                    class="photo-input-native photo-input-native--hidden"
+                    type="file"
+                    multiple
+                    accept="image/*,.heic,.heif,.avif"
+                    aria-hidden="true"
+                    tabindex="-1"
+                    @change="handleFallbackUpload"
+                  />
                 </div>
                 <button
                   class="tool-btn tool-btn--success tool-btn--wide"
@@ -281,16 +303,23 @@
       <div class="photo-grid-main">
         <div class="header">
           <div class="photo-input-wrapper" ref="photoInputWrapperRef">
-            <label class="photo-input-label">
+            <button
+              type="button"
+              class="photo-input-label"
+              @click="chooseHeaderFiles"
+            >
               <span class="photo-input-label__text">Choose Files</span>
-              <input
-                class="photo-input-native"
-                type="file"
-                multiple
-                accept="image/*,.heic,.heif,.avif"
-                @change="$emit('upload', $event)"
-              />
-            </label>
+            </button>
+            <input
+              ref="headerFileInputRef"
+              class="photo-input-native photo-input-native--hidden"
+              type="file"
+              multiple
+              accept="image/*,.heic,.heif,.avif"
+              aria-hidden="true"
+              tabindex="-1"
+              @change="handleFallbackUpload"
+            />
             <p class="photo-input-hint">Photos are deleted after 24 hours</p>
           </div>
           <div
@@ -386,6 +415,13 @@ import {
   nextTick,
 } from "vue";
 import { useExportSettings } from "../composables/useExportSettings";
+import { useExportDestination } from "../composables/useExportDestination";
+import type { ExportDestination } from "../types/export";
+import type { PickedImportFiles } from "../types/import";
+import {
+  canUseOpenFilePicker,
+  pickImageFilesWithHandles,
+} from "../utils/fileSystemAccess";
 import { useTouchCapability } from "../composables/useTouchCapability";
 import { usePinchZoom } from "../composables/usePinchZoom";
 import { useVirtualScroll } from "../composables/useVirtualScroll";
@@ -452,9 +488,13 @@ const addedActivityVisible = ref(false);
 const deletedActivityVisible = ref(false);
 
 const { stripExifOnExport } = useExportSettings();
+const { exportDestination } = useExportDestination();
+
+const headerFileInputRef = ref<HTMLInputElement | null>(null);
+const panelFileInputRef = ref<HTMLInputElement | null>(null);
 
 const emit = defineEmits<{
-  (e: "upload", event: Event): void;
+  (e: "upload-picked", payload: PickedImportFiles): void;
   (e: "flip", index: number, direction: "horizontal" | "vertical"): void;
   (e: "crop", index: number): void;
   (e: "download", index: number): void;
@@ -697,9 +737,32 @@ const isSelected = (index: number): boolean =>
 const isIdentityMiss = (photo: Photo): boolean =>
   !!photo.id && !!props.identityMissPhotoIds?.has(photo.id);
 
-const handleFloatingUpload = (event: Event) => {
-  emit("upload", event);
+const handleFallbackUpload = (event: Event) => {
+  const input = event.target as HTMLInputElement;
+  if (!input.files || input.files.length === 0) return;
+  emit("upload-picked", { files: Array.from(input.files) });
+  input.value = "";
 };
+
+async function chooseFiles(fallbackInput: HTMLInputElement | null): Promise<void> {
+  if (canUseOpenFilePicker()) {
+    try {
+      const picked = await pickImageFilesWithHandles();
+      if (!picked || picked.length === 0) return;
+      emit("upload-picked", {
+        files: picked.map((item) => item.file),
+        handles: picked.map((item) => item.handle),
+      });
+    } catch (error) {
+      console.error("[Import] File picker failed", error);
+    }
+    return;
+  }
+  fallbackInput?.click();
+}
+
+const chooseHeaderFiles = () => chooseFiles(headerFileInputRef.value);
+const choosePanelFiles = () => chooseFiles(panelFileInputRef.value);
 
 const handleToggleSelectAll = (event: Event) => {
   const target = event.target as HTMLInputElement;
@@ -2274,6 +2337,25 @@ const handlePhotoCardClick = (index: number, event: Event) => {
   font-size: 0;
 }
 
+.photo-input-native--hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+button.photo-input-label {
+  appearance: none;
+  font: inherit;
+}
+
 /* Panel Content Container */
 .tools-panel__content {
   position: relative;
@@ -2406,6 +2488,30 @@ const handlePhotoCardClick = (index: number, event: Event) => {
   background: none;
   border: none;
   padding: 0 4px;
+}
+
+.tools-panel__download-dest {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  width: 100%;
+  padding: 0 4px;
+  font-size: 0.68rem;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.tools-panel__download-dest-select {
+  width: 100%;
+  min-height: 30px;
+  padding: 4px 6px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 0.72rem;
+  cursor: pointer;
 }
 
 .post-crop-cleanup {

@@ -21,6 +21,11 @@ function safeFileName(fileName: string, fallback: string): string {
   return trimmed || fallback;
 }
 
+/** Original name with path separators stripped — used for replace fallbacks. */
+export function safeDownloadFileName(fileName: string, fallback = 'file'): string {
+  return safeFileName(fileName, fallback);
+}
+
 /** Prefix a file so two download jobs never share the same name. */
 export function stampDownloadFileName(fileName: string, stamp: string): string {
   return `${stamp}_${safeFileName(fileName, 'file')}`;

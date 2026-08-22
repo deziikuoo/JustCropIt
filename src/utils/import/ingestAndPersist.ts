@@ -38,6 +38,11 @@ export interface IngestPersistOptions {
   fromVideoSession?: boolean;
   /** Abort in-flight import; already-persisted photos are kept */
   signal?: AbortSignal;
+  /**
+   * Writable handles aligned with `rawFiles` by index (from showOpenFilePicker).
+   * Dropped together with unsupported files.
+   */
+  fileHandles?: Array<FileSystemFileHandle | undefined>;
 }
 
 export interface IngestPersistResult {
@@ -61,6 +66,8 @@ function toPhoto(result: PersistedIngestPhoto): Photo {
     thumbRevision: 0,
     flips: { horizontal: false, vertical: false },
     rotation: undefined,
+    fileHandle: result.fileHandle,
+    importOrigin: result.importOrigin ?? 'device',
   };
 }
 
@@ -133,19 +140,29 @@ async function ingestAndPersistPhotosBody(
 ): Promise<IngestPersistResult> {
   const signal = options.signal;
   const fromVideoSession = Boolean(options.fromVideoSession);
+  const importOrigin = fromVideoSession ? 'video' : 'device';
 
   let files: File[];
+  let fileHandles: Array<FileSystemFileHandle | undefined>;
   let skippedUnsupported = 0;
 
   if (fromVideoSession) {
     files = rawFiles;
+    fileHandles = rawFiles.map(() => undefined);
   } else {
     const supportedChecks = await Promise.all(
-      rawFiles.map(async (file) =>
-        (await isSupportedImportFile(file)) ? file : null
+      rawFiles.map(async (file, index) =>
+        (await isSupportedImportFile(file))
+          ? { file, handle: options.fileHandles?.[index] }
+          : null
       )
     );
-    files = supportedChecks.filter((f): f is File => f !== null);
+    const accepted = supportedChecks.filter(
+      (item): item is { file: File; handle: FileSystemFileHandle | undefined } =>
+        item !== null
+    );
+    files = accepted.map((item) => item.file);
+    fileHandles = accepted.map((item) => item.handle);
     skippedUnsupported = requestedCount - files.length;
     if (skippedUnsupported > 0) {
       logImport(`Skipped ${skippedUnsupported} unsupported file(s)`);
@@ -360,6 +377,7 @@ async function ingestAndPersistPhotosBody(
             }
           }
 
+          const fileHandle = fileHandles[fileIndex];
           const id = await saver.save({
             original: persistFile,
             current: persistFile,
@@ -368,9 +386,11 @@ async function ingestAndPersistPhotosBody(
               flips: { horizontal: false, vertical: false },
               sourceFormat,
               exifNormalized,
+              importOrigin,
               ...(thumbhash ? { thumbhash } : {}),
             },
             thumbnail: thumbnailBlob,
+            ...(fileHandle ? { fileHandle } : {}),
           });
 
           const photo = toPhoto({
@@ -386,6 +406,8 @@ async function ingestAndPersistPhotosBody(
             thumbhash,
             sourceFormat,
             exifNormalized,
+            fileHandle,
+            importOrigin,
           });
           releaseInOrder(fileIndex, photo);
           const processed = markProcessed();

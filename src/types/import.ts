@@ -61,4 +61,11 @@ export interface PersistedIngestPhoto {
   thumbhash: string | null;
   sourceFormat: ImportFormat;
   exifNormalized: boolean;
+  fileHandle?: FileSystemFileHandle;
+  importOrigin?: 'device' | 'video';
+}
+
+export interface PickedImportFiles {
+  files: File[];
+  handles?: FileSystemFileHandle[];
 }

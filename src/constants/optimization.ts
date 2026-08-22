@@ -134,6 +134,8 @@ export function getUploadIngestChunkSize(
 export const EXPORT_STRIP_JPEG_QUALITY = 0.92;
 export const EXPORT_STRIP_DEFAULT = false;
 export const EXPORT_SETTINGS_SESSION_KEY = 'justcropit-strip-exif-on-export';
+export const EXPORT_DESTINATION_SESSION_KEY = 'justcropit-export-destination';
+export const EXPORT_DESTINATION_DEFAULT: 'ask' | 'replace' | 'copy' = 'ask';
 export const EXPORT_STRIP_CHUNK_SIZE_LOW_MEMORY = 5;
 
 /**

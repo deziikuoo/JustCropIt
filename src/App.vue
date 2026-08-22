@@ -217,7 +217,7 @@
           :drag-selection-count="dragSelectionCount"
           :post-crop-cleanup="postCropCleanup"
           :is-loading-from-storage="isLoadingPhotosFromStorage"
-          @upload="handleUpload"
+          @upload-picked="handleUploadPicked"
           @flip="handleFlip"
           @crop="openCropModal"
           @download="handleDownload"
@@ -295,6 +295,16 @@
       @request-suggest="handleRequestCropSuggest"
       @cancel-suggest="cancelCropSuggestion"
     />
+    <ExportDestinationDialog
+      :show="exportDestDialog.show"
+      :title="exportDestDialog.title"
+      :message="exportDestDialog.message"
+      :detail="exportDestDialog.detail || undefined"
+      :remember="exportDestDialog.remember"
+      @update:remember="exportDestDialog.remember = $event"
+      @choose="handleExportDestChoose"
+      @cancel="closeExportDestDialog(null)"
+    />
     <!-- Debug tools (disabled)
     <PerformanceDashboard />
     <OptimizationCheckModal />
@@ -321,17 +331,28 @@ import {
 import { trackEvent } from "./utils/analytics";
 import { useCropSuggestion } from "./composables/useCropSuggestion";
 import { useExportSettings } from "./composables/useExportSettings";
+import { useExportDestination } from "./composables/useExportDestination";
 import { prepareExportFile } from "./utils/export/prepareExportBlob";
+import { tryReplaceOriginal } from "./utils/export/tryReplaceOriginal";
+import { triggerBrowserDownload } from "./utils/export/triggerBrowserDownload";
 import {
   createDownloadStamp,
+  safeDownloadFileName,
   stampDownloadFileName,
   stampDownloadZipName,
 } from "./utils/downloadFileNames";
+import { primeWritePermissions } from "./utils/fileSystemAccess";
+import ExportDestinationDialog from "./components/ExportDestinationDialog.vue";
 import {
   createStreamingZip,
   type StreamingZipWriter,
 } from "./utils/export/streamingZip";
-import type { ExportBatchStats } from "./types/export";
+import type {
+  ExportBatchStats,
+  ExportDestinationChoice,
+  PreparedExport,
+} from "./types/export";
+import type { PickedImportFiles } from "./types/import";
 import { copyPasteLogger } from "./utils/copyPasteLogger";
 import { performanceLogger } from "./utils/performanceLogger";
 import {
@@ -359,6 +380,7 @@ import {
   BatchObjectCropCommand,
 } from "./utils/undoRedo";
 import type { Photo } from "./types/photo";
+import { isDeviceImportedPhoto } from "./types/photo";
 import type { CropTarget, DetectedFace } from "./types/detection";
 import type {
   BatchCropMode,
@@ -408,6 +430,97 @@ interface CopiedSettings {
 
 const photos = ref<Photo[]>([]);
 const { settings: exportSettings } = useExportSettings();
+const { exportDestination } = useExportDestination();
+
+const exportDestDialog = ref({
+  show: false,
+  title: "",
+  message: "",
+  detail: "",
+  remember: false,
+});
+let exportDestResolve: ((value: ExportDestinationChoice | null) => void) | null =
+  null;
+
+function closeExportDestDialog(value: ExportDestinationChoice | null): void {
+  exportDestDialog.value = { ...exportDestDialog.value, show: false };
+  const resolve = exportDestResolve;
+  exportDestResolve = null;
+  resolve?.(value);
+}
+
+function handleExportDestChoose(choice: ExportDestinationChoice): void {
+  if (exportDestDialog.value.remember) {
+    exportDestination.value = choice;
+  }
+  closeExportDestDialog(choice);
+}
+
+async function resolveExportDestination(
+  targetPhotos: Photo[]
+): Promise<ExportDestinationChoice | null> {
+  const devicePhotos = targetPhotos.filter(isDeviceImportedPhoto);
+  if (devicePhotos.length === 0) return "copy";
+
+  const pref = exportDestination.value;
+  if (pref !== "ask") {
+    if (pref === "replace") {
+      await primeWritePermissions(devicePhotos.map((photo) => photo.fileHandle));
+    }
+    return pref;
+  }
+
+  const canOverwriteAny = devicePhotos.some((photo) => !!photo.fileHandle);
+  const count = targetPhotos.length;
+  exportDestDialog.value = {
+    show: true,
+    title: count > 1 ? "Save cropped photos" : "Save cropped photo",
+    message: "Replace the original files on your device, or download copies?",
+    detail: canOverwriteAny
+      ? ""
+      : "This browser cannot overwrite files in Screenshots. Replace will save using the original names, usually in Downloads. Delete the originals yourself if you want only one file.",
+    remember: false,
+  };
+
+  const choice = await new Promise<ExportDestinationChoice | null>((resolve) => {
+    exportDestResolve = resolve;
+  });
+
+  if (choice === "replace") {
+    await primeWritePermissions(devicePhotos.map((photo) => photo.fileHandle));
+  }
+  return choice;
+}
+
+function notifyReplaceResult(replaced: number, copies: number): void {
+  if (replaced === 0 && copies === 0) return;
+  if (copies === 0) {
+    showAlert(
+      "info",
+      "Saved",
+      `Replaced ${replaced} original${replaced === 1 ? "" : "s"}.`,
+      5000
+    );
+    return;
+  }
+  if (replaced === 0) {
+    showAlert(
+      "warning",
+      "Saved copies",
+      `Saved ${copies} ${copies === 1 ? "copy" : "copies"} to Downloads — this browser cannot overwrite the original files.`,
+      7000
+    );
+    return;
+  }
+  showAlert(
+    "info",
+    "Saved",
+    `Replaced ${replaced} original${replaced === 1 ? "" : "s"}. Saved ${copies} ${
+      copies === 1 ? "copy" : "copies"
+    } to Downloads — this browser cannot overwrite those files.`,
+    7000
+  );
+}
 const selectedPhotoSize = ref(2);
 const newPhotosCount = ref(0);
 const deletedPhotosCount = ref(0);
@@ -783,14 +896,14 @@ const alert = ref<{
   autoDismiss: 0,
 });
 
-const showAlert = (
+function showAlert(
   type: "info" | "warning" | "error",
   title: string,
   message: string,
   autoDismiss = 0
-) => {
+) {
   alert.value = { show: true, type, title, message, autoDismiss };
-};
+}
 
 const handleFeedbackSubmitted = () => {
   showAlert(
@@ -995,6 +1108,8 @@ const loadPhotosFromStorage = async () => {
         flips: stored.metadata.flips,
         crop: stored.metadata.crop,
         rotation: stored.metadata.rotation,
+        fileHandle: stored.fileHandle,
+        importOrigin: stored.metadata.importOrigin ?? "device",
       });
     }
 
@@ -1017,11 +1132,10 @@ const loadPhotosFromStorage = async () => {
   }
 };
 
-const handleUpload = async (event: Event) => {
-  const input = event.target as HTMLInputElement;
-  if (!input.files) return;
+const handleUploadPicked = async (payload: PickedImportFiles) => {
+  const files = payload.files;
+  if (files.length === 0) return;
 
-  const files = Array.from(input.files);
   importAbortController = new AbortController();
   importCancelling.value = false;
   importProgress.value = {
@@ -1035,6 +1149,7 @@ const handleUpload = async (event: Event) => {
     const result = await ingestAndPersistPhotos(files, {
       operationIdPrefix: "upload",
       signal: importAbortController.signal,
+      fileHandles: payload.handles,
       onError: (title, message) => {
         console.error(`[Import][UI] ${title}: ${message}`);
         showAlert("error", title, message, 5000);
@@ -1087,7 +1202,6 @@ const handleUpload = async (event: Event) => {
     throw error;
   } finally {
     clearImportUiState();
-    input.value = "";
     scheduleThumbnailBackfill(photos, blobToFile);
   }
 };
@@ -2067,6 +2181,12 @@ const handleBatchDownload = async () => {
     return;
   }
 
+  const targetPhotos = indices
+    .map((index) => photos.value[index])
+    .filter((photo): photo is Photo => !!photo);
+  const destination = await resolveExportDestination(targetPhotos);
+  if (!destination) return;
+
   const operationId = `batch-download-${Date.now()}`;
   performanceLogger.startMeasurement(operationId);
 
@@ -2080,12 +2200,13 @@ const handleBatchDownload = async () => {
   beginBatchEditProgress("Preparing download", indices.length);
 
   try {
-    const zip = createStreamingZip();
     const chunkSize = getExportStripChunkSize();
     const settings = exportSettings();
     const stamp = createDownloadStamp();
     let completed = 0;
     const signal = batchEditAbortController?.signal;
+    const preparedEntries: Array<{ photo: Photo; prepared: PreparedExport }> =
+      [];
 
     for (let i = 0; i < indices.length; i += chunkSize) {
       if (isBatchAborted(signal)) break;
@@ -2100,29 +2221,63 @@ const handleBatchDownload = async () => {
           if (isBatchAborted(signal)) return null;
           completed += 1;
           updateBatchEditProgress(completed, indices.length);
-          return prepared;
+          return { photo, prepared };
         })
       );
 
-      for (const prepared of results) {
-        if (!prepared) continue;
-        if (prepared.path === 'passthrough') batchStats.passThroughCount++;
-        else if (prepared.path === 'fast-path') batchStats.fastPathCount++;
+      for (const entry of results) {
+        if (!entry) continue;
+        if (entry.prepared.path === "passthrough") batchStats.passThroughCount++;
+        else if (entry.prepared.path === "fast-path") batchStats.fastPathCount++;
         else batchStats.slowPathCount++;
-        if (prepared.workerUsed) batchStats.workerUsed = true;
-
-        zip.add(stampDownloadFileName(prepared.fileName, stamp), prepared.buffer);
+        if (entry.prepared.workerUsed) batchStats.workerUsed = true;
+        preparedEntries.push(entry);
       }
     }
 
-    if (isBatchAborted(signal)) {
-      // Still offer whatever was prepared
-      if (completed > 0) {
-        await downloadZip(
-          zip,
-          stampDownloadZipName(`photos-${completed}-files.zip`, stamp)
+    const zip = createStreamingZip();
+    if (destination === "copy") {
+      for (const entry of preparedEntries) {
+        zip.add(
+          stampDownloadFileName(entry.prepared.fileName, stamp),
+          entry.prepared.buffer
         );
       }
+    } else {
+      const leftovers: PreparedExport[] = [];
+      let replaced = 0;
+      for (const entry of preparedEntries) {
+        if (isBatchAborted(signal)) break;
+        const didReplace = await tryReplaceOriginal(entry.photo, entry.prepared);
+        if (didReplace) {
+          replaced += 1;
+        } else {
+          leftovers.push(entry.prepared);
+        }
+      }
+
+      if (leftovers.length === 1) {
+        const leftover = leftovers[0];
+        triggerBrowserDownload(
+          new Blob([leftover.buffer], { type: leftover.mimeType }),
+          safeDownloadFileName(leftover.fileName)
+        );
+      } else if (leftovers.length > 1) {
+        for (const leftover of leftovers) {
+          zip.add(safeDownloadFileName(leftover.fileName), leftover.buffer);
+        }
+      }
+
+      notifyReplaceResult(replaced, leftovers.length);
+
+      if (leftovers.length <= 1) {
+        trackEvent("download");
+        return;
+      }
+    }
+
+    if (zip.fileCount === 0) {
+      trackEvent("download");
       return;
     }
 
@@ -2133,14 +2288,15 @@ const handleBatchDownload = async () => {
 
     await downloadZip(
       zip,
-      stampDownloadZipName(`photos-${indices.length}-files.zip`, stamp)
+      stampDownloadZipName(`photos-${zip.fileCount}-files.zip`, stamp)
     );
     trackEvent("download");
   } catch (error) {
     console.error("Error creating ZIP file:", error);
     if (!isBatchAborted(batchEditAbortController?.signal)) {
+      const stamp = createDownloadStamp();
       for (const index of indices) {
-        await handleDownload(index);
+        await exportPhotoAtIndex(index, destination, stamp);
         await new Promise((resolve) => setTimeout(resolve, 150));
       }
     }
@@ -2296,24 +2452,42 @@ const handleBatchDelete = async () => {
   }
 };
 
-const handleDownload = async (index: number) => {
+async function exportPhotoAtIndex(
+  index: number,
+  destination: ExportDestinationChoice,
+  stamp: string
+): Promise<"replaced" | "copy"> {
   const photo = photos.value[index];
   const prepared = await prepareExportFile(photo, exportSettings());
-
   const blob = new Blob([prepared.buffer], { type: prepared.mimeType });
-  const url = URL.createObjectURL(blob);
-  try {
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = stampDownloadFileName(
-      prepared.fileName,
-      createDownloadStamp()
-    );
-    a.click();
-    trackEvent("download");
-  } finally {
-    URL.revokeObjectURL(url);
+
+  if (destination === "replace" && isDeviceImportedPhoto(photo)) {
+    const replaced = await tryReplaceOriginal(photo, prepared);
+    if (replaced) return "replaced";
+    triggerBrowserDownload(blob, safeDownloadFileName(prepared.fileName));
+    return "copy";
   }
+
+  triggerBrowserDownload(blob, stampDownloadFileName(prepared.fileName, stamp));
+  return "copy";
+}
+
+const handleDownload = async (index: number) => {
+  const photo = photos.value[index];
+  if (!photo) return;
+
+  const destination = await resolveExportDestination([photo]);
+  if (!destination) return;
+
+  const result = await exportPhotoAtIndex(
+    index,
+    destination,
+    createDownloadStamp()
+  );
+  if (destination === "replace") {
+    notifyReplaceResult(result === "replaced" ? 1 : 0, result === "copy" ? 1 : 0);
+  }
+  trackEvent("download");
 };
 
 const handleRevert = async (index: number) => {

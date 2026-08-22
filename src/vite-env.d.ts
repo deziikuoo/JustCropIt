@@ -1,6 +1,46 @@
 /// <reference types="vite/client" />
 /// <reference types="dom-webcodecs" />
 
+type WellKnownDirectory =
+  | 'desktop'
+  | 'documents'
+  | 'downloads'
+  | 'music'
+  | 'pictures'
+  | 'videos';
+
+interface OpenFilePickerAcceptType {
+  description?: string;
+  accept: Record<string, string[]>;
+}
+
+interface OpenFilePickerOptions {
+  multiple?: boolean;
+  excludeAcceptAllOption?: boolean;
+  types?: OpenFilePickerAcceptType[];
+  id?: string;
+  startIn?: WellKnownDirectory | FileSystemHandle;
+}
+
+interface FileSystemHandlePermissionDescriptor {
+  mode?: 'read' | 'readwrite';
+}
+
+interface FileSystemHandle {
+  queryPermission(
+    descriptor?: FileSystemHandlePermissionDescriptor
+  ): Promise<PermissionState>;
+  requestPermission(
+    descriptor?: FileSystemHandlePermissionDescriptor
+  ): Promise<PermissionState>;
+}
+
+interface Window {
+  showOpenFilePicker?: (
+    options?: OpenFilePickerOptions
+  ) => Promise<FileSystemFileHandle[]>;
+}
+
 interface ImportMetaEnv {
   readonly VITE_UMAMI_WEBSITE_ID?: string;
   readonly VITE_UMAMI_DOMAINS?: string;
