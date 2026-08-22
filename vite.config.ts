@@ -44,8 +44,8 @@ export default defineConfig(({ mode }) => ({
   server: {
     open: false, // Disable Vite's default browser; open Vivaldi instead
     host: true, // listen on all addresses, including network
-    port: 5173, // explicit port (optional, this is the default)
-    strictPort: true, // Exit if port 5173 is already in use (prevents multiple instances)
+    port: 5000,
+    strictPort: true, // Exit if port 5000 is already in use (prevents multiple instances)
     headers: {
       // COOP/COEP enable SharedArrayBuffer if we switch to @ffmpeg/core-mt later
       "Cross-Origin-Opener-Policy": "same-origin",
@@ -92,7 +92,7 @@ function openVivaldiOnStart() {
           server.config.server.port ??
           (typeof addr === "object" && addr !== null && "port" in addr
             ? (addr as { port: number }).port
-            : 5173);
+            : 5000);
         const url = `http://localhost:${port}/`;
         execFile(vivaldiPath, [url]);
       });

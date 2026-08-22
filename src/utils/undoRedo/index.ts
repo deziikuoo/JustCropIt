@@ -20,3 +20,4 @@ export { BatchCommand } from "./commands/BatchCommand";
 export { BatchFlipCommand } from "./commands/BatchFlipCommand";
 export { BatchCropCommand } from "./commands/BatchCropCommand";
 export { BatchFollowSubjectCommand } from "./commands/BatchFollowSubjectCommand";
+export { BatchTrimBarsCommand } from "./commands/BatchTrimBarsCommand";

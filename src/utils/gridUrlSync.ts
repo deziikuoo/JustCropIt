@@ -13,6 +13,10 @@ export function syncGridUrlsForVisibility(
   visibleIndices: ReadonlySet<number>,
   previousVisible: ReadonlySet<number>
 ): void {
+  if (visibleIndices.size === 0 && photos.length > 0) {
+    return;
+  }
+
   for (const index of previousVisible) {
     if (visibleIndices.has(index)) continue;
     const photo = photos[index];

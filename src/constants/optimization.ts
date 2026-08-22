@@ -234,8 +234,31 @@ export const IDENTITY_EMBEDDER_MODEL_ID = 'facex_nano_arcface';
 export const IDENTITY_EMBEDDING_DIM = 512;
 export const DETECTION_BATCH_DOWNSCALE_CONCURRENCY = 1;
 export const BATCH_CROP_MODE_STORAGE_KEY = 'justcropit.batchCropMode';
+/** Max RGB channel still treated as letterbox/pillarbox black (ffmpeg cropdetect). */
+export const LETTERBOX_BLACK_LIMIT = 24;
+/** Share of pixels in an edge line that must be near-black to count as a bar. */
+export const LETTERBOX_COVERAGE = 0.992;
+/** Refuse a trim that would leave a tiny leftover frame. */
+export const LETTERBOX_MIN_CONTENT_PX = 8;
+/** Decode/scan this many edge rows or columns per canvas read. */
+export const LETTERBOX_STRIP_PX = 48;
+/** iOS home-indicator pill is a short centered streak in the bottom safe area. */
+export const LETTERBOX_HOME_MIN_WIDTH_RATIO = 0.08;
+export const LETTERBOX_HOME_MAX_WIDTH_RATIO = 0.5;
+export const LETTERBOX_HOME_CENTER_SLACK_RATIO = 0.12;
+export const LETTERBOX_HOME_MIN_FILL = 0.35;
+export const LETTERBOX_HOME_FROM_BOTTOM_RATIO = 0.06;
+export const LETTERBOX_HOME_FROM_BOTTOM_MIN_PX = 48;
+export const LETTERBOX_HOME_BRIGHT_MIN = 140;
+export const LETTERBOX_HOME_CHROMA_MAX = 48;
+export const LETTERBOX_DETECT_CONCURRENCY_MAX = 3;
 /** Dev-only per-frame identity match logs. */
 export const IDENTITY_DEBUG_LOGS = import.meta.env.DEV;
+
+export function getLetterboxDetectConcurrency(): number {
+  const cores = navigator.hardwareConcurrency || 4;
+  return Math.max(1, Math.min(LETTERBOX_DETECT_CONCURRENCY_MAX, cores - 1));
+}
 
 export function getDetectionConcurrency(): number {
   const nav = navigator as NavigatorWithMemory;

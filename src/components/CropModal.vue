@@ -3,13 +3,13 @@
     <div class="modal-content" @click.stop>
       <div class="cropper-wrapper" ref="cropperWrapper" :class="{ dragging: isDragging }">
         <div
-          v-if="suggestionLoading"
+          v-if="suggestionLoading || trimLoading"
           class="suggestion-overlay"
           role="status"
           aria-live="polite"
         >
           <i class="fas fa-spinner fa-spin" aria-hidden="true"></i>
-          <span>Finding target...</span>
+          <span>{{ trimLoading ? "Finding black bars..." : "Finding target..." }}</span>
         </div>
         <Cropper
           ref="cropper"
@@ -72,12 +72,28 @@
             <i class="fas fa-rotate-right" aria-hidden="true"></i>
           </button>
           <button @click="reset">Reset</button>
+          <button
+            type="button"
+            :disabled="trimLoading || suggestionLoading"
+            title="Remove letterbox and pillarbox padding"
+            @click="trimBlackBars"
+          >
+            Trim bars
+          </button>
           <p
             v-if="suggestionError"
             class="suggestion-message suggestion-message--error"
             role="status"
           >
             {{ suggestionError }}
+          </p>
+          <p
+            v-else-if="trimMessage"
+            class="suggestion-message"
+            :class="{ 'suggestion-message--error': trimFailed }"
+            role="status"
+          >
+            {{ trimMessage }}
           </p>
           <p
             v-else-if="suggestionNoSubject"
@@ -190,6 +206,7 @@ import type {
   BatchCropRecipe,
   IdentityReferenceFace,
 } from "../types/batchCrop";
+import { detectLetterboxFromUrl } from "../utils/letterboxDetect";
 
 // Type alias to extend Cropper instance with custom methods and properties
 type CropperInstance = InstanceType<typeof Cropper> & {
@@ -285,6 +302,9 @@ const cropTargetOptions: { value: CropTarget; label: string; icon: string }[] = 
   { value: 'head', label: 'Head', icon: 'fas fa-circle-user' },
 ];
 const currentImageSrc = ref<string>(imageSrc);
+const trimLoading = ref(false);
+const trimMessage = ref<string | null>(null);
+const trimFailed = ref(false);
 const isDragging = ref(false); // Track if stencil is being dragged (for iOS-style overlay)
 const isRadialDragging = ref(false);
 
@@ -513,7 +533,50 @@ function onRadialKeydown(event: KeyboardEvent): void {
 function selectCropTarget(target: CropTarget) {
   selectedCropTarget.value = target;
   selectedAspectRatio.value = null;
+  trimMessage.value = null;
+  trimFailed.value = false;
   emit('request-suggest', target);
+}
+
+function clearTrimStatus() {
+  trimMessage.value = null;
+  trimFailed.value = false;
+  trimLoading.value = false;
+}
+
+async function trimBlackBars() {
+  if (!currentImageSrc.value || trimLoading.value) return;
+  trimLoading.value = true;
+  trimMessage.value = null;
+  trimFailed.value = false;
+
+  try {
+    const bounds = await detectLetterboxFromUrl(currentImageSrc.value);
+    if (!bounds) {
+      trimMessage.value = "No black bars detected — nothing to trim.";
+      return;
+    }
+    emit("cancel-suggest");
+    selectedCropTarget.value = null;
+    selectedAspectRatio.value = null;
+    await nextTick();
+    applyCoordinatesToCropper(
+      {
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height,
+      },
+      false
+    );
+    trimMessage.value = "Black bars removed from the crop box.";
+  } catch (error) {
+    console.error("Trim black bars failed:", error);
+    trimMessage.value = "Could not scan this image for black bars.";
+    trimFailed.value = true;
+  } finally {
+    trimLoading.value = false;
+  }
 }
 
 // Watch for changes in imageSrc and initialRotation props
@@ -522,6 +585,7 @@ watch([() => imageSrc, () => initialRotation], ([newSrc, newRotation]) => {
   applySplit(newRotation || 0);
   appliedRotation = currentRotation.value;
   selectedCropTarget.value = null;
+  clearTrimStatus();
 });
 
 // Helper function to apply rotation to the cropper
@@ -1035,6 +1099,7 @@ const reset = async () => {
 
   selectedAspectRatio.value = null;
   selectedCropTarget.value = null;
+  clearTrimStatus();
   applySplit(initialRotation || 0);
   await nextTick();
 
@@ -1335,6 +1400,11 @@ const reset = async () => {
 
 .control-icon-btn i {
   font-size: 0.95rem;
+}
+
+.controls-row button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .actions {

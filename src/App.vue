@@ -315,6 +315,7 @@ import {
   BatchFlipCommand,
   BatchCropCommand,
   BatchFollowSubjectCommand,
+  BatchTrimBarsCommand,
 } from "./utils/undoRedo";
 import type { Photo } from "./types/photo";
 import type { CropTarget, DetectedFace } from "./types/detection";
@@ -1345,13 +1346,19 @@ const handleBatchCropImageSelect = async (payload: BatchCropSelectPayload) => {
   const { mode, templateIndex, referencePhotoIndices } = payload;
   pendingBatchCropMode.value = mode;
   clearIdentityGallery();
+  showBatchCropSelector.value = false;
+
+  if (mode === "trim-bars") {
+    await handleBatchTrimBars();
+    return;
+  }
+
   cropIndex.value = templateIndex;
   if (cropImageSrcURL) {
     URL.revokeObjectURL(cropImageSrcURL);
   }
   cropImageSrcURL = URL.createObjectURL(photos.value[cropIndex.value].original);
   cropImageSrc.value = cropImageSrcURL;
-  showBatchCropSelector.value = false;
 
   if (mode !== "same-box") {
     void preloadDetectionRuntime();
@@ -1460,6 +1467,93 @@ const handleBatchCropNext = async (
     const { wasCancelled, snapshot } = endBatchEditProgress();
     if (wasCancelled && snapshot) {
       notifyBatchCancelled("Cropping", snapshot.current, snapshot.total);
+      clearPostCropCleanup();
+    }
+    await performanceLogger.endMeasurement(
+      operationId,
+      "crop",
+      savedBatchCropIndices.length,
+      workerUsed
+    );
+    batchCropIndices.value = [];
+    pendingBatchCropMode.value = "same-box";
+    clearIdentityGallery();
+  }
+};
+
+const handleBatchTrimBars = async () => {
+  const savedBatchCropIndices = [...batchCropIndices.value];
+  if (savedBatchCropIndices.length === 0) {
+    pendingBatchCropMode.value = "same-box";
+    return;
+  }
+
+  const operationId = `batch-trim-bars-${Date.now()}`;
+  performanceLogger.startMeasurement(operationId);
+  const workerUsed = imageWorkerPool.shouldUseWorkers(
+    savedBatchCropIndices.length
+  );
+
+  beginBatchEditProgress("Finding black bars", savedBatchCropIndices.length);
+
+  try {
+    const command = new BatchTrimBarsCommand(
+      savedBatchCropIndices,
+      photos,
+      updatePhoto,
+      updatePhotosBatch,
+      applyFlipsRotationAndCrop,
+      (current, progressTotal) =>
+        updateBatchEditProgress(current, progressTotal),
+      (label) => {
+        if (batchEditProgress.value) {
+          batchEditProgress.value = {
+            ...batchEditProgress.value,
+            label,
+          };
+        }
+      },
+      batchEditAbortController?.signal
+    );
+    await command.execute();
+    trackEvent("batch_crop_trim_bars");
+    const result = command.result;
+    if (result && !result.cancelled) {
+      activatePostCropCleanup(
+        savedBatchCropIndices,
+        result.skippedPhotoIds ?? []
+      );
+      if (result.croppedCount === 0) {
+        showAlert(
+          "info",
+          "No black bars found",
+          "None of the selected photos had letterbox or pillarbox padding to remove.",
+          5000
+        );
+      } else if (result.skippedCount > 0) {
+        showAlert(
+          "info",
+          "Black bars trimmed",
+          `Trimmed ${result.croppedCount} of ${savedBatchCropIndices.length}. ${result.skippedCount} had no black bars.`,
+          6000
+        );
+      }
+    }
+  } catch (error) {
+    console.error("Failed to trim black bars:", error);
+    showAlert(
+      "error",
+      "Trim Failed",
+      "Failed to remove black bars from the selected photos. Please try again."
+    );
+  } finally {
+    const { wasCancelled, snapshot } = endBatchEditProgress();
+    if (wasCancelled && snapshot) {
+      notifyBatchCancelled(
+        snapshot.label || "Finding black bars",
+        snapshot.current,
+        snapshot.total
+      );
       clearPostCropCleanup();
     }
     await performanceLogger.endMeasurement(

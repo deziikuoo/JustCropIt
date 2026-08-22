@@ -79,7 +79,7 @@
           :key="index"
           class="thumbnail-item"
           :class="thumbnailItemClass(index)"
-          @click="selectImage(index)"
+          @click="isTrimBarsMode ? undefined : selectImage(index)"
         >
           <div class="thumbnail-wrapper">
             <img
@@ -161,12 +161,17 @@ const identitySupportedByBrowser =
 /** Optimistic until a real (non-transient) warmup failure while the modal is open. */
 const identityAvailable = ref(identitySupportedByBrowser);
 const identityLoading = ref(false);
+const storedBatchMode = loadBatchCropMode();
 const selectedMode = ref<BatchCropMode>(
-  detectionSupported ? loadBatchCropMode() : "same-box"
+  !detectionSupported &&
+    (storedBatchMode === "follow-subject" || storedBatchMode === "this-person")
+    ? "same-box"
+    : storedBatchMode
 );
 
 const maxRefs = IDENTITY_REF_GALLERY_MAX;
 const isThisPersonMode = computed(() => selectedMode.value === "this-person");
+const isTrimBarsMode = computed(() => selectedMode.value === "trim-bars");
 
 const modeOptions = computed(() => [
   { value: "same-box" as const, label: "Same crop box", needsDetection: false },
@@ -192,11 +197,19 @@ const modeOptions = computed(() => [
             ? "Face matching failed to load — click to retry"
             : "Lock onto the person across frames",
   },
+  {
+    value: "trim-bars" as const,
+    label: "Trim black bars",
+    needsDetection: false,
+    disabledReason: "Remove letterbox and pillarbox padding from each photo",
+  },
 ]);
 
-const modalTitle = computed(() =>
-  isThisPersonMode.value ? "Select Reference Images" : "Select Template Image"
-);
+const modalTitle = computed(() => {
+  if (isThisPersonMode.value) return "Select Reference Images";
+  if (isTrimBarsMode.value) return "Trim Black Bars";
+  return "Select Template Image";
+});
 
 const modeDescription = computed(() => {
   const count = props.imageIndices.length;
@@ -206,14 +219,22 @@ const modeDescription = computed(() => {
   if (selectedMode.value === "this-person") {
     return `Auto-picks ${autoReferenceSampleCount(count)} evenly spaced frames (white). Click more frames to add manual refs (yellow), then continue to set the crop target.`;
   }
+  if (selectedMode.value === "trim-bars") {
+    return `Each of the ${count} selected photos will be scanned for letterbox or pillarbox padding — the black bands editors add when a photo is too small for the frame — and cropped to the real picture.`;
+  }
   return `Choose an image to use as the template for batch cropping. The crop box from this image will be applied to all ${count} selected images.`;
 });
 
-const confirmLabel = computed(() =>
-  isThisPersonMode.value ? "Continue" : "Use This Image"
-);
+const confirmLabel = computed(() => {
+  if (isThisPersonMode.value) return "Continue";
+  if (isTrimBarsMode.value) return "Trim Black Bars";
+  return "Use This Image";
+});
 
 const canConfirm = computed(() => {
+  if (isTrimBarsMode.value) {
+    return props.imageIndices.length > 0;
+  }
   if (isThisPersonMode.value) {
     return referenceEntries.value.length >= 1;
   }
@@ -243,6 +264,7 @@ function thumbnailItemClass(photoIndex: number): Record<string, boolean> {
     selected: origin != null,
     "selected--auto": origin === "auto",
     "selected--manual": origin === "manual",
+    "thumbnail-item--static": isTrimBarsMode.value,
   };
 }
 
@@ -268,7 +290,7 @@ function clearReferences() {
 }
 
 async function preloadForMode(mode: BatchCropMode) {
-  if (mode === "same-box") return;
+  if (mode === "same-box" || mode === "trim-bars") return;
   void preloadDetectionRuntime();
   if (mode !== "this-person") return;
 
@@ -322,7 +344,7 @@ watch(
       } else {
         clearReferences();
       }
-      if (selectedMode.value !== "same-box") {
+      if (selectedMode.value !== "same-box" && selectedMode.value !== "trim-bars") {
         void preloadForMode(selectedMode.value);
       }
     }
@@ -382,6 +404,13 @@ const removeReference = (photoIndex: number) => {
 
 const confirmSelection = () => {
   saveBatchCropMode(selectedMode.value);
+  if (isTrimBarsMode.value) {
+    emit("select", {
+      mode: selectedMode.value,
+      templateIndex: props.imageIndices[0] ?? 0,
+    });
+    return;
+  }
   if (isThisPersonMode.value) {
     if (referenceEntries.value.length < 1) return;
     const referencePhotoIndices = referenceEntries.value.map(
@@ -610,6 +639,14 @@ onUnmounted(() => {
 
 .thumbnail-item:hover {
   transform: scale(1.05);
+}
+
+.thumbnail-item--static {
+  cursor: default;
+}
+
+.thumbnail-item--static:hover {
+  transform: none;
 }
 
 .thumbnail-item.selected {

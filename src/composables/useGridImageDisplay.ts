@@ -181,14 +181,12 @@ export function useGridImageDisplay(options: UseGridImageDisplayOptions): {
     handlePhotoDisplayChanges();
 
     const visible = options.visibleIndices.value;
-    const nextDisplayUrls = new Map<number, string>();
 
-    for (const [index, url] of displayUrls.value) {
-      if (visible.has(index)) {
-        nextDisplayUrls.set(index, url);
+    for (const index of [...displayUrls.value.keys()]) {
+      if (!options.photos.value[index]) {
+        displayUrls.value.delete(index);
       }
     }
-    displayUrls.value = nextDisplayUrls;
 
     for (const index of visible) {
       const photo = options.photos.value[index];

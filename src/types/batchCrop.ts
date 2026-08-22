@@ -1,6 +1,6 @@
 import type { BoundingBox, CropTarget, DetectedFace } from './detection';
 
-export type BatchCropMode = 'same-box' | 'follow-subject' | 'this-person';
+export type BatchCropMode = 'same-box' | 'follow-subject' | 'this-person' | 'trim-bars';
 
 export type IdentityReferenceOrigin = 'auto' | 'manual';
 
@@ -29,6 +29,13 @@ export interface BatchCropRecipe {
   rotation: number;
   /** Gallery of reference faces (This person). Match if any hits cosine threshold. */
   referenceFaces?: IdentityReferenceFace[];
+}
+
+export interface BatchTrimBarsResult {
+  croppedCount: number;
+  skippedCount: number;
+  skippedPhotoIds: string[];
+  cancelled: boolean;
 }
 
 export interface BatchSmartCropResult {

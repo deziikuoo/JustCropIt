@@ -120,6 +120,13 @@ export function useGridViewability(options: UseGridViewabilityOptions): {
       if (observedElements.has(index)) continue;
       observer.observe(element);
       observedElements.set(index, element);
+      rawIndices.add(index);
+    }
+
+    if (rawIndices.size === 0 && observedElements.size > 0) {
+      for (const index of observedElements.keys()) {
+        rawIndices.add(index);
+      }
     }
 
     flushThrottled();
@@ -128,15 +135,19 @@ export function useGridViewability(options: UseGridViewabilityOptions): {
   watch(
     () =>
       [options.virtualScrollEnabled.value, options.visibleRange.value] as const,
-    ([enabled, range]) => {
+    ([enabled, range], previous) => {
       if (enabled) {
         teardownIntersectionObserver();
         applyRangeIndices(range.start, range.end);
-      } else {
+        return;
+      }
+
+      const wasVirtual = previous?.[0] === true;
+      if (wasVirtual) {
         rawIndices.clear();
         applyVisibleIndices();
-        nextTick(() => syncCardObservers());
       }
+      nextTick(() => syncCardObservers());
     },
     { immediate: true, deep: true }
   );

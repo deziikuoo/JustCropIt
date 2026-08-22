@@ -1,7 +1,12 @@
 import { BATCH_CROP_MODE_STORAGE_KEY } from '../constants/optimization';
 import type { BatchCropMode } from '../types/batchCrop';
 
-const MODES: BatchCropMode[] = ['same-box', 'follow-subject', 'this-person'];
+const MODES: BatchCropMode[] = [
+  'same-box',
+  'follow-subject',
+  'this-person',
+  'trim-bars',
+];
 
 export function loadBatchCropMode(): BatchCropMode {
   try {
