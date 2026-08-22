@@ -3,7 +3,7 @@ https://deziikuoo.github.io/JustCropIt/
 
 
 **A little side project that fixed a really specific problem I kept running into.**
-
+**Mobile Compatibility is currently being developed**
 I was trying to crop a bunch of images to the exact same size and position, and every tool I tried either:
 
 - Gave me slightly different crops on each image, or
