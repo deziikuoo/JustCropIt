@@ -2769,6 +2769,7 @@ onUnmounted(() => {
 .app-container {
   box-sizing: border-box;
   position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   width: 100%;

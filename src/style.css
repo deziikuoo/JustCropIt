@@ -77,6 +77,7 @@ body.drag-selecting * {
   width: 100%;
   min-height: 100vh;
   max-width: 100%;
+  background: transparent;
 }
 
 /* Global button styles */

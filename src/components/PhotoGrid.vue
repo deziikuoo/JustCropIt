@@ -212,54 +212,6 @@
                     </span>
                   </span>
                 </label>
-                <div
-                  class="batch-edit-panel__file"
-                  :class="{
-                    'is-active': floatingFileInputVisible,
-                    'fade-out': floatingFileInputFading,
-                  }"
-                >
-                  <button
-                    type="button"
-                    class="tool-btn tool-btn--wide"
-                    aria-label="Choose files"
-                    @click="choosePanelFiles"
-                  >
-                    <i class="fas fa-folder-open" aria-hidden="true"></i>
-                    <span class="tool-btn__label">Choose Files</span>
-                  </button>
-                  <input
-                    ref="panelFileInputRef"
-                    class="photo-input-native photo-input-native--hidden"
-                    type="file"
-                    multiple
-                    accept="image/*,.heic,.heif,.avif"
-                    aria-hidden="true"
-                    tabindex="-1"
-                    @change="handleFallbackUpload"
-                  />
-                </div>
-                <button
-                  class="tool-btn tool-btn--success tool-btn--wide"
-                  :class="{ 'tool-btn--disabled': !hasSelection }"
-                  :disabled="!hasSelection"
-                  @click="$emit('batch-download')"
-                  title="Download Selected (D)"
-                >
-                  <i class="fas fa-download"></i>
-                  <span class="tool-btn__label">Download</span>
-                </button>
-                <button
-                  v-if="showBatchDeleteButton"
-                  class="tool-btn tool-btn--danger tool-btn--wide"
-                  :class="{ 'tool-btn--disabled': !hasSelection }"
-                  :disabled="!hasSelection"
-                  @click="$emit('batch-delete')"
-                  title="Delete Selected (Del)"
-                >
-                  <i class="fas fa-trash-can"></i>
-                  <span class="tool-btn__label">Delete</span>
-                </button>
               </div>
             </section>
 
@@ -294,6 +246,62 @@
                 </div>
               </section>
             </template>
+            </div>
+
+            <div
+              v-show="selectMode"
+              class="tools-panel__footer"
+            >
+              <div
+                class="batch-edit-panel__file"
+                :class="{
+                  'is-active': floatingFileInputVisible,
+                  'fade-out': floatingFileInputFading,
+                }"
+              >
+                <button
+                  type="button"
+                  class="tool-btn tool-btn--wide"
+                  aria-label="Choose files"
+                  @click="choosePanelFiles"
+                >
+                  <i class="fas fa-folder-open" aria-hidden="true"></i>
+                  <span class="tool-btn__label">Choose Files</span>
+                </button>
+                <input
+                  ref="panelFileInputRef"
+                  class="photo-input-native photo-input-native--hidden"
+                  type="file"
+                  multiple
+                  accept="image/*,.heic,.heif,.avif"
+                  aria-hidden="true"
+                  tabindex="-1"
+                  @change="handleFallbackUpload"
+                />
+              </div>
+              <div class="tools-panel__footer-actions">
+                <button
+                  class="tool-btn tool-btn--success tool-btn--wide"
+                  :class="{ 'tool-btn--disabled': !hasSelection }"
+                  :disabled="!hasSelection"
+                  @click="$emit('batch-download')"
+                  title="Download Selected (D)"
+                >
+                  <i class="fas fa-download"></i>
+                  <span class="tool-btn__label">Download</span>
+                </button>
+                <button
+                  v-if="showBatchDeleteButton"
+                  class="tool-btn tool-btn--danger tool-btn--wide"
+                  :class="{ 'tool-btn--disabled': !hasSelection }"
+                  :disabled="!hasSelection"
+                  @click="$emit('batch-delete')"
+                  title="Delete Selected (Del)"
+                >
+                  <i class="fas fa-trash-can"></i>
+                  <span class="tool-btn__label">Delete</span>
+                </button>
+              </div>
             </div>
 
           </div>
@@ -1997,6 +2005,7 @@ const handlePhotoCardClick = (index: number, event: Event) => {
   max-height: calc(
     100dvh - var(--batch-panel-inset) - 84px - env(safe-area-inset-bottom, 0px)
   );
+  overflow: hidden;
 }
 
 .batch-edit-panel__total {
@@ -2030,23 +2039,28 @@ const handlePhotoCardClick = (index: number, event: Event) => {
   min-height: 0;
 }
 
+.batch-edit-panel--fixed .tools-panel {
+  height: 100%;
+  max-height: 100%;
+  overflow: hidden;
+}
+
 .batch-edit-panel__file {
+  display: none;
   width: 132px;
   height: 32px;
   min-height: 32px;
   flex-shrink: 0;
   opacity: 0;
-  visibility: hidden;
   overflow: visible;
-  transition:
-    opacity 0.35s ease-out,
-    visibility 0.35s ease-out;
+  transition: opacity 0.35s ease-out;
   pointer-events: none;
 }
 
 .batch-edit-panel__file.is-active {
+  display: flex;
+  justify-content: center;
   opacity: 1;
-  visibility: visible;
   pointer-events: auto;
 }
 
@@ -2217,8 +2231,8 @@ const handlePhotoCardClick = (index: number, event: Event) => {
   }
 
   .tools-panel__content {
-    padding: 10px 8px;
-    gap: 8px;
+    padding: 10px 8px 0;
+    gap: 0;
   }
 
   .tools-section__grid {
@@ -2361,41 +2375,58 @@ button.photo-input-label {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: var(--section-gap);
-  padding: 12px 10px;
-  overflow-y: auto;
-  overflow-x: hidden;
+  gap: 0;
+  padding: 10px 10px 0;
+  overflow: hidden;
   flex: 1;
+  min-height: 0;
   opacity: 1;
   visibility: visible;
   transition:
     opacity 200ms ease,
     visibility 200ms ease;
-
-  /* Custom Scrollbar */
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
 }
 
 .tools-panel .tools-panel__content {
   padding-top: 10px;
 }
 
-.tools-panel__content::-webkit-scrollbar {
+.tools-panel__footer {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding-top: 12px;
+  padding-bottom: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.tools-panel__footer-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.tools-panel__body::-webkit-scrollbar {
   width: 5px;
 }
 
-.tools-panel__content::-webkit-scrollbar-track {
+.tools-panel__body::-webkit-scrollbar-track {
   background: transparent;
   margin: 8px 0;
 }
 
-.tools-panel__content::-webkit-scrollbar-thumb {
+.tools-panel__body::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.15);
   border-radius: 4px;
 }
 
-.tools-panel__content::-webkit-scrollbar-thumb:hover {
+.tools-panel__body::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.25);
 }
 
@@ -2443,9 +2474,9 @@ button.photo-input-label {
   display: grid;
   grid-template-columns: repeat(2, max-content);
   justify-content: center;
-  align-content: space-evenly;
+  align-content: start;
   align-items: center;
-  flex: 1;
+  flex: 0 0 auto;
   gap: 12px 14px;
 }
 
@@ -2454,22 +2485,33 @@ button.photo-input-label {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: space-evenly;
-  flex: 1;
+  justify-content: flex-start;
+  flex: 0 0 auto;
   gap: 12px;
 }
 
 .tools-panel__body {
-  flex: 1;
+  flex: 1 1 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
   gap: 18px;
+  padding-bottom: 12px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
 }
 
 .tools-panel__body > .tools-section {
-  flex: 1 1 0;
+  flex: 0 0 auto;
+  min-height: auto;
+  justify-content: flex-start;
+}
+
+.tools-panel__body > .tools-section--actions {
+  flex: 1 0 auto;
   min-height: 0;
   justify-content: center;
 }
@@ -2481,6 +2523,7 @@ button.photo-input-label {
 
 .tools-section--actions .tools-section__stack {
   align-items: center;
+  justify-content: center;
 }
 
 .tools-section--actions .tools-section__stack > .tools-panel__select-all {
@@ -2494,24 +2537,51 @@ button.photo-input-label {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 4px;
+  gap: 6px;
   width: 100%;
-  padding: 0 4px;
-  font-size: 0.68rem;
-  font-weight: 500;
-  color: rgba(255, 255, 255, 0.85);
+  padding: 0;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.5);
 }
 
 .tools-panel__download-dest-select {
+  appearance: none;
+  -webkit-appearance: none;
   width: 100%;
-  min-height: 30px;
-  padding: 4px 6px;
-  border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  background: rgba(255, 255, 255, 0.06);
-  color: rgba(255, 255, 255, 0.9);
+  min-height: 32px;
+  padding: 7px 28px 7px 10px;
+  border-radius: var(--btn-radius);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background-color: rgba(18, 18, 20, 0.96);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%23ffffff' d='M1 1.2L5 5l4-3.8'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  color: rgba(255, 255, 255, 0.92);
+  font-family: inherit;
   font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
   cursor: pointer;
+  color-scheme: dark;
+  transition: background 180ms ease, border-color 180ms ease;
+}
+
+.tools-panel__download-dest-select:hover {
+  background-color: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.tools-panel__download-dest-select:focus {
+  outline: none;
+}
+
+.tools-panel__download-dest-select option {
+  background-color: #141416;
+  color: #f3efe4;
 }
 
 .post-crop-cleanup {
