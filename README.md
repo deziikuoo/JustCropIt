@@ -12,9 +12,10 @@ I was trying to crop a bunch of images to the exact same size and position, and 
 So I built JustCropIt for myself: a way to get **pixel-perfect, repeatable crops** across multiple photos, right in the browser, with no account, no paywall, and no upload.
 
 It's still very much a work in progress, and I'm planning to add more editing features over time (filters, more batch tools, etc.).  
+**Mobile compatibility** and a **desktop app** are currently under development.  
 If you have ideas, run into bugs, or just have opinions, I'm genuinely open to feedback and critiques – this started as a tool I needed, but if it solves the same headache for you, even better.
 
-All of this runs **100% in your browser**. No downloads, no servers, no subscriptions, no credit card required.
+All of this runs **100% in your browser** today. No servers, no subscriptions, no credit card required.
 
 ## 🌟 Key Features
 
@@ -72,9 +73,14 @@ Photos and edits are stored locally using IndexedDB and OPFS where available. Th
 
 In-app panel for feedback, bug reports, and optional project support links.
 
-### 📱 **Responsive Design**
+### 🖥️ **Desktop browser first**
 
-Works on desktop, tablet, and mobile (smart batch modes that need face detection require a modern browser with the right APIs).
+Built for a desktop browser today. Smart batch modes that need face detection require a modern browser with the right APIs.
+
+### 🚧 **In development**
+
+- **Mobile compatibility** — a proper phone and tablet layout is in progress.
+- **Desktop app** — a native/installable desktop version is also underway.
 
 ### ⚡ **Zero Backend**
 
