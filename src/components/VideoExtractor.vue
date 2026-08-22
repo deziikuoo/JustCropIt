@@ -2341,9 +2341,8 @@ onUnmounted(() => {
   display: flex;
   justify-content: center;
   gap: 20px;
-  position: sticky;
-  bottom: 24px;
-  z-index: 2;
+  position: relative;
+  z-index: 1;
   padding-top: 16px;
   margin-top: 8px;
 }
