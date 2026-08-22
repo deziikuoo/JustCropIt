@@ -759,9 +759,9 @@ watch(
 );
 
 watch(leftSidebarCollapsed, () => {
-  requestAnimationFrame(updateToolsStackPosition);
+  requestAnimationFrame(updateBatchPanelPosition);
   // Column width animates over 220ms when expanding/collapsing
-  setTimeout(updateToolsStackPosition, 240);
+  setTimeout(updateBatchPanelPosition, 240);
 });
 
 // Drag-to-select state
@@ -1057,10 +1057,6 @@ const handleDragEnd = () => {
 
 const expandToolkit = () => {
   leftSidebarCollapsed.value = false;
-};
-
-const collapseToolkit = () => {
-  leftSidebarCollapsed.value = true;
 };
 
 const handleContainerDoubleClick = (event: MouseEvent) => {
