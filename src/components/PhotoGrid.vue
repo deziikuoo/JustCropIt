@@ -76,6 +76,30 @@
               </div>
 
             <div class="tools-panel__body">
+            <section
+              v-show="isPhone"
+              class="tools-section tools-section--size"
+              aria-labelledby="size-heading"
+            >
+              <h3 id="size-heading" class="tools-section__heading">
+                <i class="fas fa-table-cells"></i>
+                <span>Size</span>
+              </h3>
+              <div class="tools-panel__size-buttons">
+                <button
+                  v-for="(size, index) in photoSizes"
+                  :key="size.label"
+                  type="button"
+                  class="size-button"
+                  :class="{ active: selectedPhotoSize === index }"
+                  :title="size.label"
+                  @click="selectedPhotoSize = index"
+                >
+                  {{ size.label }}
+                </button>
+              </div>
+            </section>
+            <div class="tools-divider" v-show="isPhone"></div>
             <!-- Transform Tools Section -->
             <section
               class="tools-section"
@@ -439,7 +463,9 @@ import { useGridImageDisplay } from "../composables/useGridImageDisplay";
 import { useBatchedGridMount } from "../composables/useBatchedGridMount";
 import { useGridEntranceAnimation } from "../composables/useGridEntranceAnimation";
 import { useGridIdlePrefetch } from "../composables/useGridIdlePrefetch";
-import { useMediaQuery, useThrottleFn } from "@vueuse/core";
+import { useThrottleFn } from "@vueuse/core";
+import { useLayoutMode } from "../composables/useLayoutMode";
+import { LAYOUT_WIDE_MIN_PX } from "../constants/layout";
 import { thumbhashToDataUrl } from "../utils/thumbhashDecode";
 import PhotoCard from "./PhotoCard.vue";
 import PhotoCounter from "./PhotoCounter.vue";
@@ -539,8 +565,8 @@ const onPostCropDeleteToggle = (checked: boolean) => {
   emit("update:postCropDeleteEnabled", checked);
 };
 
-const isSmallScreen = useMediaQuery('(max-width: 480px)');
-const { isVirtualScrollEnabled } = useVirtualScrollThreshold(isSmallScreen);
+const { isPhone, isWide, isCoarsePointer } = useLayoutMode();
+const { isVirtualScrollEnabled } = useVirtualScrollThreshold(isPhone);
 
 // GRID DISPLAY RULE: Tier 1 thumbnails via useGridImageDisplay only.
 // Full-res (Tier 2) is reserved for CropModal / App handlers.
@@ -578,19 +604,18 @@ const floatingFileInputFading = ref(false);
 const FLOATING_FILE_FADE_MS = 500;
 let floatingFileFadeTimer: ReturnType<typeof setTimeout> | null = null;
 
-const TOOLS_STACK_FIXED_BREAKPOINT = 900;
 const batchEditSpacerRef = ref<HTMLElement | null>(null);
 const photoGridContainerRef = ref<HTMLElement | null>(null);
 const batchPanelIsFixed = ref(
   typeof window !== "undefined" &&
-    window.innerWidth > TOOLS_STACK_FIXED_BREAKPOINT,
+    window.innerWidth >= LAYOUT_WIDE_MIN_PX,
 );
 const batchPanelLeftPx = ref(0);
 let batchPanelPositionObserver: ResizeObserver | null = null;
 
 const isBatchPanelFixedViewport = () =>
   typeof window !== "undefined" &&
-  window.innerWidth > TOOLS_STACK_FIXED_BREAKPOINT;
+  window.innerWidth >= LAYOUT_WIDE_MIN_PX;
 
 const updateBatchPanelPosition = () => {
   const fixed = isBatchPanelFixedViewport() && props.photos.length > 0;
@@ -883,6 +908,7 @@ const startAutoScroll = (direction: "up" | "down") => {
 const handleDragStart = (index: number, event: MouseEvent | TouchEvent) => {
   // Only activate if in select mode
   if (!selectMode.value) return;
+  if (isCoarsePointer.value || isPhone.value) return;
 
   const target = event.target as HTMLElement;
   // Ignore drags starting on action buttons, checkboxes, or action containers
@@ -1394,24 +1420,23 @@ watch(
 );
 
 const gridRef = ref<HTMLElement>();
-const isMediumScreen = useMediaQuery('(max-width: 768px)');
 
 const gap = computed(() => {
-  if (isSmallScreen.value) return 12;
-  if (isMediumScreen.value) return 16;
+  if (isPhone.value) return 12;
+  if (!isWide.value) return 16;
   return 24;
 });
 
 const rowGap = computed(() => {
-  if (isSmallScreen.value) return 48;
-  if (isMediumScreen.value) return 52;
+  if (isPhone.value) return 48;
+  if (!isWide.value) return 52;
   return 56;
 });
 
 const itemMinWidth = computed(() => {
   const presetSize = photoSizes[selectedPhotoSize.value].minSize;
 
-  if (isSmallScreen.value) {
+  if (isPhone.value) {
     const containerWidth = typeof window !== 'undefined' ? window.innerWidth - 16 : 300;
     const maxCell = containerWidth - 12;
     return Math.max(140, Math.min(presetSize, maxCell));
@@ -1582,7 +1607,7 @@ const handlePhotoCardClick = (index: number, event: Event) => {
   font-size: 0.95rem;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 1023px) {
   .header {
     margin: 0 0 16px 0;
   }
@@ -1596,7 +1621,7 @@ const handlePhotoCardClick = (index: number, event: Event) => {
   }
 }
 
-@media (max-width: 480px) {
+@media (max-width: 599px) {
   .header {
     margin: 0 0 12px 0;
   }
@@ -1960,12 +1985,12 @@ const handlePhotoCardClick = (index: number, event: Event) => {
 .photoGrid-container {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  min-height: 100dvh;
   width: 100%;
   max-width: 1720px;
   margin-left: auto;
   margin-right: auto;
-  padding: env(safe-area-inset-top, 0px) calc(20px + env(safe-area-inset-right, 0px)) 0 calc(20px + env(safe-area-inset-left, 0px));
+  padding: 0 calc(20px + env(safe-area-inset-right, 0px)) 0 calc(20px + env(safe-area-inset-left, 0px));
 }
 
 .photo-grid-layout {
@@ -1984,7 +2009,7 @@ const handlePhotoCardClick = (index: number, event: Event) => {
 }
 
 .batch-edit-panel {
-  --batch-panel-inset: calc(104px + env(safe-area-inset-top, 0px));
+  --batch-panel-inset: calc(var(--app-chrome-height) + 12px);
   width: 240px;
   flex-shrink: 0;
   display: flex;
@@ -2091,8 +2116,8 @@ const handlePhotoCardClick = (index: number, event: Event) => {
   min-width: 0;
 }
 
-/* Narrow screens: tools row above grid */
-@media (max-width: 900px) {
+/* Phone + tablet: tools in flow above the grid, full width */
+@media (max-width: 1023px) {
   .photo-grid-layout {
     flex-direction: column;
   }
@@ -2107,6 +2132,7 @@ const handlePhotoCardClick = (index: number, event: Event) => {
     height: auto;
     max-height: none;
     left: auto !important;
+    padding-top: 12px;
   }
 
   .batch-edit-panel__total {
@@ -2156,8 +2182,40 @@ const handlePhotoCardClick = (index: number, event: Event) => {
   }
 
   .tools-panel {
-    flex: 1 1 11rem;
-    max-width: 11rem;
+    flex: 1 1 auto;
+    max-width: none;
+    width: 100%;
+  }
+
+  .tools-section__grid {
+    grid-template-columns: repeat(auto-fill, minmax(5.5rem, 1fr));
+  }
+
+  .tools-panel__select-all {
+    min-height: 44px;
+    font-size: 0.85rem;
+  }
+
+  .tools-panel__select-all input[type="checkbox"] {
+    width: 20px;
+    height: 20px;
+  }
+
+  .tools-panel__download-dest-select {
+    min-height: 44px;
+    font-size: 0.85rem;
+  }
+
+  .tools-panel__footer-actions {
+    flex-direction: row;
+    flex-wrap: wrap;
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .tools-panel__footer-actions .tool-btn {
+    flex: 1 1 140px;
+    min-height: 44px;
   }
 
   .tools-sidebar-stack__file.is-active {
@@ -2165,15 +2223,8 @@ const handlePhotoCardClick = (index: number, event: Event) => {
   }
 }
 
-/* Tablet Responsive */
-@media (max-width: 768px) {
-  .photoGrid-container {
-    padding: env(safe-area-inset-top, 0px) calc(12px + env(safe-area-inset-right, 0px)) 0 calc(12px + env(safe-area-inset-left, 0px));
-  }
-}
-
-/* Mobile Responsive */
-@media (max-width: 480px) {
+/* Phone */
+@media (max-width: 599px) {
   .tools-panel {
     border-radius: 12px;
   }
@@ -2254,21 +2305,21 @@ const handlePhotoCardClick = (index: number, event: Event) => {
   }
 
   .tool-btn__label {
-    font-size: 8px;
+    font-size: 11px;
   }
 
   .tool-btn--wide {
-    padding: 8px 10px;
-    min-height: 36px;
+    padding: 10px 12px;
+    min-height: 44px;
     gap: 8px;
   }
 
   .tool-btn--wide .tool-btn__label {
-    font-size: 11px;
+    font-size: 13px;
   }
 
   .tools-section__heading {
-    font-size: 9px;
+    font-size: 11px;
     gap: 6px;
   }
 
@@ -2286,10 +2337,6 @@ const handlePhotoCardClick = (index: number, event: Event) => {
 
   .tools-empty-state p {
     font-size: 10px;
-  }
-
-  .photoGrid-container {
-    padding: env(safe-area-inset-top, 0px) calc(8px + env(safe-area-inset-right, 0px)) 0 calc(8px + env(safe-area-inset-left, 0px));
   }
 }
 
@@ -2478,6 +2525,28 @@ button.photo-input-label {
   align-items: center;
   flex: 0 0 auto;
   gap: 12px 14px;
+}
+
+.tools-panel__size-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+
+.tools-panel__size-buttons .size-button {
+  padding: 8px 12px;
+  min-width: 44px;
+  min-height: 44px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  border-radius: 8px;
+  line-height: 1;
+}
+
+.tools-panel__size-buttons .size-button.active {
+  background: rgba(255, 255, 255, 0.25);
+  border-color: #aaa;
 }
 
 /* Stack Layout for Full-Width Buttons */
@@ -2931,14 +3000,14 @@ button.photo-input-label {
   touch-action: pan-y;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 1023px) {
   .grid-wrapper {
     margin-top: 0;
     margin-bottom: 40px;
   }
 }
 
-@media (max-width: 480px) {
+@media (max-width: 599px) {
   .grid-wrapper {
     margin-top: 0;
     margin-bottom: 30px;
@@ -2946,15 +3015,15 @@ button.photo-input-label {
 }
 
 /* Responsive adjustments */
-@media (max-width: 768px) {
+@media (max-width: 1023px) {
   .photoGrid-container {
-    padding: env(safe-area-inset-top, 0px) calc(12px + env(safe-area-inset-right, 0px)) 0 calc(12px + env(safe-area-inset-left, 0px));
+    padding: 0 calc(12px + env(safe-area-inset-right, 0px)) 0 calc(12px + env(safe-area-inset-left, 0px));
   }
 }
 
-@media (max-width: 480px) {
+@media (max-width: 599px) {
   .photoGrid-container {
-    padding: env(safe-area-inset-top, 0px) calc(8px + env(safe-area-inset-right, 0px)) 0 calc(8px + env(safe-area-inset-left, 0px));
+    padding: 0 calc(8px + env(safe-area-inset-right, 0px)) 0 calc(8px + env(safe-area-inset-left, 0px));
   }
 
   .photo-input-label {

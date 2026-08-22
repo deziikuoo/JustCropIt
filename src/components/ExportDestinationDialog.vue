@@ -126,7 +126,7 @@ onUnmounted(() => {
 }
 
 .export-dest-dialog {
-  width: min(100%, 440px);
+  width: min(560px, calc(100vw - 24px));
   padding: 22px 22px 18px;
   border-radius: 14px;
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -258,7 +258,7 @@ onUnmounted(() => {
   }
 }
 
-@media (max-width: 480px) {
+@media (max-width: 599px) {
   .export-dest-dialog {
     padding: 18px 16px 14px;
   }

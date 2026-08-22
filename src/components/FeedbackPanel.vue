@@ -294,7 +294,7 @@ onUnmounted(() => {
 
 .feedback-panel {
   width: min(360px, 100%);
-  max-height: 100vh;
+  max-height: 100dvh;
   background: rgba(18, 18, 20, 0.98);
   border-left: 1px solid rgba(255, 255, 255, 0.1);
   display: flex;
@@ -304,11 +304,12 @@ onUnmounted(() => {
 
 .feedback-panel--mobile {
   width: 100%;
-  max-height: 85vh;
+  max-height: 85dvh;
   align-self: flex-end;
   border-left: none;
   border-top: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 16px 16px 0 0;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 .feedback-backdrop:has(.feedback-panel--mobile) {

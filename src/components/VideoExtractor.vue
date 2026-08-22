@@ -2698,7 +2698,7 @@ onUnmounted(() => {
 }
 
 /* Responsive */
-@media (max-width: 768px) {
+@media (max-width: 1023px) {
   .video-extractor {
     padding: 0 20px 48px;
     gap: 32px;
@@ -2728,13 +2728,18 @@ onUnmounted(() => {
     width: 100%;
   }
 
+  .extract-btn {
+    min-width: 0;
+    width: 100%;
+  }
+
   .frame-action-btn,
   .add-to-grid-btn {
     justify-content: center;
   }
 }
 
-@media (max-width: 480px) {
+@media (max-width: 599px) {
   .video-extractor {
     padding: 0 16px 40px;
     gap: 28px;

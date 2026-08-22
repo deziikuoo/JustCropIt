@@ -153,7 +153,8 @@
             @click="appMode = 'video'"
           >
             <i class="fas fa-film"></i>
-            <span>Video Frames</span>
+            <span class="mode-tab__label mode-tab__label--full">Video Frames</span>
+            <span class="mode-tab__label mode-tab__label--short">Video</span>
           </button>
         </div>
       </div>
@@ -183,6 +184,16 @@
             </div>
           </div>
         </div>
+        <button
+          v-show="!showFeedbackPanel"
+          type="button"
+          class="feedback-header-btn"
+          title="Support, feedback, or report a bug"
+          aria-label="Open support"
+          @click="showFeedbackPanel = true"
+        >
+          <i class="fas fa-comment-dots" aria-hidden="true"></i>
+        </button>
       </div>
     </div>
 
@@ -2773,7 +2784,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   width: 100%;
-  min-height: 100vh;
+  min-height: 100dvh;
   text-align: center;
 }
 
@@ -2786,11 +2797,11 @@ onUnmounted(() => {
 
 .import-progress-banner {
   position: fixed;
-  top: calc(72px + env(safe-area-inset-top, 0px));
+  top: var(--app-chrome-height);
   left: 50%;
   transform: translateX(-50%);
   width: min(560px, calc(100vw - 32px));
-  z-index: 1400;
+  z-index: 1240;
   margin: 0;
   padding: 12px 16px;
   border-radius: 12px;
@@ -2877,7 +2888,7 @@ onUnmounted(() => {
   width: 100%;
   display: flex;
   flex-direction: column;
-  padding-top: calc(92px + env(safe-area-inset-top, 0px));
+  padding-top: var(--app-chrome-height);
 }
 
 .video-page {
@@ -2885,7 +2896,7 @@ onUnmounted(() => {
   width: 100%;
   display: flex;
   justify-content: center;
-  padding-top: calc(92px + env(safe-area-inset-top, 0px));
+  padding-top: var(--app-chrome-height);
   padding-bottom: 56px;
 }
 
@@ -2918,6 +2929,32 @@ onUnmounted(() => {
 .app-top-controls__right {
   justify-self: end;
   pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.feedback-header-btn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(18, 18, 26, 0.98);
+  color: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+.feedback-header-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.mode-tab__label--short {
+  display: none;
 }
 
 .feedback-fab {
@@ -3085,16 +3122,13 @@ onUnmounted(() => {
   border-color: #aaa;
 }
 
-@media (max-width: 768px) {
-  .app-brand {
-    font-size: 1.05rem;
-    padding-top: 5px;
-    padding-bottom: 3px;
+@media (max-width: 1023px) {
+  .mode-tab__label--full {
+    display: none;
   }
 
-  .mode-tab {
-    padding: 8px 16px;
-    font-size: 0.85rem;
+  .mode-tab__label--short {
+    display: inline;
   }
 
   .mode-tab {
@@ -3103,43 +3137,71 @@ onUnmounted(() => {
   }
 
   .mode-tab i {
-    font-size: 1rem;
+    font-size: 0.95rem;
   }
 
+  .app-brand {
+    font-size: 1.05rem;
+    padding-top: 5px;
+    padding-bottom: 3px;
+  }
+
+  .feedback-fab {
+    padding: 3px 6px;
+    gap: 4px;
+    font-size: 0.6rem;
+  }
 }
 
-@media (max-width: 480px) {
+@media (max-width: 599px) {
   .app-top-controls {
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "brand support"
+      "tabs tabs";
+    align-items: center;
+    row-gap: 6px;
     padding-left: calc(8px + env(safe-area-inset-left, 0px));
     padding-right: calc(8px + env(safe-area-inset-right, 0px));
   }
 
+  .app-top-controls__left {
+    grid-area: brand;
+  }
+
+  .app-top-controls__center {
+    grid-area: tabs;
+    justify-self: stretch;
+  }
+
+  .app-top-controls__right {
+    grid-area: support;
+    align-items: center;
+  }
+
   .mode-tabs {
+    width: 100%;
     padding: 3px;
     border-radius: 12px;
   }
 
   .mode-tab {
-    padding: 8px 14px;
+    flex: 1;
+    justify-content: center;
+    padding: 8px 10px;
     border-radius: 9px;
   }
 
   .app-size-controls {
-    padding: 3px 6px;
-    gap: 4px;
+    display: none;
+  }
+
+  .feedback-header-btn {
+    display: inline-flex;
   }
 
   .feedback-fab {
-    right: calc(8px + env(safe-area-inset-right, 0px));
-    bottom: calc(8px + env(safe-area-inset-bottom, 0px));
-    padding: 3px 6px;
-    gap: 4px;
-  }
-
-  .size-button {
-    min-width: 24px;
-    padding: 2px 5px;
-    font-size: 0.6rem;
+    display: none;
   }
 }
 </style>

@@ -185,7 +185,7 @@ onUnmounted(() => {
 .frame-preview-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 250;
+  z-index: 1650;
   padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0)
     env(safe-area-inset-bottom, 0) env(safe-area-inset-left, 0);
   box-sizing: border-box;
@@ -198,7 +198,7 @@ onUnmounted(() => {
 
 .frame-preview-modal {
   width: min(96vw, 1100px);
-  height: min(92vh, 900px);
+  height: min(92dvh, 900px);
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -325,11 +325,12 @@ onUnmounted(() => {
   color: rgba(255, 255, 255, 0.4);
 }
 
-@media (max-width: 640px) {
+@media (max-width: 1023px) {
   .frame-preview-modal {
-    width: 100vw;
-    height: 100vh;
+    width: 100dvw;
+    height: 100dvh;
     padding: 12px;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
   }
 
   .nav-btn {

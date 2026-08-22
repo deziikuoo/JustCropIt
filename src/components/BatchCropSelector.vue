@@ -626,7 +626,7 @@ onUnmounted(() => {
   padding: 32px;
   width: 90vw;
   max-width: 1000px;
-  max-height: 85vh;
+  max-height: 85dvh;
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -964,11 +964,23 @@ onUnmounted(() => {
   cursor: not-allowed;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 1023px) {
+  .modal-background {
+    padding: 0;
+    align-items: stretch;
+    justify-content: stretch;
+  }
+
   .modal-content {
-    padding: 24px;
-    width: 95vw;
-    max-height: 90vh;
+    width: 100dvw;
+    height: 100dvh;
+    max-width: none;
+    max-height: none;
+    border-radius: 0;
+    padding: calc(16px + env(safe-area-inset-top, 0px))
+      calc(16px + env(safe-area-inset-right, 0px))
+      calc(16px + env(safe-area-inset-bottom, 0px))
+      calc(16px + env(safe-area-inset-left, 0px));
   }
 
   .thumbnail-grid {
@@ -987,10 +999,11 @@ onUnmounted(() => {
   .cancel-button,
   .confirm-button {
     width: 100%;
+    min-height: 44px;
   }
 }
 
-@media (max-width: 480px) {
+@media (max-width: 599px) {
   .thumbnail-grid {
     grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
     gap: 10px;

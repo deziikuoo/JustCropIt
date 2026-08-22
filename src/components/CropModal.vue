@@ -1837,7 +1837,7 @@ const reset = async () => {
   padding: 24px 24px 0;
   width: 92vw;
   max-width: 1200px;
-  height: 88vh;
+  height: 88dvh;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -2339,67 +2339,74 @@ const reset = async () => {
   color: #fb923c;
 }
 
-@media (max-width: 768px) {
-  .modal-content {
-    padding: 16px 16px 0;
-    height: 92vh;
-    width: 96vw;
-  }
-
-  .controls-row {
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-
-  .crop-target-bar {
-    gap: 8px;
-  }
-
-  .controls {
-    height: 168px;
-  }
-
-  .actions {
-    width: 110px;
-  }
-
-  .actions button {
-    min-height: 0;
-    padding: 7px 10px;
-    font-size: 0.8rem;
-  }
-
-  .action-uninstall {
-    font-size: 0.65rem;
-    padding: 5px 6px;
+@media (pointer: coarse) {
+  :deep(.vue-simple-handler) {
+    width: 18px !important;
+    height: 18px !important;
   }
 }
 
-@media (max-width: 480px) {
-  .modal {
+@media (max-width: 1023px) {
+  .modal-background {
     padding: 0;
+    align-items: stretch;
+    justify-content: stretch;
   }
 
   .modal-content {
-    padding: 12px 12px 0;
-    height: 100vh;
-    width: 100vw;
+    width: 100dvw;
+    height: 100dvh;
+    max-width: none;
+    max-height: none;
     border-radius: 0;
-    max-width: 100vw;
+    padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) 0 env(safe-area-inset-left, 0px);
+    gap: 8px;
   }
 
   .controls {
-    height: 176px;
-    padding: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    height: auto;
+    max-height: 42dvh;
+    overflow: hidden;
+    padding: 8px 12px calc(8px + env(safe-area-inset-bottom, 0px));
+    gap: 8px;
   }
 
-  .controls label {
-    font-size: 0.8rem;
+  .tool-categories {
+    justify-content: center;
+    align-self: stretch;
+  }
+
+  .tool-category {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+  }
+
+  .tool-stage {
+    display: block;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .tool-panel--crop {
+    display: flex;
+    width: max-content;
+    max-width: none;
+    column-gap: 16px;
+    margin-inline: 0;
+  }
+
+  .crop-panel-divider {
+    height: 40px;
   }
 
   .rotate-radial {
-    width: 360px;
-    max-width: calc(100% - 88px);
+    width: 100%;
+    max-width: 100%;
   }
 
   .rotate-radial__svg {
@@ -2407,22 +2414,49 @@ const reset = async () => {
   }
 
   .actions {
-    width: 102px;
+    display: flex;
+    flex-direction: row;
+    width: 100%;
+    gap: 8px;
   }
 
   .actions button {
-    min-height: 0;
-    padding: 6px 8px;
-    font-size: 0.75rem;
+    flex: 1;
+    height: 44px;
+    min-height: 44px;
+    font-size: 0.9rem;
   }
 
   .action-uninstall {
-    font-size: 0.62rem;
-    padding: 4px 4px;
+    justify-self: center;
+    align-self: center;
   }
 
   :deep(.vue-advanced-cropper) {
     border-radius: 0;
+  }
+
+  .nav-arrow {
+    top: 10px;
+    transform: none;
+    width: 36px;
+    height: 36px;
+  }
+
+  .nav-arrow:hover:not(:disabled) {
+    transform: scale(1.05);
+  }
+
+  .nav-arrow i {
+    font-size: 14px;
+  }
+
+  .nav-arrow-left {
+    left: 8px;
+  }
+
+  .nav-arrow-right {
+    right: 8px;
   }
 }
 
@@ -2468,43 +2502,5 @@ const reset = async () => {
 .nav-arrow i {
   font-size: 20px;
   color: #1e1e2e;
-}
-
-@media (max-width: 768px) {
-  .nav-arrow {
-    width: 40px;
-    height: 40px;
-  }
-
-  .nav-arrow i {
-    font-size: 16px;
-  }
-
-  .nav-arrow-left {
-    left: 8px;
-  }
-
-  .nav-arrow-right {
-    right: 8px;
-  }
-}
-
-@media (max-width: 480px) {
-  .nav-arrow {
-    width: 36px;
-    height: 36px;
-  }
-
-  .nav-arrow i {
-    font-size: 14px;
-  }
-
-  .nav-arrow-left {
-    left: 4px;
-  }
-
-  .nav-arrow-right {
-    right: 4px;
-  }
 }
 </style>

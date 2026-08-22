@@ -22,8 +22,8 @@ export const MIN_BATCH_FOR_WORKERS = 2;
 export const VIRTUAL_SCROLL_PHOTO_THRESHOLD_MOBILE = 80;
 export const VIRTUAL_SCROLL_PHOTO_THRESHOLD_DESKTOP = 150;
 
-/** Same breakpoint as PhotoGrid small-screen layout (max-width: 480px). */
-export const VIRTUAL_SCROLL_MOBILE_BREAKPOINT_PX = 480;
+/** Same breakpoint as phone layout (max-width: 599px). */
+export const VIRTUAL_SCROLL_MOBILE_BREAKPOINT_PX = 599;
 
 export function getVirtualScrollPhotoThreshold(isMobileViewport: boolean): number {
   return isMobileViewport
@@ -144,7 +144,7 @@ export const EXPORT_STRIP_CHUNK_SIZE_LOW_MEMORY = 5;
 // Operation history panel (Phase 3)
 export const HISTORY_MAX_SIZE = 50;
 export const UNDO_TO_NAV_DEBOUNCE_MS = 300;
-export const HISTORY_PANEL_MOBILE_BREAKPOINT_PX = 480;
+export { LAYOUT_TABLET_MAX_PX as HISTORY_PANEL_MOBILE_BREAKPOINT_PX } from './layout';
 
 // Subject-aware crop suggest (Phase 4)
 export const DETECTION_WORKER_POOL_MAX = 1;

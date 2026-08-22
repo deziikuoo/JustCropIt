@@ -1,6 +1,8 @@
 <template>
   <div
+    ref="cardWrapperRef"
     class="photo-card-wrapper"
+    :class="{ 'is-actions-open': actionsOpen }"
     :style="{
       width: '100%',
       height: '100%',
@@ -69,10 +71,21 @@
         <div v-else class="image-placeholder"></div>
       </div>
     </div>
-    <div class="action-dropdown" @click.stop @mousedown.stop>
-      <div class="action-dropdown__tab" aria-hidden="true">
-        <i class="fas fa-chevron-up"></i>
-      </div>
+    <div
+      class="action-dropdown"
+      :class="{ 'action-dropdown--flip': flipMenu }"
+      @click.stop
+      @mousedown.stop
+    >
+      <button
+        type="button"
+        class="action-dropdown__tab"
+        aria-label="Photo actions"
+        :aria-expanded="actionsOpen"
+        @click="toggleActions"
+      >
+        <i class="fas fa-ellipsis" aria-hidden="true"></i>
+      </button>
       <div class="action-dropdown__menu">
         <button
           class="Flip H"
@@ -125,7 +138,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import type { Photo } from '../types/photo';
 import {
   getDeferredFlipCssTransform,
@@ -156,6 +169,21 @@ const imageTransformStyle = computed(() => {
   const transform = getDeferredFlipCssTransform(props.photo.flips);
   return transform ? { transform } : undefined;
 });
+
+const cardWrapperRef = ref<HTMLElement | null>(null);
+const actionsOpen = ref(false);
+const flipMenu = ref(false);
+
+const toggleActions = () => {
+  actionsOpen.value = !actionsOpen.value;
+  if (!actionsOpen.value) {
+    flipMenu.value = false;
+    return;
+  }
+  const rect = cardWrapperRef.value?.getBoundingClientRect();
+  if (!rect) return;
+  flipMenu.value = rect.right > window.innerWidth - 24 && rect.left > 120;
+};
 
 defineEmits<{
   (e: 'flip', direction: 'horizontal' | 'vertical'): void;
@@ -359,7 +387,7 @@ defineEmits<{
   opacity: 1;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 1023px) {
   .photo-card.select-mode .photo-checkbox {
     opacity: 1;
   }
@@ -372,14 +400,14 @@ defineEmits<{
   }
 }
 
-@media (max-width: 480px) {
+@media (max-width: 599px) {
   .photo-checkbox {
     width: 48px;
     height: 48px;
     min-width: 48px;
     min-height: 48px;
-    top: 4px;
-    right: 4px;
+    top: 8px;
+    right: 8px;
   }
 }
 
@@ -498,6 +526,7 @@ defineEmits<{
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 0;
   border-radius: 8px 8px 0 0;
   background: #0e0e0e;
   border: 1px solid rgba(255, 255, 255, 0.35);
@@ -505,15 +534,12 @@ defineEmits<{
   color: rgba(255, 255, 255, 0.55);
   font-size: 0.55rem;
   box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
 }
 
-.action-dropdown__tab i {
-  transition: transform var(--transition-fast);
-}
-
-.photo-card-wrapper:hover .action-dropdown__tab i,
-.photo-card-wrapper:has(.photo-card:focus-within) .action-dropdown__tab i {
-  transform: rotate(180deg);
+.action-dropdown--flip {
+  left: auto;
+  right: 0;
 }
 
 .action-dropdown__menu {
@@ -562,32 +588,73 @@ defineEmits<{
   color: #fff;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 1023px) {
   .action-dropdown__menu {
     gap: 2px;
     padding: 4px;
   }
 
   .action-dropdown__menu button {
-    min-height: 28px;
+    min-height: 36px;
   }
 }
 
 @media (hover: none) {
-  .photo-card-wrapper:has(.photo-card.selected) {
+  .action-dropdown {
+    opacity: 1;
+    pointer-events: auto;
+    transform: none;
+    bottom: 8px;
+    left: 8px;
+    right: auto;
+    width: auto;
+    align-items: flex-start;
+  }
+
+  .action-dropdown--flip {
+    left: auto;
+    right: 8px;
+  }
+
+  .action-dropdown__tab {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.35);
+    font-size: 0.85rem;
+    color: rgba(255, 255, 255, 0.85);
+  }
+
+  .action-dropdown__menu {
+    display: none;
+  }
+
+  .photo-card-wrapper.is-actions-open,
+  .photo-card-wrapper:has(.photo-card.selected),
+  .photo-card-wrapper:has(.photo-card:focus-within) {
     z-index: 4;
   }
 
-  .photo-card-wrapper:has(.photo-card.selected) .action-dropdown {
-    opacity: 1;
-    pointer-events: auto;
-    transform: translateY(0);
+  .photo-card-wrapper.is-actions-open .action-dropdown,
+  .photo-card-wrapper:has(.photo-card.selected) .action-dropdown,
+  .photo-card-wrapper:has(.photo-card:focus-within) .action-dropdown {
+    left: 0;
+    right: 0;
+    bottom: calc(100% - 2px);
+    width: 100%;
+    align-items: center;
+  }
+
+  .photo-card-wrapper.is-actions-open .action-dropdown__menu,
+  .photo-card-wrapper:has(.photo-card.selected) .action-dropdown__menu,
+  .photo-card-wrapper:has(.photo-card:focus-within) .action-dropdown__menu {
+    display: flex;
   }
 }
 
-@media (max-width: 480px) {
+@media (max-width: 599px) {
   .action-dropdown__menu button {
-    min-height: 32px;
+    min-height: 36px;
     min-width: 0;
     padding: 4px 0;
   }

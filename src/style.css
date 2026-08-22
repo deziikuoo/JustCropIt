@@ -29,6 +29,18 @@
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
   --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);
   --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.5);
+
+  --layout-phone: 599px;
+  --layout-tablet-max: 1023px;
+  --layout-wide-min: 1024px;
+  --app-chrome-height: calc(92px + env(safe-area-inset-top, 0px));
+  --app-screen-height: 100dvh;
+}
+
+@media (max-width: 599px) {
+  :root {
+    --app-chrome-height: calc(112px + env(safe-area-inset-top, 0px));
+  }
 }
 
 * {
@@ -40,7 +52,7 @@ body {
   padding: 0;
   display: flex;
   align-items: flex-start;
-  min-height: 100vh;
+  min-height: 100dvh;
   max-width: 100vw;
   width: 100vw;
   background-color: #070707;
@@ -49,7 +61,7 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 1023px) {
   body {
     align-items: flex-start;
   }
@@ -75,7 +87,7 @@ body.drag-selecting * {
   display: flex;
   overflow-x: clip;
   width: 100%;
-  min-height: 100vh;
+  min-height: 100dvh;
   max-width: 100%;
   background: transparent;
 }
@@ -98,16 +110,16 @@ button {
   touch-action: manipulation;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 1023px) {
   button {
     min-height: 40px;
     padding: 10px 16px;
   }
 }
 
-@media (max-width: 480px) {
+@media (max-width: 599px) {
   button {
-    min-height: 36px;
+    min-height: 44px;
     padding: 8px 12px;
     font-size: 0.8rem;
   }
@@ -149,7 +161,7 @@ input[type="file"] {
   touch-action: manipulation;
 }
 
-@media (max-width: 480px) {
+@media (max-width: 599px) {
   input[type="file"] {
     font-size: 0.8rem;
     padding: 8px 12px;
@@ -196,14 +208,14 @@ input[type="checkbox"] {
   touch-action: manipulation;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 1023px) {
   input[type="checkbox"] {
     width: 22px;
     height: 22px;
   }
 }
 
-@media (max-width: 480px) {
+@media (max-width: 599px) {
   input[type="checkbox"] {
     width: 24px;
     height: 24px;
@@ -249,7 +261,7 @@ select {
   touch-action: manipulation;
 }
 
-@media (max-width: 480px) {
+@media (max-width: 599px) {
   select {
     min-height: 44px;
     font-size: 0.8rem;

@@ -68,12 +68,12 @@ const dismiss = () => {
 <style scoped>
 .storage-alert {
   position: fixed;
-  top: calc(80px + env(safe-area-inset-top, 0px));
+  top: var(--app-chrome-height);
   left: 50%;
   transform: translateX(-50%);
   z-index: 1000;
-  min-width: 400px;
-  max-width: 600px;
+  width: min(560px, calc(100vw - 24px));
+  max-width: calc(100vw - 24px);
   animation: slideDown 0.3s ease-out;
 }
 
@@ -153,21 +153,7 @@ const dismiss = () => {
   opacity: 1;
 }
 
-@media (max-width: 768px) {
-  .storage-alert {
-    min-width: 90vw;
-    max-width: 95vw;
-    top: calc(70px + env(safe-area-inset-top, 0px));
-  }
-}
-
-@media (max-width: 480px) {
-  .storage-alert {
-    min-width: 95vw;
-    max-width: 98vw;
-    top: calc(60px + env(safe-area-inset-top, 0px));
-  }
-
+@media (max-width: 599px) {
   .alert-content {
     padding: 12px 16px;
     gap: 10px;
