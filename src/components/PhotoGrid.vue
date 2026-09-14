@@ -290,7 +290,7 @@
                   @click="choosePanelFiles"
                 >
                   <i class="fas fa-folder-open" aria-hidden="true"></i>
-                  <span class="tool-btn__label">Choose Files</span>
+                  <span class="tool-btn__label choose-files-text">Choose Files</span>
                 </button>
                 <input
                   ref="panelFileInputRef"
@@ -340,7 +340,7 @@
               class="photo-input-label"
               @click="chooseHeaderFiles"
             >
-              <span class="photo-input-label__text">Choose Files</span>
+              <span class="photo-input-label__text choose-files-text">Choose Files</span>
             </button>
             <input
               ref="headerFileInputRef"
@@ -1270,7 +1270,7 @@ const handlePhotoCardMouseDown = (index: number, event: MouseEvent) => {
   document.addEventListener("mouseup", handleDragDetectionEnd);
 };
 
-// Touch start handler for mobile drag selection
+// Touch start handler for mobile hold-to-edit (not desktop drag-select)
 const handlePhotoCardTouchStart = (index: number, event: TouchEvent) => {
   // Don't handle single touch if pinch is active (2 touches detected)
   if (event.touches.length === 2 || isPinching.value) {
@@ -1278,12 +1278,7 @@ const handlePhotoCardTouchStart = (index: number, event: TouchEvent) => {
   }
 
   const target = event.target as HTMLElement;
-
-  // If in select mode, use drag selection
-  if (selectMode.value) {
-    handleDragStart(index, event);
-    return;
-  }
+  window.getSelection()?.removeAllRanges();
 
   // Don't activate hold-to-select if touching on interactive elements
   if (
@@ -1293,10 +1288,16 @@ const handlePhotoCardTouchStart = (index: number, event: TouchEvent) => {
     return;
   }
 
+  // Desktop mouse-style drag-select is a no-op on phones. The old early
+  // return still let Chrome Android start its image long-press highlight.
+  if (selectMode.value && !isCoarsePointer.value && !isPhone.value) {
+    handleDragStart(index, event);
+    return;
+  }
+
   isHolding.value = true;
   heldPhotoIndex.value = index;
   justActivatedSelectMode.value = false;
-  window.getSelection()?.removeAllRanges();
 
   // Set timeout to activate select mode after 500ms of holding
   holdTimeout.value = setTimeout(() => {
@@ -2400,6 +2401,11 @@ const handlePhotoCardClick = (index: number, event: Event) => {
   color: #ffd700;
   border-color: rgba(255, 255, 255, 0.08);
   box-shadow: 0 2px 8px rgba(212, 175, 55, 0.2), 0 8px 32px rgba(0, 0, 0, 0.55);
+}
+
+/* Temporary live-update marker for mobile deploy checks. */
+.choose-files-text {
+  color: #4ea1ff !important;
 }
 
 .photo-input-native {
