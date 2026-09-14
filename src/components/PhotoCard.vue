@@ -44,34 +44,31 @@
         @click.stop
       />
       <div class="image-container">
-        <img
-          v-if="displayUrl"
-          :src="displayUrl"
-          alt="Uploaded photo"
-          class="photo-card__image"
-          :style="imageTransformStyle"
-          draggable="false"
-          @dragstart.prevent
-          @error="$emit('image-error')"
-        />
         <div
-          v-else-if="placeholderPreviewUrl"
-          class="image-placeholder image-placeholder--thumbhash"
-        >
-          <img
-            :src="placeholderPreviewUrl"
-            alt=""
-            class="image-placeholder__preview"
-            :style="imageTransformStyle"
-            draggable="false"
-            @dragstart.prevent
-          />
-        </div>
+          v-if="displayUrl || placeholderPreviewUrl"
+          class="photo-card__image"
+          :class="{
+            'photo-card__image--placeholder': !displayUrl && !!placeholderPreviewUrl,
+          }"
+          :style="imageLayerStyle"
+          role="img"
+          :aria-label="displayUrl ? 'Uploaded photo' : undefined"
+        ></div>
         <div
           v-else-if="isLoading"
           class="image-placeholder image-placeholder--loading"
         ></div>
         <div v-else class="image-placeholder"></div>
+        <!-- Hidden: load/error only. Visible <img> triggers Chrome Android
+             save/copy/Lens highlight even with user-select:none. -->
+        <img
+          v-if="displayUrl"
+          :src="displayUrl"
+          alt=""
+          class="photo-card__image-loader"
+          draggable="false"
+          @error="$emit('image-error')"
+        />
       </div>
       <!-- Absorb long-press so Chrome Android does not treat the <img> as a
            save/copy/Lens target (user-select:none does not stop that UI). -->
@@ -170,10 +167,17 @@ const props = defineProps<{
   registerCardRef: (el: HTMLElement | null) => void;
 }>();
 
-const imageTransformStyle = computed(() => {
-  if (!usesDeferredFlips(props.photo)) return undefined;
-  const transform = getDeferredFlipCssTransform(props.photo.flips);
-  return transform ? { transform } : undefined;
+const imageLayerStyle = computed(() => {
+  const url = props.displayUrl ?? props.placeholderPreviewUrl;
+  const style: Record<string, string> = {};
+  if (url) {
+    style.backgroundImage = `url("${url.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}")`;
+  }
+  if (usesDeferredFlips(props.photo)) {
+    const transform = getDeferredFlipCssTransform(props.photo.flips);
+    if (transform) style.transform = transform;
+  }
+  return style;
 });
 
 const cardWrapperRef = ref<HTMLElement | null>(null);
@@ -290,7 +294,7 @@ defineEmits<{
     transform: translateY(0);
   }
 
-  .photo-card-wrapper:hover .image-container img {
+  .photo-card-wrapper:hover .photo-card__image {
     transform: scale(1.02);
   }
 }
@@ -432,19 +436,28 @@ defineEmits<{
   z-index: 1;
 }
 
-.image-container img {
+.photo-card__image {
   width: 100%;
   height: 100%;
-  object-fit: contain;
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
   border-radius: var(--border-radius-sm);
+  pointer-events: none;
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
-  -webkit-user-drag: none;
-  pointer-events: none;
   transition:
     opacity var(--transition-normal),
     transform var(--transition-normal);
+}
+
+.photo-card__image--placeholder {
+  background-size: cover;
+}
+
+.photo-card__image-loader {
+  display: none;
 }
 
 .photo-card__touch-shield {
@@ -494,24 +507,6 @@ defineEmits<{
 
 .image-placeholder--loading::before {
   animation: shimmer 1.2s infinite;
-}
-
-.image-placeholder--thumbhash {
-  width: 100%;
-  height: 100%;
-  border: none;
-  background: transparent;
-}
-
-.image-placeholder--thumbhash::before {
-  display: none;
-}
-
-.image-placeholder__preview {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  border-radius: var(--border-radius-sm);
 }
 
 @keyframes shimmer {

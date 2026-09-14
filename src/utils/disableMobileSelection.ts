@@ -35,12 +35,7 @@ function isEditableActive(): boolean {
 export function isMobileSelectionContext(): boolean {
   if (typeof window === "undefined") return false;
   if (window.matchMedia(MOBILE_NO_SELECT_MEDIA).matches) return true;
-  const hasTouch =
-    navigator.maxTouchPoints > 0 || "ontouchstart" in window;
-  const hasFineHover = window.matchMedia(
-    "(hover: hover) and (pointer: fine)"
-  ).matches;
-  return hasTouch && !hasFineHover;
+  return navigator.maxTouchPoints > 0 || "ontouchstart" in window;
 }
 
 function clearNonEditableSelection(): void {
@@ -127,6 +122,21 @@ export function disableMobileTextSelection(): void {
     capture: true,
     passive: true,
   });
+  // Non-passive: Chrome Android image long-press only stops if preventDefault
+  // runs on the <img> touch itself. Cropper images still need dragging.
+  document.addEventListener(
+    "touchstart",
+    (event: TouchEvent) => {
+      if (!isMobileSelectionContext() || isEditableTarget(event.target)) return;
+      const el = event.target;
+      if (!(el instanceof HTMLImageElement)) return;
+      if (el.closest(".cropper, .vue-advanced-cropper, .vue-picture-cropper")) {
+        return;
+      }
+      event.preventDefault();
+    },
+    { capture: true, passive: false }
+  );
   document.addEventListener("touchend", onTouchEnd, {
     capture: true,
     passive: true,
