@@ -32,6 +32,9 @@
       @mouseup="$emit('mouseup', $event)"
       @mouseleave="$emit('mouseleave', $event)"
       @touchstart="$emit('touchstart', $event)"
+      @touchend="$emit('touchend', $event)"
+      @touchcancel="$emit('touchcancel', $event)"
+      @contextmenu.prevent
     >
       <input
         type="checkbox"
@@ -70,6 +73,9 @@
         ></div>
         <div v-else class="image-placeholder"></div>
       </div>
+      <!-- Absorb long-press so Chrome Android does not treat the <img> as a
+           save/copy/Lens target (user-select:none does not stop that UI). -->
+      <div class="photo-card__touch-shield" aria-hidden="true"></div>
     </div>
     <div
       class="action-dropdown"
@@ -200,6 +206,8 @@ defineEmits<{
   (e: 'mouseup', event: MouseEvent): void;
   (e: 'mouseleave', event: MouseEvent): void;
   (e: 'touchstart', event: TouchEvent): void;
+  (e: 'touchend', event: TouchEvent): void;
+  (e: 'touchcancel', event: TouchEvent): void;
 }>();
 </script>
 
@@ -224,6 +232,7 @@ defineEmits<{
   -webkit-user-select: none;
   -moz-user-select: none;
   -ms-user-select: none;
+  -webkit-touch-callout: none;
   outline: none;
 }
 
@@ -428,9 +437,24 @@ defineEmits<{
   height: 100%;
   object-fit: contain;
   border-radius: var(--border-radius-sm);
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-user-drag: none;
+  pointer-events: none;
   transition:
     opacity var(--transition-normal),
     transform var(--transition-normal);
+}
+
+.photo-card__touch-shield {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  touch-action: pan-y;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
 .image-placeholder {

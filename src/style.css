@@ -61,6 +61,61 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 
+/*
+ * Native long-press highlight / copy / save-image callouts fire at the same
+ * ~500ms window as hold-to-open the edits toolkit. Disable selection on
+ * phones, tablets, and coarse pointers; keep typing fields selectable.
+ *
+ * `html.disable-touch-select` is toggled from JS so Chrome Android still gets
+ * the rules when media queries are inconclusive (desktop-site, paired mouse).
+ */
+@media (max-width: 1023px), (pointer: coarse), (hover: none) {
+  *:not(input):not(textarea):not(select):not([contenteditable="true"]),
+  *:not(input):not(textarea):not(select):not([contenteditable="true"])::before,
+  *:not(input):not(textarea):not(select):not([contenteditable="true"])::after {
+    -webkit-user-select: none !important;
+    user-select: none !important;
+    -webkit-touch-callout: none !important;
+  }
+
+  img,
+  canvas,
+  video,
+  svg {
+    -webkit-user-drag: none;
+    -webkit-user-select: none !important;
+    user-select: none !important;
+    -webkit-touch-callout: none !important;
+  }
+}
+
+html.disable-touch-select *:not(input):not(textarea):not(select):not([contenteditable="true"]),
+html.disable-touch-select *:not(input):not(textarea):not(select):not([contenteditable="true"])::before,
+html.disable-touch-select *:not(input):not(textarea):not(select):not([contenteditable="true"])::after {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+  -webkit-touch-callout: none !important;
+}
+
+html.disable-touch-select img,
+html.disable-touch-select canvas,
+html.disable-touch-select video,
+html.disable-touch-select svg {
+  -webkit-user-drag: none;
+  -webkit-user-select: none !important;
+  user-select: none !important;
+  -webkit-touch-callout: none !important;
+}
+
+html.disable-touch-select input,
+html.disable-touch-select textarea,
+html.disable-touch-select select,
+html.disable-touch-select [contenteditable="true"] {
+  -webkit-user-select: text !important;
+  user-select: text !important;
+  -webkit-touch-callout: default;
+}
+
 @media (max-width: 1023px) {
   body {
     align-items: flex-start;
