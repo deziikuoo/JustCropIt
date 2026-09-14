@@ -62,12 +62,12 @@ body {
 }
 
 /*
- * Native long-press highlight / copy / save-image callouts fire at the same
- * ~500ms window as hold-to-open the edits toolkit. Disable selection on
- * phones, tablets, and coarse pointers; keep typing fields selectable.
+ * Native long-press highlight / copy / save-image on the whole mobile UI
+ * (landing chrome, tabs, video, photos), not only after files are uploaded.
  *
- * `html.disable-touch-select` is toggled from JS so Chrome Android still gets
- * the rules when media queries are inconclusive (desktop-site, paired mouse).
+ * `html.disable-touch-select` is set from index.html before Vue boots, then
+ * kept on from JS so Chrome Android still gets the rules when media queries
+ * are inconclusive (desktop-site, paired mouse).
  */
 @media (max-width: 1023px), (pointer: coarse), (hover: none) {
   *:not(input):not(textarea):not(select):not([contenteditable="true"]),
@@ -89,12 +89,22 @@ body {
   }
 }
 
+html.disable-touch-select,
+html.disable-touch-select body,
+html.disable-touch-select #app {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+  -webkit-touch-callout: none !important;
+  -webkit-tap-highlight-color: transparent !important;
+}
+
 html.disable-touch-select *:not(input):not(textarea):not(select):not([contenteditable="true"]),
 html.disable-touch-select *:not(input):not(textarea):not(select):not([contenteditable="true"])::before,
 html.disable-touch-select *:not(input):not(textarea):not(select):not([contenteditable="true"])::after {
   -webkit-user-select: none !important;
   user-select: none !important;
   -webkit-touch-callout: none !important;
+  -webkit-tap-highlight-color: transparent !important;
 }
 
 html.disable-touch-select img,
@@ -105,6 +115,15 @@ html.disable-touch-select svg {
   -webkit-user-select: none !important;
   user-select: none !important;
   -webkit-touch-callout: none !important;
+}
+
+html.disable-touch-select img {
+  pointer-events: none;
+}
+
+html.disable-touch-select .cropper-wrapper img,
+html.disable-touch-select .vue-advanced-cropper img {
+  pointer-events: auto;
 }
 
 html.disable-touch-select input,
