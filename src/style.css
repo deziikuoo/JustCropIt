@@ -61,6 +61,37 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 
+/*
+ * Native long-press highlight / copy / save-image callouts fire at the same
+ * ~500ms window as hold-to-open the edits toolkit. Disable selection on
+ * phones, tablets, and coarse pointers; keep typing fields selectable.
+ */
+@media (max-width: 1023px), (pointer: coarse) {
+  *,
+  *::before,
+  *::after {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+
+  img,
+  canvas,
+  video,
+  svg {
+    -webkit-user-drag: none;
+  }
+
+  input,
+  textarea,
+  select,
+  [contenteditable="true"] {
+    -webkit-user-select: text;
+    user-select: text;
+    -webkit-touch-callout: default;
+  }
+}
+
 @media (max-width: 1023px) {
   body {
     align-items: flex-start;

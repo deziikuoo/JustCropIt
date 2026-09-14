@@ -2996,6 +2996,7 @@ button.photo-input-label {
   -webkit-user-select: none;
   -moz-user-select: none;
   -ms-user-select: none;
+  -webkit-touch-callout: none;
   transition: grid-template-columns 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   touch-action: pan-y;
 }

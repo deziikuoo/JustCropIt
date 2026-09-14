@@ -32,6 +32,7 @@
       @mouseup="$emit('mouseup', $event)"
       @mouseleave="$emit('mouseleave', $event)"
       @touchstart="$emit('touchstart', $event)"
+      @contextmenu.prevent
     >
       <input
         type="checkbox"
@@ -224,6 +225,7 @@ defineEmits<{
   -webkit-user-select: none;
   -moz-user-select: none;
   -ms-user-select: none;
+  -webkit-touch-callout: none;
   outline: none;
 }
 
@@ -428,6 +430,10 @@ defineEmits<{
   height: 100%;
   object-fit: contain;
   border-radius: var(--border-radius-sm);
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-user-drag: none;
   transition:
     opacity var(--transition-normal),
     transform var(--transition-normal);
