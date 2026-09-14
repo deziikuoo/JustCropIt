@@ -5,6 +5,25 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes, viewport-fit=cover" />
     <title>JustCropIt</title>
+    <!-- Apply before Vue boots so empty landing / chrome is covered, not only photo cards. -->
+    <style>
+      html.disable-touch-select,
+      html.disable-touch-select body {
+        -webkit-user-select: none !important;
+        user-select: none !important;
+        -webkit-touch-callout: none !important;
+        -webkit-tap-highlight-color: transparent;
+      }
+    </style>
+    <script>
+      (function () {
+        var mobile =
+          window.matchMedia("(max-width: 1023px), (pointer: coarse), (hover: none)").matches ||
+          navigator.maxTouchPoints > 0 ||
+          "ontouchstart" in window;
+        if (mobile) document.documentElement.classList.add("disable-touch-select");
+      })();
+    </script>
   </head>
   <body>
     <div id="app"></div>
