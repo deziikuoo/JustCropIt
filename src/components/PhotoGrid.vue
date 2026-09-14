@@ -413,6 +413,8 @@
             @mouseup="handlePhotoCardMouseUp"
             @mouseleave="handlePhotoCardMouseUp"
             @touchstart="handlePhotoCardTouchStart(visibleRange.start + index, $event)"
+            @touchend="handlePhotoCardTouchEnd"
+            @touchcancel="handlePhotoCardTouchCancel"
             @toggle-select="(checked) => handleToggleSelectChecked(visibleRange.start + index, checked)"
             @flip="(dir) => $emit('flip', visibleRange.start + index, dir)"
             @crop="$emit('crop', visibleRange.start + index)"
@@ -1294,6 +1296,7 @@ const handlePhotoCardTouchStart = (index: number, event: TouchEvent) => {
   isHolding.value = true;
   heldPhotoIndex.value = index;
   justActivatedSelectMode.value = false;
+  window.getSelection()?.removeAllRanges();
 
   // Set timeout to activate select mode after 500ms of holding
   holdTimeout.value = setTimeout(() => {
@@ -1324,6 +1327,17 @@ const handlePhotoCardMouseUp = () => {
   } else {
     heldPhotoIndex.value = null;
   }
+};
+
+const handlePhotoCardTouchEnd = () => {
+  window.getSelection()?.removeAllRanges();
+  handlePhotoCardMouseUp();
+};
+
+// Chrome Android fires touchcancel when it tries to start image/text
+// long-press. Keep the hold timer running so edits can still open.
+const handlePhotoCardTouchCancel = () => {
+  window.getSelection()?.removeAllRanges();
 };
 
 // Photo size options: smallest, small, medium (default), large, largest
