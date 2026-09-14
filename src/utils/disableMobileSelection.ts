@@ -45,22 +45,22 @@ function clearNonEditableSelection(): void {
 }
 
 /**
- * Block native long-press highlight/copy/save-image on mobile so hold
- * gestures are not stolen. Chrome Android does not fire `selectstart` for
- * touch selection, so also clear ranges on `selectionchange` and while a
- * finger is down. Form fields and links keep their default behavior.
+ * Block native long-press highlight/copy/save-image on mobile for the whole
+ * app (empty landing, chrome, video frames, photos), not only after upload.
+ * Chrome Android does not fire `selectstart` for touch selection, so also
+ * clear ranges on `selectionchange` and while a finger is down. Form fields
+ * and links keep their default behavior.
  */
 export function disableMobileTextSelection(): void {
   if (typeof document === "undefined") return;
 
-  const syncClass = () => {
-    document.documentElement.classList.toggle(
-      TOUCH_SELECT_CLASS,
-      isMobileSelectionContext()
-    );
+  const applyClass = () => {
+    if (isMobileSelectionContext()) {
+      document.documentElement.classList.add(TOUCH_SELECT_CLASS);
+    }
   };
-  syncClass();
-  window.addEventListener("resize", syncClass, { passive: true });
+  applyClass();
+  window.addEventListener("resize", applyClass, { passive: true });
 
   const onSelectStart = (event: Event) => {
     if (!isMobileSelectionContext() || isEditableTarget(event.target)) return;
@@ -73,6 +73,12 @@ export function disableMobileTextSelection(): void {
     event.preventDefault();
     event.stopPropagation();
     clearNonEditableSelection();
+  };
+
+  const onDragStart = (event: Event) => {
+    if (!isMobileSelectionContext() || isEditableTarget(event.target)) return;
+    if (isLinkTarget(event.target)) return;
+    event.preventDefault();
   };
 
   const onSelectionChange = () => {
@@ -117,26 +123,12 @@ export function disableMobileTextSelection(): void {
 
   document.addEventListener("selectstart", onSelectStart, { capture: true });
   document.addEventListener("contextmenu", onContextMenu, { capture: true });
+  document.addEventListener("dragstart", onDragStart, { capture: true });
   document.addEventListener("selectionchange", onSelectionChange);
   document.addEventListener("touchstart", onTouchStart, {
     capture: true,
     passive: true,
   });
-  // Non-passive: Chrome Android image long-press only stops if preventDefault
-  // runs on the <img> touch itself. Cropper images still need dragging.
-  document.addEventListener(
-    "touchstart",
-    (event: TouchEvent) => {
-      if (!isMobileSelectionContext() || isEditableTarget(event.target)) return;
-      const el = event.target;
-      if (!(el instanceof HTMLImageElement)) return;
-      if (el.closest(".cropper, .vue-advanced-cropper, .vue-picture-cropper")) {
-        return;
-      }
-      event.preventDefault();
-    },
-    { capture: true, passive: false }
-  );
   document.addEventListener("touchend", onTouchEnd, {
     capture: true,
     passive: true,
