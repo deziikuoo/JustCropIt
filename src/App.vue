@@ -150,7 +150,7 @@
           <button 
             class="mode-tab" 
             :class="{ active: appMode === 'video' }"
-            aria-label="Video Frames. Hold to open edit tools."
+            aria-label="Video Frames. Hold to show the Edit tab."
             @click="onVideoTabClick"
             @pointerdown="onVideoTabPointerDown"
             @pointerup="onVideoTabPointerUp"
@@ -161,12 +161,22 @@
             <span class="mode-tab__label mode-tab__label--full">Video Frames</span>
             <span class="mode-tab__label mode-tab__label--short">Video</span>
           </button>
+          <button
+            v-show="showEditTab"
+            class="mode-tab"
+            :class="{ active: appMode === 'edit' }"
+            aria-label="Edit"
+            @click="appMode = 'edit'"
+          >
+            <i class="fas fa-crop-simple"></i>
+            <span>Edit</span>
+          </button>
         </div>
       </div>
 
       <div class="app-top-controls__right">
         <div
-          v-show="appMode === 'photos'"
+          v-show="appMode === 'photos' || appMode === 'edit'"
           class="app-top-right-stack"
         >
           <div
@@ -217,7 +227,7 @@
     <main class="main-content">
       <!-- Wrapper div required: PhotoGrid has multiple root nodes, so v-show on the
            component itself does not hide it. Wrapping preserves tab state. -->
-      <div v-show="appMode === 'photos'" class="photos-page">
+      <div v-show="appMode === 'photos' || appMode === 'edit'" class="photos-page">
         <PhotoGrid
           :photos="photos"
           v-model:selected-photo-size="selectedPhotoSize"
@@ -321,9 +331,11 @@
       @choose="handleExportDestChoose"
       @cancel="closeExportDestDialog(null)"
     />
+    <!-- Debug tools (disabled)
     <PerformanceDashboard />
     <OptimizationCheckModal />
     <CopyPasteVisualizer />
+    -->
   </div>
 </template>
 
@@ -334,15 +346,14 @@ import CropModal from "./components/CropModal.vue";
 import BatchCropSelector from "./components/BatchCropSelector.vue";
 import StorageAlert from "./components/StorageAlert.vue";
 import ShimmerBackground from "./components/ShimmerBackground.vue";
-import PerformanceDashboard from "./components/PerformanceDashboard.vue";
-import OptimizationCheckModal from "./components/OptimizationCheckModal.vue";
-import CopyPasteVisualizer from "./components/CopyPasteVisualizer.vue";
+// import PerformanceDashboard from "./components/PerformanceDashboard.vue";
+// import OptimizationCheckModal from "./components/OptimizationCheckModal.vue";
+// import CopyPasteVisualizer from "./components/CopyPasteVisualizer.vue";
 import VideoExtractor from "./components/VideoExtractor.vue";
 import FeedbackPanel from "./components/FeedbackPanel.vue";
 import {
   getExportStripChunkSize,
 } from "./constants/optimization";
-import { revealDebugTools } from "./utils/debugReveal";
 import { trackEvent } from "./utils/analytics";
 import { useCropSuggestion } from "./composables/useCropSuggestion";
 import { useExportSettings } from "./composables/useExportSettings";
@@ -720,20 +731,35 @@ const trackPhotoDeletion = (count: number) => {
   }, ACTIVITY_COUNT_PERSIST_MS);
 };
 
-// App mode: 'photos' for standard photo editing, 'video' for video frame extraction
-const APP_MODE_STORAGE_KEY = 'justcropit-app-mode';
+// App mode: 'photos' for the image grid, 'video' for frame extraction,
+// 'edit' for the hold-revealed Edit tab (same workspace as Images).
+type AppMode = "photos" | "video" | "edit";
+const APP_MODE_STORAGE_KEY = "justcropit-app-mode";
+const SHOW_EDIT_TAB_STORAGE_KEY = "justcropit-show-edit-tab";
 
-function getInitialAppMode(): 'photos' | 'video' {
+function getInitialAppMode(): AppMode {
   try {
     const stored = sessionStorage.getItem(APP_MODE_STORAGE_KEY);
-    if (stored === 'photos' || stored === 'video') return stored;
+    if (stored === "photos" || stored === "video" || stored === "edit") {
+      return stored;
+    }
   } catch {
     // sessionStorage unavailable
   }
-  return 'photos';
+  return "photos";
 }
 
-const appMode = ref<'photos' | 'video'>(getInitialAppMode());
+function getInitialShowEditTab(mode: AppMode): boolean {
+  if (mode === "edit") return true;
+  try {
+    return sessionStorage.getItem(SHOW_EDIT_TAB_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+const appMode = ref<AppMode>(getInitialAppMode());
+const showEditTab = ref(getInitialShowEditTab(appMode.value));
 const showFeedbackPanel = ref(false);
 
 const VIDEO_TAB_HOLD_MS = 500;
@@ -747,6 +773,11 @@ const clearVideoTabHold = () => {
     videoTabHoldTimer = null;
   }
   videoTabHoldPointerId = null;
+};
+
+const revealEditTab = () => {
+  showEditTab.value = true;
+  appMode.value = "edit";
 };
 
 const onVideoTabClick = (event: MouseEvent) => {
@@ -767,7 +798,7 @@ const onVideoTabPointerDown = (event: PointerEvent) => {
   videoTabHoldTimer = setTimeout(() => {
     videoTabHoldTimer = null;
     suppressVideoTabClick = true;
-    revealDebugTools();
+    revealEditTab();
   }, VIDEO_TAB_HOLD_MS);
 };
 
@@ -785,6 +816,15 @@ const onVideoTabPointerUp = (event?: PointerEvent) => {
 watch(appMode, (mode) => {
   try {
     sessionStorage.setItem(APP_MODE_STORAGE_KEY, mode);
+  } catch {
+    // sessionStorage unavailable
+  }
+});
+
+watch(showEditTab, (visible) => {
+  try {
+    if (visible) sessionStorage.setItem(SHOW_EDIT_TAB_STORAGE_KEY, "1");
+    else sessionStorage.removeItem(SHOW_EDIT_TAB_STORAGE_KEY);
   } catch {
     // sessionStorage unavailable
   }
