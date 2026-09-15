@@ -12,7 +12,7 @@
 
     <template v-else>
       <header class="video-extractor-header">
-        <p class="video-extractor-subtitle">Extract high-quality frames from video</p>
+        <p class="video-extractor-subtitle">{{ workspaceSubtitle }}</p>
       </header>
 
       <!-- Video Input Area -->
@@ -29,8 +29,8 @@
       >
         <template v-if="!videoFile">
           <div class="dropzone-content">
-            <i class="fas fa-film"></i>
-            <h3>Drop Video Here</h3>
+            <i :class="isEditWorkspace ? 'fas fa-scissors' : 'fas fa-film'"></i>
+            <h3>{{ isEditWorkspace ? 'Drop Video to Edit' : 'Drop Video Here' }}</h3>
             <p>or click to select a video file</p>
             <input
               ref="fileInputRef"
@@ -119,7 +119,7 @@
       </div>
 
       <!-- Extraction Options -->
-      <div class="extraction-options" v-if="videoFile">
+      <div class="extraction-options" v-if="videoFile && !isEditWorkspace">
         <h3>Extraction Settings</h3>
 
         <!-- Interval Selector -->
@@ -263,7 +263,7 @@
       </div>
 
       <!-- Action Buttons -->
-      <div class="action-buttons" v-if="videoFile">
+      <div class="action-buttons" v-if="videoFile && !isEditWorkspace">
         <button
           v-if="!isExtracting"
           class="extract-btn"
@@ -284,7 +284,7 @@
       </div>
 
       <!-- Extracted Frames Preview -->
-      <div class="extracted-preview" v-if="extractedFrames.length > 0 && !isExtracting">
+      <div class="extracted-preview" v-if="extractedFrames.length > 0 && !isExtracting && !isEditWorkspace">
         <div class="extracted-header">
           <h3>
             <i class="fas fa-check-circle"></i>
@@ -545,9 +545,20 @@ import {
   stampDownloadZipName,
 } from '../utils/downloadFileNames';
 
-const props = defineProps<{
-  addToPhotos: (files: File[]) => Promise<void>;
-}>();
+const props = withDefaults(
+  defineProps<{
+    addToPhotos: (files: File[]) => Promise<void>;
+    workspace?: "extract" | "edit";
+  }>(),
+  { workspace: "extract" }
+);
+
+const isEditWorkspace = computed(() => props.workspace === "edit");
+const workspaceSubtitle = computed(() =>
+  isEditWorkspace.value
+    ? "Trim, preview, and download a clip"
+    : "Extract high-quality frames from video"
+);
 
 const {
   videoFile,

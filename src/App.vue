@@ -166,11 +166,11 @@
             type="button"
             class="mode-tab"
             :class="{ active: appMode === 'edit' }"
-            aria-label="Edit"
+            aria-label="Edit video"
             @click.stop="openEditTab"
             @pointerdown.stop
           >
-            <i class="fas fa-crop-simple"></i>
+            <i class="fas fa-scissors"></i>
             <span>Edit</span>
           </button>
         </div>
@@ -178,7 +178,7 @@
 
       <div class="app-top-controls__right">
         <div
-          v-show="appMode === 'photos' || appMode === 'edit'"
+          v-show="appMode === 'photos'"
           class="app-top-right-stack"
         >
           <div
@@ -229,7 +229,7 @@
     <main class="main-content">
       <!-- Wrapper div required: PhotoGrid has multiple root nodes, so v-show on the
            component itself does not hide it. Wrapping preserves tab state. -->
-      <div v-show="appMode === 'photos' || appMode === 'edit'" class="photos-page">
+      <div v-show="appMode === 'photos'" class="photos-page">
         <PhotoGrid
           :photos="photos"
           v-model:selected-photo-size="selectedPhotoSize"
@@ -270,8 +270,11 @@
         />
       </div>
 
-      <div v-show="appMode === 'video'" class="video-page">
-        <VideoExtractor :add-to-photos="handleVideoFramesExtracted" />
+      <div v-show="appMode === 'video' || appMode === 'edit'" class="video-page">
+        <VideoExtractor
+          :add-to-photos="handleVideoFramesExtracted"
+          :workspace="appMode === 'edit' ? 'edit' : 'extract'"
+        />
       </div>
     </main>
     <FeedbackPanel
@@ -734,7 +737,7 @@ const trackPhotoDeletion = (count: number) => {
 };
 
 // App mode: 'photos' for the image grid, 'video' for frame extraction,
-// 'edit' for the hold-revealed Edit tab (opened by clicking Edit).
+// 'edit' for the hold-revealed video editor (opened by clicking Edit).
 type AppMode = "photos" | "video" | "edit";
 const APP_MODE_STORAGE_KEY = "justcropit-app-mode";
 const SHOW_EDIT_TAB_STORAGE_KEY = "justcropit-show-edit-tab";
