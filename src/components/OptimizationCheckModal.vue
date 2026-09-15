@@ -81,6 +81,7 @@ import {
   type CheckStatus,
 } from '../utils/optimizationChecker';
 import { performanceLogger } from '../utils/performanceLogger';
+import { onRevealDebugTools } from '../utils/debugReveal';
 
 const isDev = import.meta.env.DEV;
 const show = ref(false);
@@ -90,6 +91,7 @@ const gridSnapshotLine = ref('');
 const position = ref({ top: 20, left: 20 });
 const isDragging = ref(false);
 const dragStart = ref({ x: 0, y: 0, startLeft: 0, startTop: 0 });
+let stopRevealListen: (() => void) | null = null;
 
 function runChecks() {
   results.value = runOptimizationChecks();
@@ -164,9 +166,14 @@ onMounted(() => {
     position.value = { top: 20, left: Math.max(20, window.innerWidth - 540) };
   }
   runChecks();
+  stopRevealListen = onRevealDebugTools(() => {
+    show.value = true;
+    runChecks();
+  });
 });
 
 onUnmounted(() => {
+  stopRevealListen?.();
   document.removeEventListener('mousemove', handleDrag);
   document.removeEventListener('mouseup', stopDrag);
 });

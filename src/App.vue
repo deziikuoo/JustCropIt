@@ -150,7 +150,12 @@
           <button 
             class="mode-tab" 
             :class="{ active: appMode === 'video' }"
-            @click="appMode = 'video'"
+            aria-label="Video Frames. Hold to open edit tools."
+            @click="onVideoTabClick"
+            @pointerdown="onVideoTabPointerDown"
+            @pointerup="onVideoTabPointerUp"
+            @pointercancel="onVideoTabPointerUp"
+            @lostpointercapture="onVideoTabPointerUp"
           >
             <i class="fas fa-film"></i>
             <span class="mode-tab__label mode-tab__label--full">Video Frames</span>
@@ -316,11 +321,9 @@
       @choose="handleExportDestChoose"
       @cancel="closeExportDestDialog(null)"
     />
-    <!-- Debug tools (disabled)
     <PerformanceDashboard />
     <OptimizationCheckModal />
     <CopyPasteVisualizer />
-    -->
   </div>
 </template>
 
@@ -331,14 +334,15 @@ import CropModal from "./components/CropModal.vue";
 import BatchCropSelector from "./components/BatchCropSelector.vue";
 import StorageAlert from "./components/StorageAlert.vue";
 import ShimmerBackground from "./components/ShimmerBackground.vue";
-// import PerformanceDashboard from "./components/PerformanceDashboard.vue";
-// import OptimizationCheckModal from "./components/OptimizationCheckModal.vue";
-// import CopyPasteVisualizer from "./components/CopyPasteVisualizer.vue";
+import PerformanceDashboard from "./components/PerformanceDashboard.vue";
+import OptimizationCheckModal from "./components/OptimizationCheckModal.vue";
+import CopyPasteVisualizer from "./components/CopyPasteVisualizer.vue";
 import VideoExtractor from "./components/VideoExtractor.vue";
 import FeedbackPanel from "./components/FeedbackPanel.vue";
 import {
   getExportStripChunkSize,
 } from "./constants/optimization";
+import { revealDebugTools } from "./utils/debugReveal";
 import { trackEvent } from "./utils/analytics";
 import { useCropSuggestion } from "./composables/useCropSuggestion";
 import { useExportSettings } from "./composables/useExportSettings";
@@ -731,6 +735,52 @@ function getInitialAppMode(): 'photos' | 'video' {
 
 const appMode = ref<'photos' | 'video'>(getInitialAppMode());
 const showFeedbackPanel = ref(false);
+
+const VIDEO_TAB_HOLD_MS = 500;
+let videoTabHoldTimer: ReturnType<typeof setTimeout> | null = null;
+let videoTabHoldPointerId: number | null = null;
+let suppressVideoTabClick = false;
+
+const clearVideoTabHold = () => {
+  if (videoTabHoldTimer) {
+    clearTimeout(videoTabHoldTimer);
+    videoTabHoldTimer = null;
+  }
+  videoTabHoldPointerId = null;
+};
+
+const onVideoTabClick = (event: MouseEvent) => {
+  if (suppressVideoTabClick) {
+    event.preventDefault();
+    suppressVideoTabClick = false;
+    return;
+  }
+  appMode.value = "video";
+};
+
+const onVideoTabPointerDown = (event: PointerEvent) => {
+  if (event.pointerType === "mouse" && event.button !== 0) return;
+  clearVideoTabHold();
+  suppressVideoTabClick = false;
+  videoTabHoldPointerId = event.pointerId;
+  (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
+  videoTabHoldTimer = setTimeout(() => {
+    videoTabHoldTimer = null;
+    suppressVideoTabClick = true;
+    revealDebugTools();
+  }, VIDEO_TAB_HOLD_MS);
+};
+
+const onVideoTabPointerUp = (event?: PointerEvent) => {
+  if (
+    event &&
+    videoTabHoldPointerId !== null &&
+    event.pointerId !== videoTabHoldPointerId
+  ) {
+    return;
+  }
+  clearVideoTabHold();
+};
 
 watch(appMode, (mode) => {
   try {
@@ -2755,6 +2805,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  clearVideoTabHold();
   if (importAbortController) {
     importAbortController.abort();
     importAbortController = null;

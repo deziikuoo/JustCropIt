@@ -153,6 +153,7 @@ import {
   GRID_URL_LRU_MAX,
   GRID_DECODE_CONCURRENCY,
 } from '../constants/optimization';
+import { onRevealDebugTools } from '../utils/debugReveal';
 
 const isDev = import.meta.env.DEV;
 const show = ref(false);
@@ -265,6 +266,7 @@ const clearData = () => {
 
 // Refresh metrics periodically
 let refreshInterval: ReturnType<typeof setInterval> | null = null;
+let stopRevealListen: (() => void) | null = null;
 
 onMounted(() => {
   // Initialize position to right side
@@ -275,12 +277,16 @@ onMounted(() => {
     metrics.value = performanceLogger.getMetrics();
     gridSnapshot.value = performanceLogger.getLatestGridSnapshot();
   }, 1000);
+  stopRevealListen = onRevealDebugTools(() => {
+    show.value = true;
+  });
 });
 
 onUnmounted(() => {
   if (refreshInterval) {
     clearInterval(refreshInterval);
   }
+  stopRevealListen?.();
   // Clean up drag listeners
   document.removeEventListener('mousemove', handleDrag);
   document.removeEventListener('mouseup', stopDrag);
