@@ -127,6 +127,7 @@ export function useVideoTimelineEditor() {
     reset();
     videoFile.value = file;
     videoPreviewUrl.value = URL.createObjectURL(file);
+    videoWorkerPool.preloadFfmpeg();
     isProbing.value = true;
     try {
       const info = await videoWorkerPool.probeVideo(file);

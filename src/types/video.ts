@@ -83,7 +83,8 @@ export interface VideoWorkerRequest {
     | 'renderClip'
     | 'exportTimeline'
     | 'renderClipBatch'
-    | 'concatClips';
+    | 'concatClips'
+    | 'preload';
   videoData?: ArrayBuffer;
   fileName?: string;
   options?: ExtractionOptions;
