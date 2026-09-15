@@ -163,10 +163,12 @@
           </button>
           <button
             v-show="showEditTab"
+            type="button"
             class="mode-tab"
             :class="{ active: appMode === 'edit' }"
             aria-label="Edit"
-            @click="appMode = 'edit'"
+            @click.stop="openEditTab"
+            @pointerdown.stop
           >
             <i class="fas fa-crop-simple"></i>
             <span>Edit</span>
@@ -732,7 +734,7 @@ const trackPhotoDeletion = (count: number) => {
 };
 
 // App mode: 'photos' for the image grid, 'video' for frame extraction,
-// 'edit' for the hold-revealed Edit tab (same workspace as Images).
+// 'edit' for the hold-revealed Edit tab (opened by clicking Edit).
 type AppMode = "photos" | "video" | "edit";
 const APP_MODE_STORAGE_KEY = "justcropit-app-mode";
 const SHOW_EDIT_TAB_STORAGE_KEY = "justcropit-show-edit-tab";
@@ -777,6 +779,10 @@ const clearVideoTabHold = () => {
 
 const revealEditTab = () => {
   showEditTab.value = true;
+};
+
+const openEditTab = () => {
+  showEditTab.value = true;
   appMode.value = "edit";
 };
 
@@ -809,6 +815,10 @@ const onVideoTabPointerUp = (event?: PointerEvent) => {
     event.pointerId !== videoTabHoldPointerId
   ) {
     return;
+  }
+  const target = event?.currentTarget as HTMLElement | undefined;
+  if (target && event && target.hasPointerCapture?.(event.pointerId)) {
+    target.releasePointerCapture(event.pointerId);
   }
   clearVideoTabHold();
 };
