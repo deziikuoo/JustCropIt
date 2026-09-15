@@ -23,7 +23,7 @@ function isEditableActive(): boolean {
   const sel = window.getSelection();
   if (!sel || sel.rangeCount === 0) return false;
   const node = sel.anchorNode;
-  const el = node instanceof Element ? node : node?.parentElement;
+  const el = node instanceof Element ? node : (node?.parentElement ?? null);
   return isEditableTarget(el);
 }
 
