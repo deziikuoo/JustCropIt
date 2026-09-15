@@ -379,6 +379,7 @@ export function useVideoExtraction() {
 
     videoFile.value = file;
     error.value = null;
+    videoWorkerPool.preloadFfmpeg();
 
     videoWorkerPool.probeVideo(file).then((info) => {
       if (info.duration > 0) {

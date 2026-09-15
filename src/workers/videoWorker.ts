@@ -1,7 +1,8 @@
 /**
- * Video Processing Web Worker (FFmpeg.trim only)
+ * Video Processing Web Worker (FFmpeg trim + Edit-tab clip render)
  *
- * Active path: trim export via FFmpeg.wasm.
+ * Active path: trim export and unique-clip timeline render via FFmpeg.wasm.
+ * FFmpeg stays loaded and the source file is cached in MEMFS across jobs.
  * Probe + frame extraction moved to webCodecsWorker.ts (WebCodecs + web-demuxer).
  *
  * To re-enable FFmpeg probe/extract:
@@ -28,9 +29,6 @@ import type { ClipRenderSpec } from '../types/videoEdit';
 
 const FFMPEG_CORE_VERSION = '0.12.6';
 
-// Timing constants for memory management
-const DELAY_AFTER_TERMINATE_MS = 100;
-
 const ctx: DedicatedWorkerGlobalScope = self as unknown as DedicatedWorkerGlobalScope;
 
 let ffmpeg: FFmpeg | null = null;
@@ -51,58 +49,54 @@ function getRecentLogs(): string {
   return recentLogs.slice(-8).join(' | ');
 }
 
-function copyBuffer(source: ArrayBuffer | Uint8Array): Uint8Array {
-  if (source instanceof Uint8Array) {
-    return source.slice();
-  }
-  return new Uint8Array(source).slice();
+function asUint8(source: ArrayBuffer | Uint8Array): Uint8Array {
+  if (source instanceof Uint8Array) return source;
+  return new Uint8Array(source);
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
+let loadPromise: Promise<void> | null = null;
+let cachedSourceKey: string | null = null;
+let cachedSourceName: string | null = null;
 
-async function resetFFmpeg(): Promise<void> {
-  if (ffmpeg) {
-    try {
-      ffmpeg.terminate();
-    } catch (e) {
-      console.warn('[FFmpeg] Terminate warning:', e);
-    }
-    ffmpeg = null;
-    isLoaded = false;
-  }
-
-  await delay(DELAY_AFTER_TERMINATE_MS);
-  await loadFFmpeg();
-
-  if (!ffmpeg || !isLoaded) {
-    throw new Error('Failed to reset FFmpeg instance');
-  }
+function clearSourceCache(): void {
+  cachedSourceKey = null;
+  cachedSourceName = null;
 }
 
 async function loadFFmpeg(): Promise<void> {
   if (isLoaded && ffmpeg) return;
+  if (loadPromise) {
+    await loadPromise;
+    return;
+  }
 
-  ffmpeg = new FFmpeg();
+  loadPromise = (async () => {
+    ffmpeg = new FFmpeg();
 
-  ffmpeg.on('log', ({ message }) => {
-    console.log('[FFmpeg]', message);
-    recordLog(message);
-  });
+    ffmpeg.on('log', ({ message }) => {
+      console.log('[FFmpeg]', message);
+      recordLog(message);
+    });
+
+    try {
+      await ffmpeg.load({
+        classWorkerURL: ffmpegWorkerUrl,
+        coreURL: `https://unpkg.com/@ffmpeg/core@${FFMPEG_CORE_VERSION}/dist/esm/ffmpeg-core.js`,
+        wasmURL: `https://unpkg.com/@ffmpeg/core@${FFMPEG_CORE_VERSION}/dist/esm/ffmpeg-core.wasm`,
+      });
+      isLoaded = true;
+      console.log('[FFmpeg] Loaded successfully, core version:', FFMPEG_CORE_VERSION);
+    } catch (loadError) {
+      ffmpeg = null;
+      isLoaded = false;
+      throw new Error(`Failed to load FFmpeg core: ${loadError instanceof Error ? loadError.message : String(loadError)}`);
+    }
+  })();
 
   try {
-    await ffmpeg.load({
-      classWorkerURL: ffmpegWorkerUrl,
-      coreURL: `https://unpkg.com/@ffmpeg/core@${FFMPEG_CORE_VERSION}/dist/esm/ffmpeg-core.js`,
-      wasmURL: `https://unpkg.com/@ffmpeg/core@${FFMPEG_CORE_VERSION}/dist/esm/ffmpeg-core.wasm`,
-    });
-    isLoaded = true;
-    console.log('[FFmpeg] Loaded successfully, core version:', FFMPEG_CORE_VERSION);
-  } catch (loadError) {
-    ffmpeg = null;
-    isLoaded = false;
-    throw new Error(`Failed to load FFmpeg core: ${loadError instanceof Error ? loadError.message : String(loadError)}`);
+    await loadPromise;
+  } finally {
+    loadPromise = null;
   }
 }
 
@@ -123,9 +117,26 @@ async function deleteFileIfExists(name: string): Promise<void> {
   }
 }
 
-async function writeInputVideo(inputName: string, videoBytes: Uint8Array): Promise<void> {
+async function ensureSourceWritten(fileName: string, videoBytes: Uint8Array): Promise<string> {
   if (!ffmpeg) throw new Error('FFmpeg not loaded');
-  await ffmpeg.writeFile(inputName, videoBytes.slice());
+  const ext = fileName.split('.').pop() || 'mp4';
+  const inputName = `source_input.${ext}`;
+  const key = `${fileName}:${videoBytes.byteLength}`;
+  if (cachedSourceKey === key && cachedSourceName === inputName) {
+    return inputName;
+  }
+  if (cachedSourceName && cachedSourceName !== inputName) {
+    await deleteFileIfExists(cachedSourceName);
+  }
+  try {
+    await ffmpeg.writeFile(inputName, videoBytes);
+  } catch (err) {
+    clearSourceCache();
+    throw err;
+  }
+  cachedSourceKey = key;
+  cachedSourceName = inputName;
+  return inputName;
 }
 
 function getMimeFromExt(ext: string): string {
@@ -156,7 +167,6 @@ async function trimVideoExport(
   isCancelled = false;
 
   const ext = fileName.split('.').pop() || 'mp4';
-  const inputName = `trim_input.${ext}`;
   const outputName = `trim_output.${ext}`;
   const trimStart = options.trimStartSeconds;
   const clipDuration = options.clipDurationSeconds;
@@ -166,7 +176,7 @@ async function trimVideoExport(
     return;
   }
 
-  const videoBytes = copyBuffer(videoData);
+  const videoBytes = asUint8(videoData);
 
   try {
     sendProgress(id, {
@@ -177,8 +187,8 @@ async function trimVideoExport(
       message: 'Preparing FFmpeg...',
     });
 
-    await resetFFmpeg();
-    await writeInputVideo(inputName, videoBytes);
+    await loadFFmpeg();
+    const inputName = await ensureSourceWritten(fileName, videoBytes);
 
     if (isCancelled) {
       ctx.postMessage({ id, type: 'cancelled' } as VideoWorkerResponse);
@@ -235,7 +245,7 @@ async function trimVideoExport(
         '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
         '-pix_fmt', 'yuv420p',
         '-c:v', 'libx264',
-        '-preset', 'veryfast',
+        '-preset', 'ultrafast',
         '-crf', '0',
         '-an',
         '-y', outputName,
@@ -259,7 +269,6 @@ async function trimVideoExport(
     const data = await ffmpeg!.readFile(outputName);
     const safeCopy = (data as Uint8Array).slice();
 
-    await deleteFileIfExists(inputName);
     await deleteFileIfExists(outputName);
 
     if (safeCopy.byteLength === 0) {
@@ -284,7 +293,6 @@ async function trimVideoExport(
       },
     } as VideoWorkerResponse);
   } catch (error) {
-    await deleteFileIfExists(inputName);
     await deleteFileIfExists(outputName);
     sendError(id, `Failed to trim video: ${error instanceof Error ? error.message : String(error)}. FFmpeg output: ${getRecentLogs()}`);
   }
@@ -336,7 +344,8 @@ type EncodeQuality = 'lossless' | 'preview';
 
 function getClipEncodeArgs(quality: EncodeQuality): string[] {
   if (quality === 'lossless') {
-    return ['-pix_fmt', 'yuv420p', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '0', '-an'];
+    // ultrafast + crf 0 is still lossless; veryfast was much slower for unique-clip export.
+    return ['-pix_fmt', 'yuv420p', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '0', '-an'];
   }
   return ['-pix_fmt', 'yuv420p', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '20', '-an'];
 }
@@ -421,17 +430,16 @@ async function renderClipRequest(
   options: RenderClipOptions
 ): Promise<void> {
   isCancelled = false;
-  const inputName = `render_input.${fileName.split('.').pop() || 'mp4'}`;
   const outputName = 'render_output.mp4';
-  const videoBytes = copyBuffer(videoData);
+  const videoBytes = asUint8(videoData);
 
   try {
     sendProgress(id, {
       phase: 'loading', currentFrame: 0, totalFrames: 1, percent: 10,
       message: 'Preparing FFmpeg...',
     });
-    await resetFFmpeg();
-    await writeInputVideo(inputName, videoBytes);
+    await loadFFmpeg();
+    const inputName = await ensureSourceWritten(fileName, videoBytes);
 
     if (isCancelled) {
       ctx.postMessage({ id, type: 'cancelled' } as VideoWorkerResponse);
@@ -453,7 +461,6 @@ async function renderClipRequest(
 
     const data = await ffmpeg!.readFile(outputName);
     const safeCopy = (data as Uint8Array).slice();
-    await deleteFileIfExists(inputName);
     await deleteFileIfExists(outputName);
 
     if (safeCopy.byteLength === 0) {
@@ -475,7 +482,6 @@ async function renderClipRequest(
       },
     } as VideoWorkerResponse);
   } catch (error) {
-    await deleteFileIfExists(inputName);
     await deleteFileIfExists(outputName);
     sendError(id, `Failed to render clip: ${error instanceof Error ? error.message : String(error)}. FFmpeg output: ${getRecentLogs()}`);
   }
@@ -495,8 +501,7 @@ async function exportTimelineRequest(
     return;
   }
 
-  const inputName = `export_input.${fileName.split('.').pop() || 'mp4'}`;
-  const videoBytes = copyBuffer(videoData);
+  const videoBytes = asUint8(videoData);
   const clipFileNames: string[] = [];
 
   try {
@@ -504,8 +509,8 @@ async function exportTimelineRequest(
       phase: 'loading', currentClip: 0, totalClips: clips.length, percent: 0,
       message: 'Preparing FFmpeg...',
     });
-    await resetFFmpeg();
-    await writeInputVideo(inputName, videoBytes);
+    await loadFFmpeg();
+    const inputName = await ensureSourceWritten(fileName, videoBytes);
 
     for (let i = 0; i < clips.length; i++) {
       if (isCancelled) {
@@ -562,7 +567,6 @@ async function exportTimelineRequest(
     const data = await ffmpeg!.readFile(outputName);
     const safeCopy = (data as Uint8Array).slice();
 
-    await deleteFileIfExists(inputName);
     for (const name of clipFileNames) await deleteFileIfExists(name);
     await deleteFileIfExists('export_concat_list.txt');
     await deleteFileIfExists(outputName);
@@ -586,7 +590,6 @@ async function exportTimelineRequest(
       },
     } as VideoWorkerResponse);
   } catch (error) {
-    await deleteFileIfExists(inputName);
     for (const name of clipFileNames) await deleteFileIfExists(name);
     await deleteFileIfExists('export_concat_list.txt');
     sendError(id, `Failed to export timeline: ${error instanceof Error ? error.message : String(error)}. FFmpeg output: ${getRecentLogs()}`);
@@ -614,8 +617,7 @@ async function renderClipBatchRequest(
     return;
   }
 
-  const inputName = `batch_input.${fileName.split('.').pop() || 'mp4'}`;
-  const videoBytes = copyBuffer(videoData);
+  const videoBytes = asUint8(videoData);
   const rendered: { index: number; data: Uint8Array; mimeType: string }[] = [];
 
   try {
@@ -623,8 +625,8 @@ async function renderClipBatchRequest(
       phase: 'loading', currentClip: options.startIndex, totalClips: options.totalClips, percent: 0,
       message: 'Preparing FFmpeg...',
     });
-    await resetFFmpeg();
-    await writeInputVideo(inputName, videoBytes);
+    await loadFFmpeg();
+    const inputName = await ensureSourceWritten(fileName, videoBytes);
 
     for (let i = 0; i < clips.length; i++) {
       if (isCancelled) {
@@ -652,8 +654,6 @@ async function renderClipBatchRequest(
       rendered.push({ index: globalIndex, data: safeCopy, mimeType: 'video/mp4' });
     }
 
-    await deleteFileIfExists(inputName);
-
     if (isCancelled) {
       ctx.postMessage({ id, type: 'cancelled' } as VideoWorkerResponse);
       return;
@@ -672,7 +672,6 @@ async function renderClipBatchRequest(
       rendered.map((r) => r.data.buffer)
     );
   } catch (error) {
-    await deleteFileIfExists(inputName);
     sendError(id, `Failed to render clip batch: ${error instanceof Error ? error.message : String(error)}. FFmpeg output: ${getRecentLogs()}`);
   }
 }
@@ -697,7 +696,7 @@ async function concatClipsRequest(
       phase: 'concatenating', currentClip: clipBuffers.length, totalClips: clipBuffers.length, percent: 85,
       message: 'Joining clips...',
     });
-    await resetFFmpeg();
+    await loadFFmpeg();
 
     for (let i = 0; i < clipBuffers.length; i++) {
       const clipFileName = `concat_clip_${i}.mp4`;
@@ -1066,6 +1065,12 @@ ctx.onmessage = async (event: MessageEvent<VideoWorkerRequest>) => {
   try {
     if (type === 'cancel') {
       isCancelled = true;
+      return;
+    }
+
+    if (type === 'preload') {
+      await loadFFmpeg();
+      ctx.postMessage({ id, type: 'complete' } as VideoWorkerResponse);
       return;
     }
 

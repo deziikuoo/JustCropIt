@@ -482,6 +482,7 @@ class VideoWorkerPool {
       const workers = this.ensureFfmpegPool(poolSize);
       const totalClips = clips.length;
       const batchSize = Math.ceil(totalClips / workers.length);
+      const sourceBuffer = await videoFile.arrayBuffer();
       const batches: { clips: ClipRenderSpec[]; startIndex: number; worker: Worker }[] = [];
       for (let w = 0; w < workers.length; w++) {
         const startIndex = w * batchSize;
@@ -507,9 +508,16 @@ class VideoWorkerPool {
 
       const batchResults = await Promise.all(
         batches.map((batch, batchIndex) =>
-          this.renderClipBatchOnWorker(batch.worker, videoFile, batch, totalClips, (p) => {
-            reportProgress(batchIndex, Math.max(0, p.currentClip - batch.startIndex));
-          })
+          this.renderClipBatchOnWorker(
+            batch.worker,
+            videoFile.name,
+            sourceBuffer,
+            batch,
+            totalClips,
+            (p) => {
+              reportProgress(batchIndex, Math.max(0, p.currentClip - batch.startIndex));
+            }
+          )
         )
       );
 
@@ -536,13 +544,14 @@ class VideoWorkerPool {
   /** Renders one worker's contiguous batch of clips, returning every buffer tagged with its global index. */
   private async renderClipBatchOnWorker(
     worker: Worker,
-    videoFile: File,
+    fileName: string,
+    sourceBuffer: ArrayBuffer,
     batch: { clips: ClipRenderSpec[]; startIndex: number },
     totalClips: number,
     onProgress: (progress: TimelineRenderProgressWire) => void
   ): Promise<RenderedClip[]> {
     const id = this.generateId();
-    const videoData = await videoFile.arrayBuffer();
+    const videoData = sourceBuffer.slice(0);
 
     return new Promise((resolve, reject) => {
       this.pendingRequests.set(id, {
@@ -571,7 +580,7 @@ class VideoWorkerPool {
         id,
         type: 'renderClipBatch',
         videoData,
-        fileName: videoFile.name,
+        fileName,
         renderClipBatchOptions: { clips: batch.clips, startIndex: batch.startIndex, totalClips },
       };
 
@@ -628,6 +637,25 @@ class VideoWorkerPool {
         clipBuffers.map((b) => b.buffer)
       );
     });
+  }
+
+  /**
+   * Warm FFmpeg WASM in the background so the first clip render/export
+   * is not blocked on downloading and compiling the core.
+   */
+  preloadFfmpeg(): void {
+    if (typeof Worker === 'undefined') return;
+    this.initFfmpegWorker();
+    if (!this.ffmpegWorker) return;
+    const id = this.generateId();
+    this.pendingRequests.set(id, {
+      resolve: () => undefined,
+      reject: (err) => {
+        console.warn('[VideoWorkerPool] FFmpeg preload failed:', err);
+      },
+      workerKind: 'ffmpeg',
+    });
+    this.ffmpegWorker.postMessage({ id, type: 'preload' } as VideoWorkerRequest);
   }
 
   /**
