@@ -134,16 +134,7 @@
     </div>
     <div class="app-top-controls">
       <div class="app-top-controls__left">
-        <div
-          class="app-brand"
-          role="button"
-          tabindex="0"
-          aria-label="JustCropIt. Hold to open edit tools."
-          @pointerdown="onBrandPointerDown"
-          @pointerup="onBrandPointerUp"
-          @pointercancel="onBrandPointerUp"
-          @lostpointercapture="onBrandPointerUp"
-        >JustCropIt</div>
+        <div class="app-brand" aria-label="JustCropIt">JustCropIt</div>
       </div>
 
       <div class="app-top-controls__center">
@@ -159,7 +150,12 @@
           <button 
             class="mode-tab" 
             :class="{ active: appMode === 'video' }"
-            @click="appMode = 'video'"
+            aria-label="Video Frames. Hold to open edit tools."
+            @click="onVideoTabClick"
+            @pointerdown="onVideoTabPointerDown"
+            @pointerup="onVideoTabPointerUp"
+            @pointercancel="onVideoTabPointerUp"
+            @lostpointercapture="onVideoTabPointerUp"
           >
             <i class="fas fa-film"></i>
             <span class="mode-tab__label mode-tab__label--full">Video Frames</span>
@@ -740,39 +736,50 @@ function getInitialAppMode(): 'photos' | 'video' {
 const appMode = ref<'photos' | 'video'>(getInitialAppMode());
 const showFeedbackPanel = ref(false);
 
-const BRAND_HOLD_MS = 500;
-let brandHoldTimer: ReturnType<typeof setTimeout> | null = null;
-let brandHoldPointerId: number | null = null;
+const VIDEO_TAB_HOLD_MS = 500;
+let videoTabHoldTimer: ReturnType<typeof setTimeout> | null = null;
+let videoTabHoldPointerId: number | null = null;
+let suppressVideoTabClick = false;
 
-const clearBrandHold = () => {
-  if (brandHoldTimer) {
-    clearTimeout(brandHoldTimer);
-    brandHoldTimer = null;
+const clearVideoTabHold = () => {
+  if (videoTabHoldTimer) {
+    clearTimeout(videoTabHoldTimer);
+    videoTabHoldTimer = null;
   }
-  brandHoldPointerId = null;
+  videoTabHoldPointerId = null;
 };
 
-const onBrandPointerDown = (event: PointerEvent) => {
+const onVideoTabClick = (event: MouseEvent) => {
+  if (suppressVideoTabClick) {
+    event.preventDefault();
+    suppressVideoTabClick = false;
+    return;
+  }
+  appMode.value = "video";
+};
+
+const onVideoTabPointerDown = (event: PointerEvent) => {
   if (event.pointerType === "mouse" && event.button !== 0) return;
-  clearBrandHold();
-  brandHoldPointerId = event.pointerId;
+  clearVideoTabHold();
+  suppressVideoTabClick = false;
+  videoTabHoldPointerId = event.pointerId;
   (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
-  brandHoldTimer = setTimeout(() => {
-    brandHoldTimer = null;
-    appMode.value = "photos";
+  videoTabHoldTimer = setTimeout(() => {
+    videoTabHoldTimer = null;
+    suppressVideoTabClick = true;
     revealDebugTools();
-  }, BRAND_HOLD_MS);
+  }, VIDEO_TAB_HOLD_MS);
 };
 
-const onBrandPointerUp = (event?: PointerEvent) => {
+const onVideoTabPointerUp = (event?: PointerEvent) => {
   if (
     event &&
-    brandHoldPointerId !== null &&
-    event.pointerId !== brandHoldPointerId
+    videoTabHoldPointerId !== null &&
+    event.pointerId !== videoTabHoldPointerId
   ) {
     return;
   }
-  clearBrandHold();
+  clearVideoTabHold();
 };
 
 watch(appMode, (mode) => {
@@ -2798,7 +2805,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
-  clearBrandHold();
+  clearVideoTabHold();
   if (importAbortController) {
     importAbortController.abort();
     importAbortController = null;
@@ -3040,11 +3047,6 @@ onUnmounted(() => {
   font-size: 1.35rem;
   font-weight: 700;
   line-height: 1.25;
-  cursor: pointer;
-  touch-action: manipulation;
-  user-select: none;
-  -webkit-user-select: none;
-  -webkit-touch-callout: none;
   background: linear-gradient(
     135deg,
     #d4af37 0%,
