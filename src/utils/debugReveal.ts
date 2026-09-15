@@ -1,6 +1,6 @@
 export const DEBUG_REVEAL_EVENT = "justcropit:reveal-debug";
 
-/** Long-press the Video tab to open hidden debug / edit panels. */
+/** Dispatch to show hidden debug panels when those components are mounted. */
 export function revealDebugTools(): void {
   window.dispatchEvent(new Event(DEBUG_REVEAL_EVENT));
 }
