@@ -17,10 +17,9 @@
     </style>
     <script>
       (function () {
-        var mobile =
-          window.matchMedia("(max-width: 1023px), (pointer: coarse), (hover: none)").matches ||
-          navigator.maxTouchPoints > 0 ||
-          "ontouchstart" in window;
+        var mobile = window.matchMedia(
+          "(max-width: 1023px), (pointer: coarse), (hover: none)"
+        ).matches;
         if (mobile) document.documentElement.classList.add("disable-touch-select");
       })();
     </script>

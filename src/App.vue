@@ -134,7 +134,16 @@
     </div>
     <div class="app-top-controls">
       <div class="app-top-controls__left">
-        <div class="app-brand" aria-label="JustCropIt">JustCropIt</div>
+        <div
+          class="app-brand"
+          role="button"
+          tabindex="0"
+          aria-label="JustCropIt. Hold to open edit tools."
+          @pointerdown="onBrandPointerDown"
+          @pointerup="onBrandPointerUp"
+          @pointercancel="onBrandPointerUp"
+          @lostpointercapture="onBrandPointerUp"
+        >JustCropIt</div>
       </div>
 
       <div class="app-top-controls__center">
@@ -316,11 +325,9 @@
       @choose="handleExportDestChoose"
       @cancel="closeExportDestDialog(null)"
     />
-    <!-- Debug tools (disabled)
     <PerformanceDashboard />
     <OptimizationCheckModal />
     <CopyPasteVisualizer />
-    -->
   </div>
 </template>
 
@@ -331,14 +338,15 @@ import CropModal from "./components/CropModal.vue";
 import BatchCropSelector from "./components/BatchCropSelector.vue";
 import StorageAlert from "./components/StorageAlert.vue";
 import ShimmerBackground from "./components/ShimmerBackground.vue";
-// import PerformanceDashboard from "./components/PerformanceDashboard.vue";
-// import OptimizationCheckModal from "./components/OptimizationCheckModal.vue";
-// import CopyPasteVisualizer from "./components/CopyPasteVisualizer.vue";
+import PerformanceDashboard from "./components/PerformanceDashboard.vue";
+import OptimizationCheckModal from "./components/OptimizationCheckModal.vue";
+import CopyPasteVisualizer from "./components/CopyPasteVisualizer.vue";
 import VideoExtractor from "./components/VideoExtractor.vue";
 import FeedbackPanel from "./components/FeedbackPanel.vue";
 import {
   getExportStripChunkSize,
 } from "./constants/optimization";
+import { revealDebugTools } from "./utils/debugReveal";
 import { trackEvent } from "./utils/analytics";
 import { useCropSuggestion } from "./composables/useCropSuggestion";
 import { useExportSettings } from "./composables/useExportSettings";
@@ -731,6 +739,41 @@ function getInitialAppMode(): 'photos' | 'video' {
 
 const appMode = ref<'photos' | 'video'>(getInitialAppMode());
 const showFeedbackPanel = ref(false);
+
+const BRAND_HOLD_MS = 500;
+let brandHoldTimer: ReturnType<typeof setTimeout> | null = null;
+let brandHoldPointerId: number | null = null;
+
+const clearBrandHold = () => {
+  if (brandHoldTimer) {
+    clearTimeout(brandHoldTimer);
+    brandHoldTimer = null;
+  }
+  brandHoldPointerId = null;
+};
+
+const onBrandPointerDown = (event: PointerEvent) => {
+  if (event.pointerType === "mouse" && event.button !== 0) return;
+  clearBrandHold();
+  brandHoldPointerId = event.pointerId;
+  (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
+  brandHoldTimer = setTimeout(() => {
+    brandHoldTimer = null;
+    appMode.value = "photos";
+    revealDebugTools();
+  }, BRAND_HOLD_MS);
+};
+
+const onBrandPointerUp = (event?: PointerEvent) => {
+  if (
+    event &&
+    brandHoldPointerId !== null &&
+    event.pointerId !== brandHoldPointerId
+  ) {
+    return;
+  }
+  clearBrandHold();
+};
 
 watch(appMode, (mode) => {
   try {
@@ -2755,6 +2798,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  clearBrandHold();
   if (importAbortController) {
     importAbortController.abort();
     importAbortController = null;
@@ -2996,6 +3040,11 @@ onUnmounted(() => {
   font-size: 1.35rem;
   font-weight: 700;
   line-height: 1.25;
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
   background: linear-gradient(
     135deg,
     #d4af37 0%,

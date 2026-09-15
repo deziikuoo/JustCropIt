@@ -34,8 +34,9 @@ function isEditableActive(): boolean {
  */
 export function isMobileSelectionContext(): boolean {
   if (typeof window === "undefined") return false;
-  if (window.matchMedia(MOBILE_NO_SELECT_MEDIA).matches) return true;
-  return navigator.maxTouchPoints > 0 || "ontouchstart" in window;
+  // Do not use ontouchstart / maxTouchPoints alone: desktop Chrome often
+  // reports those and would lock the JustCropIt hold-to-edit gesture.
+  return window.matchMedia(MOBILE_NO_SELECT_MEDIA).matches;
 }
 
 function clearNonEditableSelection(): void {
@@ -71,7 +72,6 @@ export function disableMobileTextSelection(): void {
     if (!isMobileSelectionContext()) return;
     if (isEditableTarget(event.target) || isLinkTarget(event.target)) return;
     event.preventDefault();
-    event.stopPropagation();
     clearNonEditableSelection();
   };
 

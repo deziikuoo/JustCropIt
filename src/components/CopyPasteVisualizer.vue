@@ -215,6 +215,7 @@ import {
   type CopyPasteOperation,
   type PasteOperation,
 } from '../utils/copyPasteLogger';
+import { onRevealDebugTools } from '../utils/debugReveal';
 
 const isDev = import.meta.env.DEV;
 const show = ref(false);
@@ -305,6 +306,7 @@ const clearData = () => {
 
 // Refresh operations periodically
 let refreshInterval: ReturnType<typeof setInterval> | null = null;
+let stopRevealListen: (() => void) | null = null;
 
 onMounted(() => {
   // Initialize position to left side
@@ -314,12 +316,16 @@ onMounted(() => {
   refreshInterval = setInterval(() => {
     operations.value = copyPasteLogger.getOperations();
   }, 500); // Refresh every 500ms for better responsiveness
+  stopRevealListen = onRevealDebugTools(() => {
+    show.value = true;
+  });
 });
 
 onUnmounted(() => {
   if (refreshInterval) {
     clearInterval(refreshInterval);
   }
+  stopRevealListen?.();
   // Clean up drag listeners
   document.removeEventListener('mousemove', handleDrag);
   document.removeEventListener('mouseup', stopDrag);
