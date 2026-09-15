@@ -270,11 +270,12 @@
         />
       </div>
 
-      <div v-show="appMode === 'video' || appMode === 'edit'" class="video-page">
-        <VideoExtractor
-          :add-to-photos="handleVideoFramesExtracted"
-          :workspace="appMode === 'edit' ? 'edit' : 'extract'"
-        />
+      <div v-show="appMode === 'video'" class="video-page">
+        <VideoExtractor :add-to-photos="handleVideoFramesExtracted" />
+      </div>
+
+      <div v-show="appMode === 'edit'" class="video-page">
+        <VideoEditor />
       </div>
     </main>
     <FeedbackPanel
@@ -355,6 +356,7 @@ import ShimmerBackground from "./components/ShimmerBackground.vue";
 // import OptimizationCheckModal from "./components/OptimizationCheckModal.vue";
 // import CopyPasteVisualizer from "./components/CopyPasteVisualizer.vue";
 import VideoExtractor from "./components/VideoExtractor.vue";
+import VideoEditor from "./components/VideoEditor.vue";
 import FeedbackPanel from "./components/FeedbackPanel.vue";
 import {
   getExportStripChunkSize,
@@ -737,7 +739,7 @@ const trackPhotoDeletion = (count: number) => {
 };
 
 // App mode: 'photos' for the image grid, 'video' for frame extraction,
-// 'edit' for the hold-revealed video editor (opened by clicking Edit).
+// 'edit' for the hold-revealed timeline VideoEditor (opened by clicking Edit).
 type AppMode = "photos" | "video" | "edit";
 const APP_MODE_STORAGE_KEY = "justcropit-app-mode";
 const SHOW_EDIT_TAB_STORAGE_KEY = "justcropit-show-edit-tab";
@@ -3100,6 +3102,11 @@ onUnmounted(() => {
   font-size: 1.35rem;
   font-weight: 700;
   line-height: 1.25;
+  cursor: default;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: manipulation;
   background: linear-gradient(
     135deg,
     #d4af37 0%,

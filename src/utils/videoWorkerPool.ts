@@ -12,12 +12,16 @@ import type {
   ExtractionProgress,
   VideoInfo,
   TrimExportOptions,
+  TimelineRenderProgressWire,
 } from '../types/video';
+import type { ClipRenderSpec } from '../types/videoEdit';
 import { isWebCodecsSupported } from './webCodecs/support';
+import { getFfmpegWorkerPoolSize } from '../constants/optimization';
 
 type ProgressCallback = (progress: ExtractionProgress) => void;
 type FrameCallback = (frame: { index: number; timestamp: number; blob: Blob }) => void;
 type InfoCallback = (info: VideoInfo) => void;
+type TimelineProgressCallback = (progress: TimelineRenderProgressWire) => void;
 
 interface PendingRequest {
   resolve: (value: VideoWorkerResponse) => void;
@@ -25,7 +29,17 @@ interface PendingRequest {
   onProgress?: ProgressCallback;
   onFrame?: FrameCallback;
   onInfo?: InfoCallback;
+  onTimelineProgress?: TimelineProgressCallback;
   workerKind: 'webcodecs' | 'ffmpeg';
+  /** Set when this request was dispatched to a pooled export worker rather
+   * than the singleton `ffmpegWorker` — cancel() routes to this instead. */
+  workerRef?: Worker;
+}
+
+interface RenderedClip {
+  index: number;
+  data: Uint8Array;
+  mimeType: string;
 }
 
 class VideoWorkerPool {
@@ -35,6 +49,8 @@ class VideoWorkerPool {
   private requestCounter = 0;
   private webCodecsInitialized = false;
   private ffmpegInitialized = false;
+  /** Ephemeral — only spun up for the duration of a parallel export, then torn down. */
+  private ffmpegPoolWorkers: Worker[] = [];
 
   /** WebCodecs path needs Worker + VideoDecoder + OffscreenCanvas. */
   isSupported(): boolean {
@@ -49,6 +65,9 @@ class VideoWorkerPool {
       case 'progress':
         if (pending.onProgress && response.progress) {
           pending.onProgress(response.progress);
+        }
+        if (pending.onTimelineProgress && response.timelineProgress) {
+          pending.onTimelineProgress(response.timelineProgress);
         }
         break;
 
@@ -78,6 +97,10 @@ class VideoWorkerPool {
       case 'complete':
       case 'cancelled':
       case 'trimComplete':
+      case 'renderClipComplete':
+      case 'exportTimelineComplete':
+      case 'renderClipBatchComplete':
+      case 'concatClipsComplete':
         pending.resolve(response);
         this.pendingRequests.delete(response.id);
         break;
@@ -123,6 +146,33 @@ class VideoWorkerPool {
     );
     this.bindWorker(this.ffmpegWorker, 'FFmpeg');
     this.ffmpegInitialized = true;
+  }
+
+  private createFfmpegPoolWorker(label: string): Worker {
+    const worker = new Worker(
+      new URL('../workers/videoWorker.ts', import.meta.url),
+      { type: 'module' }
+    );
+    this.bindWorker(worker, label);
+    return worker;
+  }
+
+  /** Grows the export pool to `size` workers (each an independent FFmpeg instance). */
+  private ensureFfmpegPool(size: number): Worker[] {
+    while (this.ffmpegPoolWorkers.length < size) {
+      this.ffmpegPoolWorkers.push(
+        this.createFfmpegPoolWorker(`FFmpeg-Pool-${this.ffmpegPoolWorkers.length}`)
+      );
+    }
+    return this.ffmpegPoolWorkers.slice(0, size);
+  }
+
+  /** Frees the (memory-heavy) pool workers once a parallel export finishes. */
+  private terminateFfmpegPool(): void {
+    for (const worker of this.ffmpegPoolWorkers) {
+      worker.terminate();
+    }
+    this.ffmpegPoolWorkers = [];
   }
 
   private generateId(): string {
@@ -279,6 +329,308 @@ class VideoWorkerPool {
   }
 
   /**
+   * Render a single timeline clip (crop/speed/reverse/freeze) via FFmpeg.
+   * Used by the Edit tab preview to pre-render reversed clips.
+   */
+  async renderClip(
+    videoFile: File,
+    clip: ClipRenderSpec,
+    onProgress?: ProgressCallback
+  ): Promise<{ blob: Blob; fileName: string }> {
+    if (typeof Worker === 'undefined') {
+      throw new Error('Video processing is not supported in this browser');
+    }
+
+    this.initFfmpegWorker();
+    if (!this.ffmpegWorker) {
+      throw new Error('Failed to initialize FFmpeg worker');
+    }
+
+    const id = this.generateId();
+    const videoData = await videoFile.arrayBuffer();
+
+    return new Promise((resolve, reject) => {
+      this.pendingRequests.set(id, {
+        resolve: (response) => {
+          if (response.type === 'renderClipComplete' && response.renderedClip) {
+            const bytes =
+              response.renderedClip.data instanceof Uint8Array
+                ? response.renderedClip.data
+                : new Uint8Array(response.renderedClip.data);
+            resolve({
+              blob: new Blob([bytes], { type: response.renderedClip.mimeType }),
+              fileName: response.renderedClip.fileName,
+            });
+          } else if (response.type === 'cancelled') {
+            reject(new Error('Render cancelled'));
+          } else {
+            reject(new Error('No rendered clip returned'));
+          }
+        },
+        reject,
+        onProgress,
+        workerKind: 'ffmpeg',
+      });
+
+      const request: VideoWorkerRequest = {
+        id,
+        type: 'renderClip',
+        videoData,
+        fileName: videoFile.name,
+        renderClipOptions: { clip },
+      };
+
+      this.ffmpegWorker!.postMessage(request, [videoData]);
+    });
+  }
+
+  /**
+   * Render every clip in the timeline and concatenate them into one final video.
+   * Uses a pool of parallel FFmpeg workers when there are enough clips to make
+   * it worthwhile (see `getFfmpegWorkerPoolSize`); otherwise renders sequentially
+   * on the single persistent FFmpeg worker.
+   */
+  async exportTimeline(
+    videoFile: File,
+    clips: ClipRenderSpec[],
+    onTimelineProgress?: TimelineProgressCallback
+  ): Promise<{ blob: Blob; fileName: string }> {
+    if (typeof Worker === 'undefined') {
+      throw new Error('Video processing is not supported in this browser');
+    }
+
+    const poolSize = getFfmpegWorkerPoolSize(clips.length);
+    if (poolSize <= 1) {
+      return this.exportTimelineSequential(videoFile, clips, onTimelineProgress);
+    }
+
+    try {
+      return await this.exportTimelineParallel(videoFile, clips, poolSize, onTimelineProgress);
+    } catch (err) {
+      // A real user cancellation should propagate as-is, not trigger a silent
+      // (and wasteful) full re-render on the sequential path.
+      if (err instanceof Error && err.message === 'Export cancelled') {
+        throw err;
+      }
+      console.warn('[VideoWorkerPool] Parallel export failed, retrying sequentially:', err);
+      return this.exportTimelineSequential(videoFile, clips, onTimelineProgress);
+    }
+  }
+
+  /** Renders every clip on a single FFmpeg worker, one at a time, then concatenates. */
+  private async exportTimelineSequential(
+    videoFile: File,
+    clips: ClipRenderSpec[],
+    onTimelineProgress?: TimelineProgressCallback
+  ): Promise<{ blob: Blob; fileName: string }> {
+    this.initFfmpegWorker();
+    if (!this.ffmpegWorker) {
+      throw new Error('Failed to initialize FFmpeg worker');
+    }
+
+    const id = this.generateId();
+    const videoData = await videoFile.arrayBuffer();
+
+    return new Promise((resolve, reject) => {
+      this.pendingRequests.set(id, {
+        resolve: (response) => {
+          if (response.type === 'exportTimelineComplete' && response.exportedTimeline) {
+            const bytes =
+              response.exportedTimeline.data instanceof Uint8Array
+                ? response.exportedTimeline.data
+                : new Uint8Array(response.exportedTimeline.data);
+            resolve({
+              blob: new Blob([bytes], { type: response.exportedTimeline.mimeType }),
+              fileName: response.exportedTimeline.fileName,
+            });
+          } else if (response.type === 'cancelled') {
+            reject(new Error('Export cancelled'));
+          } else {
+            reject(new Error('No exported video returned'));
+          }
+        },
+        reject,
+        onTimelineProgress,
+        workerKind: 'ffmpeg',
+      });
+
+      const request: VideoWorkerRequest = {
+        id,
+        type: 'exportTimeline',
+        videoData,
+        fileName: videoFile.name,
+        exportTimelineOptions: { clips },
+      };
+
+      this.ffmpegWorker!.postMessage(request, [videoData]);
+    });
+  }
+
+  /**
+   * Splits `clips` into `poolSize` contiguous batches, renders each batch on
+   * its own worker in parallel, then joins every rendered clip (in original
+   * order) via the singleton FFmpeg worker. The pool is torn down afterward —
+   * it's only worth the memory while an export is actively running.
+   */
+  private async exportTimelineParallel(
+    videoFile: File,
+    clips: ClipRenderSpec[],
+    poolSize: number,
+    onTimelineProgress?: TimelineProgressCallback
+  ): Promise<{ blob: Blob; fileName: string }> {
+    try {
+      const workers = this.ensureFfmpegPool(poolSize);
+      const totalClips = clips.length;
+      const batchSize = Math.ceil(totalClips / workers.length);
+      const batches: { clips: ClipRenderSpec[]; startIndex: number; worker: Worker }[] = [];
+      for (let w = 0; w < workers.length; w++) {
+        const startIndex = w * batchSize;
+        if (startIndex >= totalClips) break;
+        const batchClips = clips.slice(startIndex, startIndex + batchSize);
+        if (batchClips.length === 0) continue;
+        batches.push({ clips: batchClips, startIndex, worker: workers[w] });
+      }
+
+      const progressByBatch = new Map<number, number>();
+      const reportProgress = (batchIndex: number, completedInBatch: number) => {
+        progressByBatch.set(batchIndex, completedInBatch);
+        let completed = 0;
+        for (const v of progressByBatch.values()) completed += v;
+        onTimelineProgress?.({
+          phase: 'rendering',
+          currentClip: completed,
+          totalClips,
+          percent: Math.round((completed / totalClips) * 80),
+          message: `Rendering clips... (${completed}/${totalClips})`,
+        });
+      };
+
+      const batchResults = await Promise.all(
+        batches.map((batch, batchIndex) =>
+          this.renderClipBatchOnWorker(batch.worker, videoFile, batch, totalClips, (p) => {
+            reportProgress(batchIndex, Math.max(0, p.currentClip - batch.startIndex));
+          })
+        )
+      );
+
+      const ordered = batchResults.flat().sort((a, b) => a.index - b.index);
+
+      onTimelineProgress?.({
+        phase: 'concatenating',
+        currentClip: totalClips,
+        totalClips,
+        percent: 85,
+        message: 'Joining clips...',
+      });
+
+      return await this.concatClipsOnWorker(
+        videoFile.name,
+        ordered.map((r) => r.data),
+        onTimelineProgress
+      );
+    } finally {
+      this.terminateFfmpegPool();
+    }
+  }
+
+  /** Renders one worker's contiguous batch of clips, returning every buffer tagged with its global index. */
+  private async renderClipBatchOnWorker(
+    worker: Worker,
+    videoFile: File,
+    batch: { clips: ClipRenderSpec[]; startIndex: number },
+    totalClips: number,
+    onProgress: (progress: TimelineRenderProgressWire) => void
+  ): Promise<RenderedClip[]> {
+    const id = this.generateId();
+    const videoData = await videoFile.arrayBuffer();
+
+    return new Promise((resolve, reject) => {
+      this.pendingRequests.set(id, {
+        resolve: (response) => {
+          if (response.type === 'renderClipBatchComplete' && response.renderedClipBatch) {
+            resolve(
+              response.renderedClipBatch.clips.map((c) => ({
+                index: c.index,
+                mimeType: c.mimeType,
+                data: c.data instanceof Uint8Array ? c.data : new Uint8Array(c.data),
+              }))
+            );
+          } else if (response.type === 'cancelled') {
+            reject(new Error('Export cancelled'));
+          } else {
+            reject(new Error('No rendered clip batch returned'));
+          }
+        },
+        reject,
+        onTimelineProgress: onProgress,
+        workerKind: 'ffmpeg',
+        workerRef: worker,
+      });
+
+      const request: VideoWorkerRequest = {
+        id,
+        type: 'renderClipBatch',
+        videoData,
+        fileName: videoFile.name,
+        renderClipBatchOptions: { clips: batch.clips, startIndex: batch.startIndex, totalClips },
+      };
+
+      worker.postMessage(request, [videoData]);
+    });
+  }
+
+  /** Joins already-rendered clip buffers (in caller-supplied order) via the singleton FFmpeg worker. */
+  private async concatClipsOnWorker(
+    fileName: string,
+    clipBuffers: Uint8Array[],
+    onTimelineProgress?: TimelineProgressCallback
+  ): Promise<{ blob: Blob; fileName: string }> {
+    this.initFfmpegWorker();
+    if (!this.ffmpegWorker) {
+      throw new Error('Failed to initialize FFmpeg worker');
+    }
+    const worker = this.ffmpegWorker;
+
+    const id = this.generateId();
+
+    return new Promise((resolve, reject) => {
+      this.pendingRequests.set(id, {
+        resolve: (response) => {
+          if (response.type === 'concatClipsComplete' && response.concatenatedTimeline) {
+            const bytes =
+              response.concatenatedTimeline.data instanceof Uint8Array
+                ? response.concatenatedTimeline.data
+                : new Uint8Array(response.concatenatedTimeline.data);
+            resolve({
+              blob: new Blob([bytes], { type: response.concatenatedTimeline.mimeType }),
+              fileName: response.concatenatedTimeline.fileName,
+            });
+          } else if (response.type === 'cancelled') {
+            reject(new Error('Export cancelled'));
+          } else {
+            reject(new Error('No joined video returned'));
+          }
+        },
+        reject,
+        onTimelineProgress,
+        workerKind: 'ffmpeg',
+      });
+
+      const request: VideoWorkerRequest = {
+        id,
+        type: 'concatClips',
+        fileName,
+        concatClipsOptions: { clipBuffers },
+      };
+
+      worker.postMessage(
+        request,
+        clipBuffers.map((b) => b.buffer)
+      );
+    });
+  }
+
+  /**
    * Cancel the current extraction / trim
    */
   cancel(): void {
@@ -287,12 +639,17 @@ class VideoWorkerPool {
         id,
         type: 'cancel',
       };
-      if (pending.workerKind === 'webcodecs' && this.webCodecsWorker) {
+      if (pending.workerRef) {
+        pending.workerRef.postMessage(request);
+      } else if (pending.workerKind === 'webcodecs' && this.webCodecsWorker) {
         this.webCodecsWorker.postMessage(request);
       } else if (pending.workerKind === 'ffmpeg' && this.ffmpegWorker) {
         this.ffmpegWorker.postMessage(request);
       }
     }
+    // Pool workers tear themselves down once every batch settles (see the
+    // `finally` in exportTimelineParallel) — forcing it here would race their
+    // in-flight `cancelled` responses and leave those promises unresolved.
   }
 
   /**
@@ -309,6 +666,7 @@ class VideoWorkerPool {
       this.ffmpegWorker = null;
       this.ffmpegInitialized = false;
     }
+    this.terminateFfmpegPool();
     this.pendingRequests.clear();
   }
 }

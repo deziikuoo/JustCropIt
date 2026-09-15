@@ -65,6 +65,31 @@ export const WEBCODECS_TIMESTAMP_TOLERANCE_US = 25_000;
 /** Max encoded chunks waiting in VideoDecoder before pausing demux */
 export const WEBCODECS_MAX_DECODE_QUEUE = 12;
 
+/**
+ * Edit-tab timeline export: parallel FFmpeg render pool.
+ * Each pooled worker loads its own full FFmpeg WASM core + a full copy of the
+ * source video, so — unlike the image worker pool — this must stay small
+ * regardless of core count.
+ */
+export const FFMPEG_WORKER_POOL_MAX = 4;
+/** Below this many clips, pooling overhead isn't worth it — render sequentially. */
+export const FFMPEG_WORKER_POOL_MIN_CLIPS = 3;
+
+/** Picks how many parallel FFmpeg workers to use for a timeline export. */
+export function getFfmpegWorkerPoolSize(clipCount: number): number {
+  if (clipCount < FFMPEG_WORKER_POOL_MIN_CLIPS) return 1;
+
+  const nav = navigator as NavigatorWithMemory;
+  const memory = nav.deviceMemory ?? 4;
+  const cores = navigator.hardwareConcurrency || 4;
+
+  let cap = FFMPEG_WORKER_POOL_MAX;
+  if (memory <= 4) cap = Math.min(cap, 2);
+  else if (memory <= 8) cap = Math.min(cap, 3);
+
+  return Math.max(1, Math.min(cap, cores - 1, clipCount));
+}
+
 export function getThumbnailCacheKey(
   photoId: string,
   thumbRevision: number

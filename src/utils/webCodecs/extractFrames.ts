@@ -58,24 +58,36 @@ export class WebCodecsExtractionSession {
   ): Promise<WebCodecsExtractResult> {
     this.cancelled = false;
 
-    const intervalSeconds = options.intervalMs / 1000;
-    if (!Number.isFinite(intervalSeconds) || intervalSeconds <= 0) {
-      throw new Error('Invalid extraction interval');
-    }
+    const explicitTargets = options.targetTimestamps;
+    const hasExplicitTargets = Array.isArray(explicitTargets) && explicitTargets.length > 0;
 
-    const clipDuration = options.videoDuration;
-    const trimStart = options.trimStartSeconds ?? 0;
-    if (!clipDuration || clipDuration <= 0) {
-      throw new Error('Video duration unknown — reload the video and try again');
-    }
+    let targets: number[];
+    let trimStart: number;
+    let trimEnd: number;
 
-    const trimEnd = trimStart + clipDuration;
-    const targets = buildTargetTimestamps(
-      trimStart,
-      trimEnd,
-      intervalSeconds,
-      options.maxFrames
-    );
+    if (hasExplicitTargets) {
+      // Non-uniform capture (e.g. one thumbnail per timeline clip) — dedupe
+      // and sort so the single forward decode pass below stays monotonic.
+      targets = Array.from(new Set(explicitTargets.map((t) => Math.max(0, t)))).sort(
+        (a, b) => a - b
+      );
+      trimStart = targets[0];
+      trimEnd = targets[targets.length - 1];
+    } else {
+      const intervalSeconds = (options.intervalMs ?? 0) / 1000;
+      if (!Number.isFinite(intervalSeconds) || intervalSeconds <= 0) {
+        throw new Error('Invalid extraction interval');
+      }
+
+      const clipDuration = options.videoDuration ?? 0;
+      trimStart = options.trimStartSeconds ?? 0;
+      if (!clipDuration || clipDuration <= 0) {
+        throw new Error('Video duration unknown — reload the video and try again');
+      }
+
+      trimEnd = trimStart + clipDuration;
+      targets = buildTargetTimestamps(trimStart, trimEnd, intervalSeconds, options.maxFrames);
+    }
 
     if (targets.length === 0) {
       throw new Error('No frames to extract at this interval');
