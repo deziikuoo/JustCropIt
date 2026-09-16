@@ -49,6 +49,22 @@ function getRecentLogs(): string {
   return recentLogs.slice(-8).join(' | ');
 }
 
+const NOISY_FFMPEG_LOG =
+  /Could not find codec parameters for stream \d+ \(Audio:|Consider increasing the value for the 'analyzeduration'/i;
+
+function isNoisyFfmpegLog(message: string): boolean {
+  return NOISY_FFMPEG_LOG.test(message);
+}
+
+/** Give avformat enough of the file to pick up AAC params before -i. */
+const INPUT_PROBE_ARGS = ['-analyzeduration', '100M', '-probesize', '50M'];
+
+function withInputProbe(args: string[]): string[] {
+  const inputIndex = args.indexOf('-i');
+  if (inputIndex < 0) return args;
+  return [...args.slice(0, inputIndex), ...INPUT_PROBE_ARGS, ...args.slice(inputIndex)];
+}
+
 function asUint8(source: ArrayBuffer | Uint8Array): Uint8Array {
   if (source instanceof Uint8Array) return source;
   return new Uint8Array(source);
@@ -74,6 +90,7 @@ async function loadFFmpeg(): Promise<void> {
     ffmpeg = new FFmpeg();
 
     ffmpeg.on('log', ({ message }) => {
+      if (isNoisyFfmpegLog(message)) return;
       console.log('[FFmpeg]', message);
       recordLog(message);
     });
@@ -214,7 +231,7 @@ async function trimVideoExport(
 
     let trimSucceeded = false;
     try {
-      await ffmpeg!.exec(copyArgs);
+      await ffmpeg!.exec(withInputProbe(copyArgs));
       trimSucceeded = true;
     } catch (copyErr) {
       console.warn('[FFmpeg] Stream copy trim failed, retrying with re-encode:', copyErr);
@@ -250,7 +267,7 @@ async function trimVideoExport(
         '-an',
         '-y', outputName,
       ];
-      await ffmpeg!.exec(reencodeArgs);
+      await ffmpeg!.exec(withInputProbe(reencodeArgs));
     }
 
     if (isCancelled) {
@@ -380,7 +397,7 @@ async function renderClipToFile(
       );
     }
     frameArgs.push('-y', frameName);
-    await ffmpeg.exec(frameArgs);
+    await ffmpeg.exec(withInputProbe(frameArgs));
 
     await deleteFileIfExists(outputName);
     await ffmpeg.exec([
@@ -407,7 +424,7 @@ async function renderClipToFile(
   ];
 
   await deleteFileIfExists(outputName);
-  await ffmpeg.exec(args);
+  await ffmpeg.exec(withInputProbe(args));
 }
 
 function buildRenderedClipFileName(fileName: string, clipId: string): string {

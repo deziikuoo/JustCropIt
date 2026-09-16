@@ -2,22 +2,32 @@
  * web-demuxer session: load WASM, probe media, stream encoded chunks.
  */
 
-import { WebDemuxer, AVMediaType } from 'web-demuxer';
+import { WebDemuxer, AVMediaType, AVLogLevel } from 'web-demuxer';
 import type { WebCodecsProbeResult } from './types';
 
 /** web-demuxer@4 full WASM — kept in sync with package.json dependency */
 const WEB_DEMUXER_WASM_CDN =
   'https://cdn.jsdelivr.net/npm/web-demuxer@4.0.0/dist/wasm-files/web-demuxer.wasm';
 
+function withBaseUrl(relativePath: string): string {
+  const base = import.meta.env.BASE_URL || '/';
+  const prefix = `${self.location.origin}${base.startsWith('/') ? base : `/${base}`}`;
+  const root = prefix.endsWith('/') ? prefix : `${prefix}/`;
+  return new URL(relativePath, root).href;
+}
+
 /**
- * Absolute WASM URL for web-demuxer's nested data: worker (opaque origin).
- * Dev: same-origin public/ file (Vite serves CORS/CORP headers).
- * Prod: jsDelivr CDN (GitHub Pages cannot set CORS/CORP for opaque workers).
+ * Absolute WASM URL for web-demuxer's nested worker.
+ *
+ * Dev: same-origin file (Vite serves CORS/CORP). Prefer the copy next to the
+ * hashed WebCodecs worker — the nested data: worker also requests
+ * `/assets/web-demuxer.wasm` via `new URL('web-demuxer.wasm', workerHref)`.
+ * Prod: jsDelivr (GitHub Pages cannot set CORS/CORP for opaque data: workers).
+ * Vite still emits `assets/web-demuxer.wasm` so that sibling fetch is not a 404.
  */
 function getWasmFilePath(): string {
   if (import.meta.env.DEV) {
-    const base = import.meta.env.BASE_URL || '/';
-    return new URL('web-demuxer/web-demuxer.wasm', self.location.origin + base).href;
+    return withBaseUrl('assets/web-demuxer.wasm');
   }
   return WEB_DEMUXER_WASM_CDN;
 }
@@ -45,6 +55,13 @@ export class DemuxerSession {
       wasmFilePath: getWasmFilePath(),
     });
     await this.demuxer.load(file);
+    // Mute avformat's AAC "unspecified sample format" / probesize warnings.
+    // Must run after WASM init (load) and before getMediaInfo / read.
+    try {
+      await this.demuxer.setLogLevel(AVLogLevel.AV_LOG_QUIET);
+    } catch {
+      // Older WASM builds may not expose log level; probe still works.
+    }
   }
 
   get instance(): WebDemuxer {
