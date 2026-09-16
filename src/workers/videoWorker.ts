@@ -13,7 +13,6 @@
 /// <reference lib="webworker" />
 
 import { FFmpeg } from '@ffmpeg/ffmpeg';
-import ffmpegWorkerUrl from '@ffmpeg/ffmpeg/worker?url';
 import type {
   VideoWorkerRequest,
   VideoWorkerResponse,
@@ -27,7 +26,19 @@ import type {
 } from '../types/video';
 import type { ClipRenderSpec } from '../types/videoEdit';
 
-const FFMPEG_CORE_VERSION = '0.12.6';
+/**
+ * Same-origin FFmpeg core (public/ffmpeg/, matches package.json @ffmpeg/core).
+ * Self-hosting removes the ~31MB CDN download on first export and keeps
+ * loading working offline / behind strict COEP.
+ */
+function getFfmpegCoreUrl(file: 'ffmpeg-core.js' | 'ffmpeg-core.wasm'): string {
+  const base = import.meta.env.BASE_URL || '/';
+  const root = `${self.location.origin}${base.startsWith('/') ? base : `/${base}`}`;
+  return new URL(`ffmpeg/${file}`, root.endsWith('/') ? root : `${root}/`).href;
+}
+
+/** ffmpeg.load() hangs forever if its class worker or core fails to boot — cap it. */
+const FFMPEG_LOAD_TIMEOUT_MS = 60_000;
 
 const ctx: DedicatedWorkerGlobalScope = self as unknown as DedicatedWorkerGlobalScope;
 
@@ -54,15 +65,6 @@ const NOISY_FFMPEG_LOG =
 
 function isNoisyFfmpegLog(message: string): boolean {
   return NOISY_FFMPEG_LOG.test(message);
-}
-
-/** Give avformat enough of the file to pick up AAC params before -i. */
-const INPUT_PROBE_ARGS = ['-analyzeduration', '100M', '-probesize', '50M'];
-
-function withInputProbe(args: string[]): string[] {
-  const inputIndex = args.indexOf('-i');
-  if (inputIndex < 0) return args;
-  return [...args.slice(0, inputIndex), ...INPUT_PROBE_ARGS, ...args.slice(inputIndex)];
 }
 
 function asUint8(source: ArrayBuffer | Uint8Array): Uint8Array {
@@ -96,13 +98,30 @@ async function loadFFmpeg(): Promise<void> {
     });
 
     try {
-      await ffmpeg.load({
-        classWorkerURL: ffmpegWorkerUrl,
-        coreURL: `https://unpkg.com/@ffmpeg/core@${FFMPEG_CORE_VERSION}/dist/esm/ffmpeg-core.js`,
-        wasmURL: `https://unpkg.com/@ffmpeg/core@${FFMPEG_CORE_VERSION}/dist/esm/ffmpeg-core.wasm`,
+      // No classWorkerURL: @ffmpeg/ffmpeg's own `new URL('./worker.js', import.meta.url)`
+      // is what Vite bundles correctly. The old `@ffmpeg/ffmpeg/worker?url` import
+      // emitted the RAW worker file, whose `./const.js` import 404s in production —
+      // the class worker died before replying and load() hung forever.
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<never>((_, rejectTimeout) => {
+        timeoutId = setTimeout(
+          () => rejectTimeout(new Error(`FFmpeg core did not load within ${FFMPEG_LOAD_TIMEOUT_MS / 1000}s`)),
+          FFMPEG_LOAD_TIMEOUT_MS
+        );
       });
+      try {
+        await Promise.race([
+          ffmpeg.load({
+            coreURL: getFfmpegCoreUrl('ffmpeg-core.js'),
+            wasmURL: getFfmpegCoreUrl('ffmpeg-core.wasm'),
+          }),
+          timeout,
+        ]);
+      } finally {
+        clearTimeout(timeoutId);
+      }
       isLoaded = true;
-      console.log('[FFmpeg] Loaded successfully, core version:', FFMPEG_CORE_VERSION);
+      console.log('[FFmpeg] Loaded successfully (same-origin core)');
     } catch (loadError) {
       ffmpeg = null;
       isLoaded = false;
@@ -231,7 +250,7 @@ async function trimVideoExport(
 
     let trimSucceeded = false;
     try {
-      await ffmpeg!.exec(withInputProbe(copyArgs));
+      await ffmpeg!.exec(copyArgs);
       trimSucceeded = true;
     } catch (copyErr) {
       console.warn('[FFmpeg] Stream copy trim failed, retrying with re-encode:', copyErr);
@@ -267,7 +286,7 @@ async function trimVideoExport(
         '-an',
         '-y', outputName,
       ];
-      await ffmpeg!.exec(withInputProbe(reencodeArgs));
+      await ffmpeg!.exec(reencodeArgs);
     }
 
     if (isCancelled) {
@@ -397,7 +416,7 @@ async function renderClipToFile(
       );
     }
     frameArgs.push('-y', frameName);
-    await ffmpeg.exec(withInputProbe(frameArgs));
+    await ffmpeg.exec(frameArgs);
 
     await deleteFileIfExists(outputName);
     await ffmpeg.exec([
@@ -424,7 +443,7 @@ async function renderClipToFile(
   ];
 
   await deleteFileIfExists(outputName);
-  await ffmpeg.exec(withInputProbe(args));
+  await ffmpeg.exec(args);
 }
 
 function buildRenderedClipFileName(fileName: string, clipId: string): string {
@@ -1099,17 +1118,9 @@ ctx.onmessage = async (event: MessageEvent<VideoWorkerRequest>) => {
       return;
     }
 
-    if (!isLoaded) {
-      sendProgress(id, {
-        phase: 'loading',
-        currentFrame: 0,
-        totalFrames: 0,
-        percent: 0,
-        message: 'Loading FFmpeg...',
-      });
-      await loadFFmpeg();
-    }
-
+    // No eager loadFFmpeg() here: every handler below loads it itself AFTER
+    // posting its first progress message, so the UI shows activity immediately
+    // instead of sitting silent while the ~31MB core compiles.
     if (type === 'trim' && videoData && fileName && trimOptions) {
       await trimVideoExport(id, videoData, fileName, trimOptions);
     } else if (type === 'renderClip' && videoData && fileName && renderClipOptions) {
