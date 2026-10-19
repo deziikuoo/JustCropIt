@@ -18,6 +18,7 @@ import { findClipAtTime, localTimeToSourceTime } from './clipMath';
 import {
   clearReversePreviewCache,
   loadReversePreviewSequence,
+  hasReversePreview,
   nearestReverseFrame,
   prefetchReversePreviews,
   type ReversePreviewSequence,
@@ -30,6 +31,8 @@ export interface TimelinePreviewCallbacks {
   onFreezeFrame?: (dataUrl: string | null) => void;
   /** Fired while a reversed clip's preview strip is being decoded for the first time. */
   onBuffering?: (buffering: boolean) => void;
+  /** 0–100 while a reverse preview strip is being built. 100 means that pass finished. */
+  onReverseProgress?: (percent: number) => void;
   /** Fired when canvas reverse preview should show/hide over the <video>. */
   onReversePreview?: (active: boolean) => void;
   onEnded?: () => void;
@@ -203,10 +206,17 @@ export function createTimelinePreviewController(
   }
 
   async function ensureReverseSequence(clip: Clip): Promise<ReversePreviewSequence> {
+    if (hasReversePreview(clip)) {
+      return loadReversePreviewSequence(clip, sourceFile.value, sourceUrl.value);
+    }
     callbacks.onBuffering?.(true);
+    callbacks.onReverseProgress?.(0);
     try {
-      return await loadReversePreviewSequence(clip, sourceFile.value, sourceUrl.value);
+      return await loadReversePreviewSequence(clip, sourceFile.value, sourceUrl.value, (percent) => {
+        callbacks.onReverseProgress?.(percent);
+      });
     } finally {
+      callbacks.onReverseProgress?.(100);
       callbacks.onBuffering?.(false);
     }
   }
@@ -491,7 +501,9 @@ export function createTimelinePreviewController(
 
     async prefetchReversedClips(clips: Clip[]): Promise<void> {
       if (disposed) return;
-      await prefetchReversePreviews(clips, sourceFile.value, sourceUrl.value);
+      await prefetchReversePreviews(clips, sourceFile.value, sourceUrl.value, (percent) => {
+        callbacks.onReverseProgress?.(percent);
+      });
     },
   };
 }

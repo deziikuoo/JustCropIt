@@ -38,6 +38,12 @@ export function reversePreviewCacheKey(clip: Clip): string {
   return `${clip.sourceStart.toFixed(3)}|${clip.sourceEnd.toFixed(3)}`;
 }
 
+export function hasReversePreview(clip: Clip): boolean {
+  return cache.has(reversePreviewCacheKey(clip));
+}
+
+type ReverseProgress = (percent: number) => void;
+
 function disposeSequence(sequence: ReversePreviewSequence): void {
   for (const frame of sequence.frames) {
     try {
@@ -102,7 +108,8 @@ async function bitmapsFromBlobs(
 
 async function extractViaWebCodecs(
   videoFile: File,
-  clip: Clip
+  clip: Clip,
+  onProgress?: ReverseProgress
 ): Promise<ReversePreviewSequence> {
   const sourceDuration = Math.max(0.05, clip.sourceEnd - clip.sourceStart);
   const collected: { time: number; blob: Blob }[] = [];
@@ -122,6 +129,7 @@ async function extractViaWebCodecs(
       onFrame: (frame) => {
         collected.push({ time: frame.timestamp, blob: frame.blob });
       },
+      onProgress: (progress) => onProgress?.(Math.round(progress.percent * 0.9)),
     }
   );
 
@@ -130,14 +138,23 @@ async function extractViaWebCodecs(
 
 async function extractViaVideoSeek(
   videoUrl: string,
-  clip: Clip
+  clip: Clip,
+  onProgress?: ReverseProgress
 ): Promise<ReversePreviewSequence> {
   const sourceDuration = Math.max(0.05, clip.sourceEnd - clip.sourceStart);
   const interval = previewIntervalMs(sourceDuration) / 1000;
+  const total = Math.max(
+    1,
+    Math.min(
+      REVERSE_PREVIEW_MAX_FRAMES,
+      Math.floor(sourceDuration / interval) + 1
+    )
+  );
   const collected: { time: number; blob: Blob }[] = [];
 
   // Include exact sourceEnd to ensure last frame is captured
   for (let t = clip.sourceStart, i = 0; t <= clip.sourceEnd && i < REVERSE_PREVIEW_MAX_FRAMES; t += interval, i++) {
+    onProgress?.(Math.round((i / total) * 90));
     const url = await captureVideoFrameAsUrl(videoUrl, t);
     try {
       const response = await fetch(url);
@@ -154,7 +171,8 @@ async function extractViaVideoSeek(
 export async function loadReversePreviewSequence(
   clip: Clip,
   videoFile: File | null,
-  videoUrl: string | null
+  videoUrl: string | null,
+  onProgress?: ReverseProgress
 ): Promise<ReversePreviewSequence> {
   const key = reversePreviewCacheKey(clip);
   const cached = cache.get(key);
@@ -171,7 +189,7 @@ export async function loadReversePreviewSequence(
   const promise = (async () => {
     if (videoFile && videoWorkerPool.isSupported()) {
       try {
-        return await extractViaWebCodecs(videoFile, clip);
+        return await extractViaWebCodecs(videoFile, clip, onProgress);
       } catch (err) {
         console.warn('[ReversePreview] WebCodecs strip failed, falling back to seek capture:', err);
       }
@@ -179,7 +197,7 @@ export async function loadReversePreviewSequence(
     if (!videoUrl) {
       throw new Error('No source video available for reverse preview');
     }
-    return extractViaVideoSeek(videoUrl, clip);
+    return extractViaVideoSeek(videoUrl, clip, onProgress);
   })()
     .then((sequence) => {
       if (epoch !== cacheEpoch) {
@@ -200,21 +218,32 @@ export async function loadReversePreviewSequence(
 export async function prefetchReversePreviews(
   clips: Clip[],
   videoFile: File | null,
-  videoUrl: string | null
+  videoUrl: string | null,
+  onProgress?: ReverseProgress
 ): Promise<void> {
   const leaves = flattenClipsForRender(clips);
   const seen = new Set<string>();
+  const jobs: Clip[] = [];
   for (const clip of leaves) {
     if (!clip.reversed || clip.freeze) continue;
     const key = reversePreviewCacheKey(clip);
     if (seen.has(key) || cache.has(key) || inflight.has(key)) continue;
     seen.add(key);
+    jobs.push(clip);
+  }
+  if (jobs.length === 0) return;
+
+  onProgress?.(0);
+  for (let i = 0; i < jobs.length; i++) {
     try {
-      await loadReversePreviewSequence(clip, videoFile, videoUrl);
+      await loadReversePreviewSequence(jobs[i], videoFile, videoUrl, (inner) => {
+        onProgress?.(Math.round(((i + inner / 100) / jobs.length) * 100));
+      });
     } catch (err) {
       console.warn('[ReversePreview] Prefetch failed:', err);
     }
   }
+  onProgress?.(100);
 }
 
 export function nearestReverseFrame(

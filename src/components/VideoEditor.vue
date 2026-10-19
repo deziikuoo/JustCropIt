@@ -88,76 +88,112 @@
 
         <div class="edit-toolbar">
           <div class="edit-toolbar-group">
-            <button type="button" class="edit-tool-btn" :disabled="clips.length === 0 || isExporting" @click="handleSplit">
-              <i class="fas fa-scissors"></i><span>Split</span>
-            </button>
-            <button type="button" class="edit-tool-btn" :disabled="!hasSelection || isExporting" @click="handleDelete">
-              <i class="fas fa-trash"></i><span>Delete</span>
-            </button>
-            <button type="button" class="edit-tool-btn" :disabled="!hasSelection || isExporting" @click="handleDuplicate">
-              <i class="fas fa-clone"></i><span>Duplicate</span>
-            </button>
-            <button
-              type="button"
-              class="edit-tool-btn"
-              :disabled="!canCombineSelection || isExporting"
-              title="Combine into a compound clip (Ctrl+G)"
-              @click="handleCombine"
-            >
-              <i class="fas fa-object-group"></i><span>Combine</span>
-            </button>
-            <button
-              type="button"
-              class="edit-tool-btn"
-              :disabled="!canUngroupSelection || isExporting"
-              title="Ungroup compound clip (Ctrl+Shift+G)"
-              @click="handleUngroup"
-            >
-              <i class="fas fa-object-ungroup"></i><span>Ungroup</span>
-            </button>
+            <span class="edit-tool-slot">
+              <button type="button" class="edit-tool-btn" :disabled="clips.length === 0 || isExporting" @click="handleSplit">
+                <i class="fas fa-scissors"></i><span>Split</span>
+              </button>
+              <EditToolProgress :percent="toolRing('split')" label="Split" />
+            </span>
+            <span class="edit-tool-slot">
+              <button type="button" class="edit-tool-btn" :disabled="!hasSelection || isExporting" @click="handleDelete">
+                <i class="fas fa-trash"></i><span>Delete</span>
+              </button>
+              <EditToolProgress :percent="toolRing('delete')" label="Delete" />
+            </span>
+            <span class="edit-tool-slot">
+              <button type="button" class="edit-tool-btn" :disabled="!hasSelection || isExporting" @click="handleDuplicate">
+                <i class="fas fa-clone"></i><span>Duplicate</span>
+              </button>
+              <EditToolProgress :percent="toolRing('duplicate')" label="Duplicate" />
+            </span>
+            <span class="edit-tool-slot">
+              <button
+                type="button"
+                class="edit-tool-btn"
+                :disabled="!canCombineSelection || isExporting"
+                title="Combine into a compound clip (Ctrl+G)"
+                @click="handleCombine"
+              >
+                <i class="fas fa-object-group"></i><span>Combine</span>
+              </button>
+              <EditToolProgress :percent="toolRing('combine')" label="Combine" />
+            </span>
+            <span class="edit-tool-slot">
+              <button
+                type="button"
+                class="edit-tool-btn"
+                :disabled="!canUngroupSelection || isExporting"
+                title="Ungroup compound clip (Ctrl+Shift+G)"
+                @click="handleUngroup"
+              >
+                <i class="fas fa-object-ungroup"></i><span>Ungroup</span>
+              </button>
+              <EditToolProgress :percent="toolRing('ungroup')" label="Ungroup" />
+            </span>
           </div>
 
           <div class="edit-toolbar-group">
-            <button type="button" class="edit-tool-btn" :disabled="!hasSelection || isExporting" @click="handleReverse">
-              <i class="fas fa-backward"></i><span>Reverse</span>
-            </button>
-            <button type="button" class="edit-tool-btn" :disabled="clips.length === 0 || isExporting" @click="handleFreeze">
-              <i class="fas fa-snowflake"></i><span>Freeze</span>
-            </button>
-            <button
-              type="button"
-              class="edit-tool-btn"
-              :disabled="selectedClipIds.size !== 1 || isExporting"
-              @click="openCropTool"
-            >
-              <i class="fas fa-crop-simple"></i><span>Crop</span>
-            </button>
+            <span class="edit-tool-slot">
+              <button type="button" class="edit-tool-btn" :disabled="!hasSelection || isExporting" @click="handleReverse">
+                <i class="fas fa-backward"></i><span>Reverse</span>
+              </button>
+              <EditToolProgress :percent="toolRing('reverse')" label="Reverse" />
+            </span>
+            <span class="edit-tool-slot">
+              <button type="button" class="edit-tool-btn" :disabled="clips.length === 0 || isExporting" @click="handleFreeze">
+                <i class="fas fa-snowflake"></i><span>Freeze</span>
+              </button>
+              <EditToolProgress :percent="toolRing('freeze')" label="Freeze" />
+            </span>
+            <span class="edit-tool-slot">
+              <button
+                type="button"
+                class="edit-tool-btn"
+                :disabled="selectedClipIds.size !== 1 || isExporting"
+                @click="openCropTool"
+              >
+                <i class="fas fa-crop-simple"></i><span>Crop</span>
+              </button>
+              <EditToolProgress :percent="toolRing('crop')" label="Crop" />
+            </span>
           </div>
 
           <div class="edit-toolbar-group edit-toolbar-group--actions">
-            <div class="edit-speed-control" :class="{ 'edit-speed-control--disabled': !hasSelection }">
-              <i class="fas fa-gauge"></i>
-              <select :disabled="!hasSelection || isExporting" @change="onSpeedSelect" :value="currentSpeedValue">
-                <option v-for="s in speedOptions" :key="s" :value="s">{{ s }}x</option>
-              </select>
-            </div>
-            <button
-              type="button"
-              class="edit-tool-btn edit-tool-btn--accent"
-              :disabled="clips.length === 0 || isExporting"
-              @click="handleAutoBuild"
-            >
-              <i class="fas fa-wand-magic-sparkles"></i><span>Auto Build</span>
-            </button>
+            <span class="edit-tool-slot">
+              <div class="edit-speed-control" :class="{ 'edit-speed-control--disabled': !hasSelection }">
+                <i class="fas fa-gauge"></i>
+                <select :disabled="!hasSelection || isExporting" @change="onSpeedSelect" :value="currentSpeedValue">
+                  <option v-for="s in speedOptions" :key="s" :value="s">{{ s }}x</option>
+                </select>
+              </div>
+              <EditToolProgress :percent="toolRing('speed')" label="Speed" />
+            </span>
+            <span class="edit-tool-slot">
+              <button
+                type="button"
+                class="edit-tool-btn edit-tool-btn--accent"
+                :disabled="clips.length === 0 || isExporting"
+                @click="handleAutoBuild"
+              >
+                <i class="fas fa-wand-magic-sparkles"></i><span>Auto Build</span>
+              </button>
+              <EditToolProgress :percent="toolRing('autoBuild')" label="Auto Build" />
+            </span>
           </div>
 
           <div class="edit-toolbar-group edit-toolbar-group--history">
-            <button type="button" class="edit-tool-btn" :disabled="!canUndo || isExporting" @click="handleUndo" title="Undo (Ctrl+Z)">
-              <i class="fas fa-rotate-left"></i><span>Undo</span>
-            </button>
-            <button type="button" class="edit-tool-btn" :disabled="!canRedo || isExporting" @click="handleRedo" title="Redo (Ctrl+Y)">
-              <i class="fas fa-rotate-right"></i><span>Redo</span>
-            </button>
+            <span class="edit-tool-slot">
+              <button type="button" class="edit-tool-btn" :disabled="!canUndo || isExporting" @click="handleUndo" title="Undo (Ctrl+Z)">
+                <i class="fas fa-rotate-left"></i><span>Undo</span>
+              </button>
+              <EditToolProgress :percent="toolRing('undo')" label="Undo" />
+            </span>
+            <span class="edit-tool-slot">
+              <button type="button" class="edit-tool-btn" :disabled="!canRedo || isExporting" @click="handleRedo" title="Redo (Ctrl+Y)">
+                <i class="fas fa-rotate-right"></i><span>Redo</span>
+              </button>
+              <EditToolProgress :percent="toolRing('redo')" label="Redo" />
+            </span>
           </div>
         </div>
 
@@ -186,14 +222,17 @@
               </div>
               <span>{{ exportProgress.message || 'Exporting...' }}</span>
             </div>
-            <button
-              type="button"
-              class="edit-tool-btn edit-tool-btn--primary"
-              :disabled="clips.length === 0 || isExporting || isBuffering"
-              @click="handleExport"
-            >
-              <i class="fas fa-download"></i><span>{{ isExporting ? 'Exporting...' : 'Export' }}</span>
-            </button>
+            <span class="edit-tool-slot">
+              <button
+                type="button"
+                class="edit-tool-btn edit-tool-btn--primary"
+                :disabled="clips.length === 0 || isExporting || isBuffering"
+                @click="handleExport"
+              >
+                <i class="fas fa-download"></i><span>{{ isExporting ? 'Exporting...' : 'Export' }}</span>
+              </button>
+              <EditToolProgress :percent="exportRing" label="Export" tone="dark" />
+            </span>
           </template>
         </VideoEditTimeline>
       </template>
@@ -224,6 +263,21 @@ import { localTimeToSourceTime, findClipAtTime } from '../utils/videoEdit/clipMa
 import { flattenClipsForRender } from '../utils/videoEdit/compoundClip';
 import type { CropBox } from '../types/videoEdit';
 import { useLayoutMode } from '../composables/useLayoutMode';
+import EditToolProgress from './EditToolProgress.vue';
+
+type EditTool =
+  | 'split'
+  | 'delete'
+  | 'duplicate'
+  | 'combine'
+  | 'ungroup'
+  | 'reverse'
+  | 'freeze'
+  | 'crop'
+  | 'speed'
+  | 'autoBuild'
+  | 'undo'
+  | 'redo';
 
 const {
   videoFile,
@@ -300,6 +354,9 @@ function ensurePreviewController(): TimelinePreviewController {
         },
         onBuffering: (b) => {
           isBuffering.value = b;
+        },
+        onReverseProgress: (percent) => {
+          noteReverseProgress(percent);
         },
         onEnded: () => {
           isPlaying.value = false;
@@ -420,60 +477,113 @@ watch(
   }
 );
 
+const toolProgress = ref<Partial<Record<EditTool, number>>>({});
+const toolTokens: Partial<Record<EditTool, number>> = {};
+let toolToken = 0;
+let reverseEpoch = 0;
+
+function setToolProgress(tool: EditTool, percent: number): void {
+  toolProgress.value = { ...toolProgress.value, [tool]: percent };
+}
+
+function clearToolProgress(tool: EditTool): void {
+  if (!(tool in toolProgress.value)) return;
+  const next = { ...toolProgress.value };
+  delete next[tool];
+  toolProgress.value = next;
+}
+
+function toolRing(tool: EditTool): number | null {
+  return toolProgress.value[tool] ?? null;
+}
+
+const exportRing = computed(() => (isExporting.value ? (exportProgress.value?.percent ?? 0) : null));
+
+function noteReverseProgress(percent: number): void {
+  const epoch = ++reverseEpoch;
+  setToolProgress('reverse', Math.max(0, Math.min(100, percent)));
+  if (percent >= 100) {
+    window.setTimeout(() => {
+      if (reverseEpoch === epoch) clearToolProgress('reverse');
+    }, 450);
+  }
+}
+
+async function trackTool(tool: EditTool, work: () => Promise<void>): Promise<void> {
+  const token = ++toolToken;
+  toolTokens[tool] = token;
+  const started = performance.now();
+  setToolProgress(tool, -1);
+  try {
+    await work();
+    if (toolTokens[tool] === token) setToolProgress(tool, 100);
+  } finally {
+    const hold = Math.max(280, 520 - (performance.now() - started));
+    window.setTimeout(() => {
+      if (toolTokens[tool] === token) clearToolProgress(tool);
+    }, hold);
+  }
+}
+
 async function handleSplit(): Promise<void> {
   previewController?.pause();
   isPlaying.value = false;
-  await splitAtPlayhead();
+  await trackTool('split', () => splitAtPlayhead());
 }
 
 async function handleFreeze(): Promise<void> {
   previewController?.pause();
   isPlaying.value = false;
-  await freezeAtPlayhead();
+  await trackTool('freeze', () => freezeAtPlayhead());
 }
 
 async function handleDelete(): Promise<void> {
   previewController?.pause();
   isPlaying.value = false;
-  await deleteSelected();
+  await trackTool('delete', () => deleteSelected());
 }
 
 async function handleDuplicate(): Promise<void> {
   previewController?.pause();
   isPlaying.value = false;
-  await duplicateSelected();
+  await trackTool('duplicate', () => duplicateSelected());
 }
 
 async function handleCombine(): Promise<void> {
   previewController?.pause();
   isPlaying.value = false;
-  await combineSelected();
+  await trackTool('combine', () => combineSelected());
 }
 
 async function handleUngroup(): Promise<void> {
   previewController?.pause();
   isPlaying.value = false;
-  await ungroupSelected();
+  await trackTool('ungroup', () => ungroupSelected());
   void ensurePreviewController().prefetchReversedClips(clips.value);
 }
 
 async function handleReverse(): Promise<void> {
   previewController?.pause();
   isPlaying.value = false;
-  await reverseSelected();
-  void ensurePreviewController().prefetchReversedClips(clips.value);
+  noteReverseProgress(0);
+  try {
+    await reverseSelected();
+    await ensurePreviewController().prefetchReversedClips(clips.value);
+  } finally {
+    noteReverseProgress(100);
+  }
 }
 
 async function handleUndo(): Promise<void> {
   previewController?.pause();
   isPlaying.value = false;
-  await undo();
+  await trackTool('undo', () => undo());
 }
 
 async function handleRedo(): Promise<void> {
   previewController?.pause();
   isPlaying.value = false;
-  await redo();
+  await trackTool('redo', () => redo());
 }
 
 // Ctrl+Z / Ctrl+Y (or Ctrl+Shift+Z) undo/redo — only while this editor is visible
@@ -568,13 +678,13 @@ async function onSpeedSelect(event: Event): Promise<void> {
   previewController?.pause();
   isPlaying.value = false;
   const value = Number((event.target as HTMLSelectElement).value);
-  await setSpeedForSelected(value);
+  await trackTool('speed', () => setSpeedForSelected(value));
 }
 
 async function handleAutoBuild(): Promise<void> {
   previewController?.pause();
   isPlaying.value = false;
-  await runAutoBuild();
+  await trackTool('autoBuild', () => runAutoBuild());
   void ensurePreviewController().prefetchReversedClips(clips.value);
 }
 
@@ -595,11 +705,13 @@ async function openCropTool(): Promise<void> {
   if (!clip) return;
   const sourceTime = clip.freeze ? clip.freeze.sourceTime : localTimeToSourceTime(clip, 0);
   try {
-    const url = await captureVideoFrameAsUrl(videoPreviewUrl.value, sourceTime);
-    if (cropSourceUrlObj) URL.revokeObjectURL(cropSourceUrlObj);
-    cropSourceUrlObj = url;
-    cropSourceUrl.value = url;
-    showCropTool.value = true;
+    await trackTool('crop', async () => {
+      const url = await captureVideoFrameAsUrl(videoPreviewUrl.value!, sourceTime);
+      if (cropSourceUrlObj) URL.revokeObjectURL(cropSourceUrlObj);
+      cropSourceUrlObj = url;
+      cropSourceUrl.value = url;
+      showCropTool.value = true;
+    });
   } catch {
     error.value = 'Failed to capture a frame from this clip for cropping.';
   }
@@ -617,7 +729,7 @@ async function handleCropped(_blob: Blob, crop: CropBox, rotation: number): Prom
   }
   previewController?.pause();
   isPlaying.value = false;
-  await applyCropToSelected(crop);
+  await trackTool('crop', () => applyCropToSelected(crop));
 }
 
 // --- Live crop preview approximation for non-reversed clips (CSS transform) ---
@@ -914,6 +1026,11 @@ onUnmounted(() => {
   gap: 8px;
 }
 
+.edit-tool-slot {
+  position: relative;
+  display: inline-flex;
+}
+
 .edit-toolbar-group + .edit-toolbar-group {
   padding-left: 10px;
   border-left: 1px solid rgba(255, 255, 255, 0.1);
@@ -1054,6 +1171,11 @@ onUnmounted(() => {
   .edit-toolbar-group--history {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     margin-left: 0;
+  }
+
+  .edit-toolbar-group > .edit-tool-slot {
+    width: 100%;
+    min-width: 0;
   }
 
   .edit-toolbar .edit-tool-btn,
