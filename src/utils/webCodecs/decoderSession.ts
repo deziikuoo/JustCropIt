@@ -22,12 +22,14 @@ export class DecoderSession {
 
   async configure(
     baseConfig: VideoDecoderConfig,
-    onFrame: DecodedFrameHandler
+    onFrame: DecodedFrameHandler,
+    options?: { optimizeForLatency?: boolean }
   ): Promise<VideoDecoderConfig> {
+    const optimizeForLatency = options?.optimizeForLatency ?? true;
     const config: VideoDecoderConfig = {
       ...baseConfig,
       hardwareAcceleration: WEBCODECS_HARDWARE_ACCELERATION,
-      optimizeForLatency: true,
+      optimizeForLatency,
     };
 
     let supported = await isVideoDecoderConfigSupported(config);
@@ -36,7 +38,7 @@ export class DecoderSession {
       const softwareConfig: VideoDecoderConfig = {
         ...baseConfig,
         hardwareAcceleration: 'prefer-software',
-        optimizeForLatency: true,
+        optimizeForLatency,
       };
       supported = await isVideoDecoderConfigSupported(softwareConfig);
       if (!supported) {

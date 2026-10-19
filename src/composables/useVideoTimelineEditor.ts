@@ -5,7 +5,7 @@
  * separate from photo undo). Every mutating operation goes through a
  * Command so it's undoable via the toolbar's Undo button.
  */
-import { ref, computed, onUnmounted } from 'vue';
+import { ref, computed, watch, onUnmounted, nextTick } from 'vue';
 import type { Ref } from 'vue';
 import { UndoRedoManager } from '../utils/undoRedo';
 import type { Command } from '../utils/undoRedo';
@@ -13,6 +13,8 @@ import {
   SplitClipCommand,
   DeleteClipsCommand,
   DuplicateClipsCommand,
+  CombineClipsCommand,
+  UngroupClipsCommand,
   SetSpeedCommand,
   ToggleReverseCommand,
   ApplyCropCommand,
@@ -20,11 +22,19 @@ import {
   AutoBuildCommand,
 } from '../utils/undoRedo/commands/timeline';
 import type { Clip, CropBox, TimelineRenderProgress } from '../types/videoEdit';
-import { FREEZE_CLIP_DURATION_SECONDS, getTimelineDuration } from '../types/videoEdit';
+import { FREEZE_CLIP_DURATION_SECONDS, getTimelineDuration, isCompoundClip } from '../types/videoEdit';
 import { generateClipId, findClipAtTime } from '../utils/videoEdit/clipMath';
+import { canCombineClips, canUngroupClips, flattenClipsForRender } from '../utils/videoEdit/compoundClip';
 import { videoWorkerPool } from '../utils/videoWorkerPool';
 import type { VideoInfo } from '../types/video';
 import { exportTimelineToVideo, downloadRenderedVideo } from '../utils/videoEdit/exportTimeline';
+import {
+  saveVideoEditSession,
+  loadVideoEditSession,
+  clearVideoEditSession,
+  cleanupExpiredVideoEditSession,
+  VIDEO_SESSION_TTL_MS,
+} from '../utils/videoSessionStorage';
 
 export function useVideoTimelineEditor() {
   const videoFile = ref<File | null>(null);
@@ -40,6 +50,12 @@ export function useVideoTimelineEditor() {
 
   const isExporting = ref(false);
   const exportProgress = ref<TimelineRenderProgress | null>(null);
+
+  const isRestoringSession = ref(false);
+  const sessionCreatedAt = ref<number | null>(null);
+  const sessionExpiresAt = ref<number | null>(null);
+  let persistTimer: ReturnType<typeof setTimeout> | null = null;
+  let expiryTimer: ReturnType<typeof setTimeout> | null = null;
 
   const history = new UndoRedoManager();
   const historyVersion = ref(0);
@@ -62,6 +78,8 @@ export function useVideoTimelineEditor() {
     clips.value.filter((clip) => selectedClipIds.value.has(clip.id))
   );
   const clipAtPlayhead = computed(() => findClipAtTime(clips.value, playheadTime.value));
+  const canCombineSelection = computed(() => canCombineClips(clips.value, selectedClipIds.value));
+  const canUngroupSelection = computed(() => canUngroupClips(clips.value, selectedClipIds.value));
 
   // --- Selection -----------------------------------------------------------
 
@@ -87,11 +105,14 @@ export function useVideoTimelineEditor() {
     selectionAnchorId.value = id;
   }
 
-  /** Shift+click: select the contiguous range from the last anchor to `id`. */
-  function selectRangeTo(id: string): void {
+  /**
+   * Shift+click: select the contiguous range from the last anchor to `id`.
+   * `additive` (Ctrl+Shift) unions that range into the current selection.
+   */
+  function selectRangeTo(id: string, additive = false): void {
     const anchor = selectionAnchorId.value;
     if (!anchor) {
-      toggleClipSelection(id);
+      toggleClipSelection(id, additive);
       return;
     }
     const ids = clips.value.map((clip) => clip.id);
@@ -99,7 +120,14 @@ export function useVideoTimelineEditor() {
     const to = ids.indexOf(id);
     if (from === -1 || to === -1) return;
     const [start, end] = from < to ? [from, to] : [to, from];
-    selectedClipIds.value = new Set(ids.slice(start, end + 1));
+    const rangeIds = ids.slice(start, end + 1);
+    if (additive) {
+      const next = new Set(selectedClipIds.value);
+      for (const rangeId of rangeIds) next.add(rangeId);
+      selectedClipIds.value = next;
+      return;
+    }
+    selectedClipIds.value = new Set(rangeIds);
   }
 
   // --- Video loading ---------------------------------------------------------
@@ -111,7 +139,14 @@ export function useVideoTimelineEditor() {
     }
   }
 
-  function reset(): void {
+  async function reset(): Promise<void> {
+    if (persistTimer) {
+      clearTimeout(persistTimer);
+      persistTimer = null;
+    }
+    clearExpiryTimer();
+    sessionCreatedAt.value = null;
+    sessionExpiresAt.value = null;
     revokePreviewUrl();
     videoFile.value = null;
     videoInfo.value = null;
@@ -121,14 +156,20 @@ export function useVideoTimelineEditor() {
     error.value = null;
     exportProgress.value = null;
     history.clear();
+    try {
+      await clearVideoEditSession();
+    } catch (err) {
+      console.warn('Failed to clear edit session:', err);
+    }
   }
 
   async function loadVideo(file: File): Promise<void> {
-    reset();
+    await reset();
     videoFile.value = file;
     videoPreviewUrl.value = URL.createObjectURL(file);
     videoWorkerPool.preloadFfmpeg();
     isProbing.value = true;
+    videoWorkerPool.warmupFfmpeg();
     try {
       const info = await videoWorkerPool.probeVideo(file);
       if (info.duration > 0) {
@@ -149,12 +190,133 @@ export function useVideoTimelineEditor() {
     if (videoInfo.value && videoInfo.value.duration > 0) return;
     if (!Number.isFinite(meta.duration) || meta.duration <= 0) return;
     videoInfo.value = { duration: meta.duration, width: meta.width, height: meta.height };
+    // Initialize clips array with the full video as the first clip
+    if (clips.value.length === 0) {
+      clips.value = [
+        { id: generateClipId(), sourceStart: 0, sourceEnd: meta.duration, speed: 1, reversed: false },
+      ];
+    }
     if (clips.value.length === 0) {
       clips.value = [
         { id: generateClipId(), sourceStart: 0, sourceEnd: meta.duration, speed: 1, reversed: false },
       ];
     }
   }
+
+  // --- Session persistence (same 24h IndexedDB clock as the Video tab) -----
+
+  function clearExpiryTimer(): void {
+    if (expiryTimer) {
+      clearTimeout(expiryTimer);
+      expiryTimer = null;
+    }
+  }
+
+  function beginNewSessionClock(): void {
+    const now = Date.now();
+    sessionCreatedAt.value = now;
+    sessionExpiresAt.value = now + VIDEO_SESSION_TTL_MS;
+    scheduleExpiryTimer();
+  }
+
+  function scheduleExpiryTimer(): void {
+    clearExpiryTimer();
+    if (sessionExpiresAt.value == null) return;
+    const delay = Math.max(0, sessionExpiresAt.value - Date.now());
+    expiryTimer = setTimeout(() => {
+      void (async () => {
+        console.warn('[VideoEditSession] 24h timer elapsed — clearing edit page');
+        await reset();
+        error.value =
+          'Edit session expired after 24 hours and was cleared. Photos are unaffected.';
+      })();
+    }, delay);
+  }
+
+  function schedulePersist(): void {
+    if (
+      isRestoringSession.value ||
+      isProbing.value ||
+      isExporting.value ||
+      !videoFile.value
+    ) {
+      return;
+    }
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = setTimeout(() => {
+      persistTimer = null;
+      void persistSession();
+    }, 500);
+  }
+
+  async function persistSession(): Promise<void> {
+    if (!videoFile.value || isRestoringSession.value || isProbing.value) return;
+
+    if (sessionCreatedAt.value == null || sessionExpiresAt.value == null) {
+      beginNewSessionClock();
+    }
+
+    try {
+      await saveVideoEditSession({
+        video: videoFile.value,
+        videoName: videoFile.value.name,
+        videoType: videoFile.value.type || 'video/mp4',
+        videoInfo: videoInfo.value,
+        clips: clips.value,
+        playheadTime: playheadTime.value,
+        createdAt: sessionCreatedAt.value!,
+        expiresAt: sessionExpiresAt.value!,
+      });
+    } catch (err) {
+      console.warn('Failed to persist edit session:', err);
+    }
+  }
+
+  async function restoreSession(): Promise<boolean> {
+    try {
+      await cleanupExpiredVideoEditSession();
+      const session = await loadVideoEditSession();
+      if (!session) return false;
+
+      isRestoringSession.value = true;
+      sessionCreatedAt.value = session.createdAt;
+      sessionExpiresAt.value = session.expiresAt;
+      scheduleExpiryTimer();
+      videoInfo.value = session.videoInfo;
+      clips.value = session.clips;
+      playheadTime.value = session.playheadTime;
+      clearSelection();
+      history.clear();
+
+      const file = new File([session.video], session.videoName, {
+        type: session.videoType || 'video/mp4',
+      });
+      revokePreviewUrl();
+      videoFile.value = file;
+      videoPreviewUrl.value = URL.createObjectURL(file);
+      videoWorkerPool.warmupFfmpeg();
+      error.value = null;
+      exportProgress.value = null;
+
+      await nextTick();
+      return true;
+    } catch (err) {
+      console.warn('Failed to restore edit session:', err);
+      return false;
+    } finally {
+      isRestoringSession.value = false;
+    }
+  }
+
+  watch([videoFile, videoInfo, clips], schedulePersist, { deep: true });
+
+  watch(isProbing, (probing, wasProbing) => {
+    if (wasProbing && !probing) schedulePersist();
+  });
+
+  watch(isExporting, (exporting, wasExporting) => {
+    if (wasExporting && !exporting) schedulePersist();
+  });
 
   // --- Commands / operations ---------------------------------------------
 
@@ -197,6 +359,32 @@ export function useVideoTimelineEditor() {
     await runCommand(new DuplicateClipsCommand(clips, new Set(selectedClipIds.value)));
   }
 
+  async function combineSelected(): Promise<void> {
+    if (!canCombineSelection.value) return;
+    const ids = new Set(selectedClipIds.value);
+    await runCommand(new CombineClipsCommand(clips, ids));
+    const compound = clips.value.find(
+      (clip) => isCompoundClip(clip) && clip.children!.some((child) => ids.has(child.id))
+    );
+    selectedClipIds.value = compound ? new Set([compound.id]) : new Set();
+    selectionAnchorId.value = compound?.id ?? null;
+  }
+
+  async function ungroupSelected(): Promise<void> {
+    if (!canUngroupSelection.value) return;
+    const expandedIds: string[] = [];
+    for (const clip of clips.value) {
+      if (selectedClipIds.value.has(clip.id) && isCompoundClip(clip)) {
+        expandedIds.push(...clip.children!.map((child) => child.id));
+      } else if (selectedClipIds.value.has(clip.id)) {
+        expandedIds.push(clip.id);
+      }
+    }
+    await runCommand(new UngroupClipsCommand(clips, new Set(selectedClipIds.value)));
+    selectedClipIds.value = new Set(expandedIds);
+    selectionAnchorId.value = expandedIds[expandedIds.length - 1] ?? null;
+  }
+
   async function setSpeedForSelected(speed: number): Promise<void> {
     if (!hasSelection.value) return;
     await runCommand(new SetSpeedCommand(clips, new Set(selectedClipIds.value), speed));
@@ -224,12 +412,21 @@ export function useVideoTimelineEditor() {
 
   async function exportEditedVideo(): Promise<void> {
     if (!videoFile.value || clips.value.length === 0) return;
+
+    const leaves = flattenClipsForRender(clips.value);
+    const invalidClips = leaves.filter((c) => !c.freeze && c.sourceEnd <= c.sourceStart);
+    if (invalidClips.length > 0 || leaves.length === 0) {
+      error.value = 'Cannot export: video metadata not loaded. Please try reloading the video.';
+      console.error('[Export] Invalid clips detected:', invalidClips);
+      return;
+    }
+
     isExporting.value = true;
     error.value = null;
     exportProgress.value = {
       phase: 'loading',
       currentClip: 0,
-      totalClips: clips.value.length,
+      totalClips: leaves.length,
       percent: 0,
     };
     try {
@@ -246,6 +443,12 @@ export function useVideoTimelineEditor() {
 
   onUnmounted(() => {
     unsubscribeHistory();
+    if (persistTimer) {
+      clearTimeout(persistTimer);
+      persistTimer = null;
+      void persistSession();
+    }
+    clearExpiryTimer();
     revokePreviewUrl();
   });
 
@@ -263,6 +466,8 @@ export function useVideoTimelineEditor() {
     hasSelection,
     selectedClips,
     clipAtPlayhead,
+    canCombineSelection,
+    canUngroupSelection,
 
     canUndo,
     canRedo,
@@ -276,6 +481,7 @@ export function useVideoTimelineEditor() {
 
     loadVideo,
     applyVideoMetadataFallback,
+    restoreSession,
     reset,
 
     undo,
@@ -283,6 +489,8 @@ export function useVideoTimelineEditor() {
     splitAtPlayhead,
     deleteSelected,
     duplicateSelected,
+    combineSelected,
+    ungroupSelected,
     setSpeedForSelected,
     reverseSelected,
     applyCropToSelected,

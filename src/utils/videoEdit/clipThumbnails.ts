@@ -1,19 +1,17 @@
 /**
- * Batch clip-thumbnail generation for the hidden Edit tab timeline.
+ * Timeline clip thumbnails — same WebCodecs extract path as the Video Frames
+ * tab, with the image-tab downscale (max edge + JPEG quality) so filmstrip
+ * tiles don't decode full-resolution frames.
  *
- * Primary path: a single WebCodecs hardware-decode pass captures every
- * needed source-video timestamp in one sweep — the same pipeline the Video
- * Frames tab uses (`extractFrames.ts`) — instead of spinning up a brand new
- * `<video>` element per clip on the main thread.
- *
- * Falls back to the naive per-clip `<video>` seek+capture path (run with
- * bounded concurrency instead of one-at-a-time) when WebCodecs is
- * unavailable, or for any individual timestamp that fails to decode.
+ * Frames stream in via `onFrame` so the timeline can paint incrementally
+ * instead of waiting for the whole pass.
  */
 import { videoWorkerPool } from '../videoWorkerPool';
 import { captureVideoFrameAsUrl } from './captureFrame';
-import { mapWithConcurrency } from '../concurrency';
-import { GRID_DECODE_CONCURRENCY } from '../../constants/optimization';
+import {
+  THUMBNAIL_JPEG_QUALITY,
+  TIMELINE_THUMB_MAX_EDGE_PX,
+} from '../../constants/optimization';
 
 export interface ClipThumbnailRequest {
   /** Cache key the result should be stored under (e.g. clipThumbKey(clip)). */
@@ -22,62 +20,59 @@ export interface ClipThumbnailRequest {
   sourceTime: number;
 }
 
-/**
- * WebCodecs extraction does one linear decode sweep from the earliest to the
- * latest requested timestamp — a big win when several clips are clustered
- * together (e.g. right after Split or Auto Build), but wasteful for a single
- * isolated thumbnail in a long video, where a native `<video>` seek is
- * cheaper. Only attempt the batch path once there's enough work to amortize.
- */
-const MIN_REQUESTS_FOR_WEBCODECS_BATCH = 3;
+export function roundThumbTimeMs(seconds: number): number {
+  return Math.round(Math.max(0, seconds) * 1000);
+}
 
 /**
  * Captures a thumbnail (as an object URL) for every request, keyed by `key`.
- * Requests that resolve to the same timestamp (e.g. duplicated clips) share a
- * single decoded frame, though each still gets its own independently
- * revokable object URL.
+ * Same source timestamp shares one object URL. `onFrame` fires as each unique
+ * time is ready so the UI can stream tiles in.
  */
 export async function generateClipThumbnails(
   videoFile: File | null,
   videoUrl: string | null,
-  requests: ClipThumbnailRequest[]
+  requests: ClipThumbnailRequest[],
+  onFrame?: (sourceTime: number, objectUrl: string) => void
 ): Promise<Map<string, string>> {
   const results = new Map<string, string>();
   if (requests.length === 0) return results;
 
   const remaining = new Map<string, number>(requests.map((r) => [r.key, r.sourceTime]));
+  const urlByMs = new Map<number, string>();
 
-  const distinctTimestamps = new Set(
-    requests.map((r) => Math.round(Math.max(0, r.sourceTime) * 1000) / 1000)
-  ).size;
+  const publish = (sourceTime: number, url: string): void => {
+    const ms = roundThumbTimeMs(sourceTime);
+    urlByMs.set(ms, url);
+    onFrame?.(sourceTime, url);
+    for (const [key, time] of remaining) {
+      if (roundThumbTimeMs(time) === ms) {
+        results.set(key, url);
+        remaining.delete(key);
+      }
+    }
+  };
 
-  if (
-    videoFile &&
-    distinctTimestamps >= MIN_REQUESTS_FOR_WEBCODECS_BATCH &&
-    videoWorkerPool.isSupported()
-  ) {
+  if (videoFile && videoWorkerPool.isSupported()) {
     try {
-      await extractViaWebCodecs(videoFile, remaining, results);
+      await extractViaWebCodecs(videoFile, remaining, publish);
     } catch (err) {
       console.warn('[ClipThumbnails] WebCodecs batch extraction failed, falling back:', err);
     }
   }
 
   if (remaining.size > 0 && videoUrl) {
-    await fallbackPerClip(videoUrl, remaining, results);
+    await fallbackSeekCapture(videoUrl, remaining, publish);
   }
 
   return results;
 }
 
-/** Single hardware-decode pass capturing every remaining requested timestamp. */
 async function extractViaWebCodecs(
   videoFile: File,
   remaining: Map<string, number>,
-  results: Map<string, string>
+  publish: (sourceTime: number, url: string) => void
 ): Promise<void> {
-  // Group requested keys by timestamp (ms precision) so requests that land on
-  // the same instant only need to decode/capture one frame.
   const byTimestamp = new Map<number, string[]>();
   for (const [key, time] of remaining) {
     const rounded = Math.round(Math.max(0, time) * 1000) / 1000;
@@ -87,44 +82,49 @@ async function extractViaWebCodecs(
   }
 
   const targetTimestamps = Array.from(byTimestamp.keys()).sort((a, b) => a - b);
+  if (targetTimestamps.length === 0) return;
 
   await videoWorkerPool.extractFrames(
     videoFile,
     {
       outputFormat: 'jpeg',
-      quality: 0.85,
+      quality: THUMBNAIL_JPEG_QUALITY,
       targetTimestamps,
+      maxEdgePx: TIMELINE_THUMB_MAX_EDGE_PX,
     },
     {
       onFrame: (frame) => {
         const rounded = Math.round(frame.timestamp * 1000) / 1000;
         const keys = byTimestamp.get(rounded);
         if (!keys) return;
-        for (const key of keys) {
-          // A fresh object URL per key — never share one URL across cache
-          // entries, since revoking it for one stale clip would break the
-          // others still referencing it.
-          results.set(key, URL.createObjectURL(frame.blob));
-          remaining.delete(key);
-        }
+        publish(rounded, URL.createObjectURL(frame.blob));
       },
     }
   );
 }
 
-/** Naive per-clip `<video>` seek+capture, parallelized instead of sequential. */
-async function fallbackPerClip(
+/** Sequential seek+capture on one element, downscaled like the image grid. */
+async function fallbackSeekCapture(
   videoUrl: string,
   remaining: Map<string, number>,
-  results: Map<string, string>
+  publish: (sourceTime: number, url: string) => void
 ): Promise<void> {
-  const entries = Array.from(remaining.entries());
-  await mapWithConcurrency(entries, GRID_DECODE_CONCURRENCY, async ([key, time]) => {
-    try {
-      const url = await captureVideoFrameAsUrl(videoUrl, time);
-      results.set(key, url);
-    } catch (err) {
-      console.warn(`[ClipThumbnails] Failed to capture fallback thumbnail for ${key}:`, err);
+  const times = Array.from(
+    new Set(Array.from(remaining.values()).map((t) => Math.round(Math.max(0, t) * 1000) / 1000))
+  ).sort((a, b) => a - b);
+
+  for (const time of times) {
+    if (![...remaining.values()].some((t) => Math.round(Math.max(0, t) * 1000) / 1000 === time)) {
+      continue;
     }
-  });
+    try {
+      const url = await captureVideoFrameAsUrl(videoUrl, time, {
+        maxEdgePx: TIMELINE_THUMB_MAX_EDGE_PX,
+        quality: THUMBNAIL_JPEG_QUALITY,
+      });
+      publish(time, url);
+    } catch (err) {
+      console.warn(`[ClipThumbnails] Failed to capture fallback thumbnail at ${time}s:`, err);
+    }
+  }
 }

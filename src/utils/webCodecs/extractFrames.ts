@@ -163,7 +163,8 @@ export class WebCodecsExtractionSession {
           const { data, mimeType } = await this.capture.capture(
             frame,
             isJpeg ? 'jpeg' : 'png',
-            jpegQuality
+            jpegQuality,
+            options.maxEdgePx
           );
 
           callbacks.onFrame({

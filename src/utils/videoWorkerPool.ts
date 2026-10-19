@@ -2,7 +2,8 @@
  * Video Worker Pool Manager
  *
  * Routes probe + extract to the WebCodecs worker (hardware decode when available).
- * Routes trim export to the FFmpeg worker (lazy-loaded on first trim).
+ * Edit-tab export prefers WebCodecs VideoEncoder, then FFmpeg WASM.
+ * Trim export stays on the FFmpeg worker (lazy-loaded on first trim).
  */
 
 import type {
@@ -15,8 +16,10 @@ import type {
   TimelineRenderProgressWire,
 } from '../types/video';
 import type { ClipRenderSpec } from '../types/videoEdit';
-import { isWebCodecsSupported } from './webCodecs/support';
+import { isVideoEncoderSupported, isWebCodecsSupported } from './webCodecs/support';
 import { getFfmpegWorkerPoolSize } from '../constants/optimization';
+import { planUniqueRenders } from './videoEdit/clipRenderFingerprint';
+import { shouldTryHardwareTimelineExport } from './webCodecs/hardwareExportGate';
 
 type ProgressCallback = (progress: ExtractionProgress) => void;
 type FrameCallback = (frame: { index: number; timestamp: number; blob: Blob }) => void;
@@ -51,6 +54,7 @@ class VideoWorkerPool {
   private ffmpegInitialized = false;
   /** Ephemeral — only spun up for the duration of a parallel export, then torn down. */
   private ffmpegPoolWorkers: Worker[] = [];
+  private webCodecsQueue: Promise<void> = Promise.resolve();
 
   /** WebCodecs path needs Worker + VideoDecoder + OffscreenCanvas. */
   isSupported(): boolean {
@@ -148,6 +152,20 @@ class VideoWorkerPool {
     this.ffmpegInitialized = true;
   }
 
+  /** Load FFmpeg.wasm in the background so the first export isn't waiting on the CDN. */
+  warmupFfmpeg(): void {
+    if (typeof Worker === 'undefined') return;
+    this.initFfmpegWorker();
+    if (!this.ffmpegWorker) return;
+    const id = this.generateId();
+    this.pendingRequests.set(id, {
+      resolve: () => undefined,
+      reject: () => undefined,
+      workerKind: 'ffmpeg',
+    });
+    this.ffmpegWorker.postMessage({ id, type: 'warmup' } satisfies VideoWorkerRequest);
+  }
+
   private createFfmpegPoolWorker(label: string): Worker {
     const worker = new Worker(
       new URL('../workers/videoWorker.ts', import.meta.url),
@@ -180,9 +198,29 @@ class VideoWorkerPool {
   }
 
   /**
+   * The WebCodecs worker only has one demux/decode session. Queue probe/extract
+   * so a reverse-preview strip and timeline thumbnails never overlap.
+   */
+  private enqueueWebCodecs<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.webCodecsQueue.then(task, task);
+    this.webCodecsQueue = run.then(
+      () => undefined,
+      () => undefined
+    );
+    return run;
+  }
+
+  /**
    * Probe a video file to get its information (duration, dimensions)
    */
   async probeVideo(
+    videoFile: File,
+    onInfo?: InfoCallback
+  ): Promise<VideoInfo> {
+    return this.enqueueWebCodecs(() => this.probeVideoNow(videoFile, onInfo));
+  }
+
+  private async probeVideoNow(
     videoFile: File,
     onInfo?: InfoCallback
   ): Promise<VideoInfo> {
@@ -227,6 +265,17 @@ class VideoWorkerPool {
    * Extract frames from a video file via WebCodecs
    */
   async extractFrames(
+    videoFile: File,
+    options: ExtractionOptions,
+    callbacks: {
+      onProgress?: ProgressCallback;
+      onFrame?: FrameCallback;
+    }
+  ): Promise<{ framesExtracted: number; cancelled: boolean }> {
+    return this.enqueueWebCodecs(() => this.extractFramesNow(videoFile, options, callbacks));
+  }
+
+  private async extractFramesNow(
     videoFile: File,
     options: ExtractionOptions,
     callbacks: {
@@ -386,9 +435,8 @@ class VideoWorkerPool {
 
   /**
    * Render every clip in the timeline and concatenate them into one final video.
-   * Uses a pool of parallel FFmpeg workers when there are enough clips to make
-   * it worthwhile (see `getFfmpegWorkerPoolSize`); otherwise renders sequentially
-   * on the single persistent FFmpeg worker.
+   * Unique recipes that need a re-encode go through WebCodecs VideoEncoder
+   * (phone/desktop hardware) when available; otherwise FFmpeg WASM libx264.
    */
   async exportTimeline(
     videoFile: File,
@@ -399,8 +447,25 @@ class VideoWorkerPool {
       throw new Error('Video processing is not supported in this browser');
     }
 
+    if (shouldTryHardwareTimelineExport(clips) && this.isSupported() && isVideoEncoderSupported()) {
+      try {
+        return await this.enqueueWebCodecs(() =>
+          this.exportTimelineHardware(videoFile, clips, onTimelineProgress)
+        );
+      } catch (err) {
+        if (err instanceof Error && err.message === 'Export cancelled') {
+          throw err;
+        }
+        console.warn('[VideoWorkerPool] Hardware export failed, falling back to FFmpeg:', err);
+      }
+    }
+
     const poolSize = getFfmpegWorkerPoolSize(clips.length);
-    if (poolSize <= 1) {
+    const uniqueCount = planUniqueRenders(clips).uniqueKeys.length;
+    // Extra WASM cores are slower than a single reused FFmpeg + one encode pass,
+    // especially on short clips. Keep unique-recipe stitch (compound / Auto Build
+    // repeats) on the sequential path so identical leaves encode once.
+    if (poolSize <= 1 || clips.length < 8 || uniqueCount < clips.length) {
       return this.exportTimelineSequential(videoFile, clips, onTimelineProgress);
     }
 
@@ -415,6 +480,54 @@ class VideoWorkerPool {
       console.warn('[VideoWorkerPool] Parallel export failed, retrying sequentially:', err);
       return this.exportTimelineSequential(videoFile, clips, onTimelineProgress);
     }
+  }
+
+  private async exportTimelineHardware(
+    videoFile: File,
+    clips: ClipRenderSpec[],
+    onTimelineProgress?: TimelineProgressCallback
+  ): Promise<{ blob: Blob; fileName: string }> {
+    this.initWebCodecsWorker();
+    if (!this.webCodecsWorker) {
+      throw new Error('Failed to initialize WebCodecs worker');
+    }
+
+    const id = this.generateId();
+    const videoData = await videoFile.arrayBuffer();
+
+    return new Promise((resolve, reject) => {
+      this.pendingRequests.set(id, {
+        resolve: (response) => {
+          if (response.type === 'exportTimelineComplete' && response.exportedTimeline) {
+            const bytes =
+              response.exportedTimeline.data instanceof Uint8Array
+                ? response.exportedTimeline.data
+                : new Uint8Array(response.exportedTimeline.data);
+            resolve({
+              blob: new Blob([bytes], { type: response.exportedTimeline.mimeType }),
+              fileName: response.exportedTimeline.fileName,
+            });
+          } else if (response.type === 'cancelled') {
+            reject(new Error('Export cancelled'));
+          } else {
+            reject(new Error('No exported video returned'));
+          }
+        },
+        reject,
+        onTimelineProgress,
+        workerKind: 'webcodecs',
+      });
+
+      const request: VideoWorkerRequest = {
+        id,
+        type: 'exportTimeline',
+        videoData,
+        fileName: videoFile.name,
+        exportTimelineOptions: { clips },
+      };
+
+      this.webCodecsWorker!.postMessage(request, [videoData]);
+    });
   }
 
   /** Renders every clip on a single FFmpeg worker, one at a time, then concatenates. */

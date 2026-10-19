@@ -49,6 +49,8 @@ export interface ExtractionOptions {
    * spaced captures (e.g. one thumbnail per edit-timeline clip).
    */
   targetTimestamps?: number[];
+  /** Downscale captured frames so the longest edge is at most this many pixels. */
+  maxEdgePx?: number;
 }
 
 export interface ExtractionProgress {
@@ -75,7 +77,7 @@ export interface VideoInfo {
 
 export interface VideoWorkerRequest {
   id: string;
-  type:
+      type:
     | 'extract'
     | 'probe'
     | 'cancel'
@@ -84,7 +86,8 @@ export interface VideoWorkerRequest {
     | 'exportTimeline'
     | 'renderClipBatch'
     | 'concatClips'
-    | 'preload';
+    | 'preload'
+    | 'warmup';
   videoData?: ArrayBuffer;
   fileName?: string;
   options?: ExtractionOptions;

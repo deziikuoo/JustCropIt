@@ -2,13 +2,19 @@
  * Captures a single frame from a video URL at a given timestamp as an
  * object URL (JPEG). Used for timeline thumbnails and to seed the crop tool.
  */
-export function captureVideoFrameAsUrl(videoUrl: string, sourceTime: number): Promise<string> {
+export function captureVideoFrameAsUrl(
+  videoUrl: string,
+  sourceTime: number,
+  options?: { maxEdgePx?: number; quality?: number }
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const video = document.createElement('video');
     video.muted = true;
     video.playsInline = true;
     video.preload = 'auto';
     video.src = videoUrl;
+    const maxEdgePx = options?.maxEdgePx;
+    const quality = options?.quality ?? 0.9;
 
     const cleanup = () => {
       video.removeEventListener('loadeddata', onLoadedData);
@@ -23,15 +29,27 @@ export function captureVideoFrameAsUrl(videoUrl: string, sourceTime: number): Pr
 
     const onSeeked = () => {
       try {
+        let width = video.videoWidth || 1;
+        let height = video.videoHeight || 1;
+        if (maxEdgePx && maxEdgePx > 0) {
+          const longest = Math.max(width, height);
+          if (longest > maxEdgePx) {
+            const scale = maxEdgePx / longest;
+            width = Math.max(1, Math.round(width * scale));
+            height = Math.max(1, Math.round(height * scale));
+          }
+        }
         const canvas = document.createElement('canvas');
-        canvas.width = video.videoWidth || 1;
-        canvas.height = video.videoHeight || 1;
+        canvas.width = width;
+        canvas.height = height;
         const ctx = canvas.getContext('2d');
         if (!ctx) throw new Error('Canvas 2D context unavailable');
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         canvas.toBlob(
           (blob) => {
             cleanup();
+            video.removeAttribute('src');
+            video.load();
             if (!blob) {
               reject(new Error('Failed to encode captured frame'));
               return;
@@ -39,7 +57,7 @@ export function captureVideoFrameAsUrl(videoUrl: string, sourceTime: number): Pr
             resolve(URL.createObjectURL(blob));
           },
           'image/jpeg',
-          0.9
+          quality
         );
       } catch (err) {
         cleanup();

@@ -5,7 +5,7 @@
  * and to wrap as undo/redo commands.
  */
 import type { Clip, CropBox } from '../../types/videoEdit';
-import { getClipDuration } from '../../types/videoEdit';
+import { getClipDuration, getTimelineDuration, isCompoundClip } from '../../types/videoEdit';
 
 /** Below this many seconds, a split/freeze is considered "at the edge" and is a no-op. */
 const MIN_CLIP_SECONDS = 0.05;
@@ -15,6 +15,27 @@ export function generateClipId(): string {
     return crypto.randomUUID();
   }
   return `clip-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/** Deep copy a clip tree with fresh ids (Duplicate / Auto Build). */
+export function cloneClipTree(clip: Clip): Clip {
+  return {
+    ...clip,
+    id: generateClipId(),
+    freeze: clip.freeze ? { ...clip.freeze } : undefined,
+    crop: clip.crop ? { ...clip.crop } : undefined,
+    children: clip.children?.map(cloneClipTree),
+  };
+}
+
+/** Maps compound playback time to time on the stored nested timeline. */
+export function compoundLocalToStoredInnerTime(clip: Clip, localTime: number): number {
+  const children = clip.children;
+  if (!children?.length) return localTime;
+  const innerDuration = getTimelineDuration(children);
+  const speed = clip.speed > 0 ? clip.speed : 1;
+  const playbackInner = Math.max(0, Math.min(innerDuration, localTime * speed));
+  return clip.reversed ? innerDuration - playbackInner : playbackInner;
 }
 
 export interface TimelinePosition {
@@ -49,6 +70,12 @@ export function findClipAtTime(clips: Clip[], timelineTime: number): TimelinePos
 
 /** Maps a clip's local playback time (0..duration) to a source-video timestamp. */
 export function localTimeToSourceTime(clip: Clip, localTime: number): number {
+  if (isCompoundClip(clip)) {
+    const innerTime = compoundLocalToStoredInnerTime(clip, localTime);
+    const pos = findClipAtTime(clip.children!, innerTime);
+    if (!pos) return 0;
+    return localTimeToSourceTime(pos.clip, pos.localTime);
+  }
   if (clip.freeze) return clip.freeze.sourceTime;
   const speed = clip.speed > 0 ? clip.speed : 1;
   const sourceOffset = localTime * speed;
@@ -70,6 +97,10 @@ export function splitClipAtLocalTime(clips: Clip[], clipId: string, localTime: n
   const duration = getClipDuration(clip);
   if (localTime <= MIN_CLIP_SECONDS || localTime >= duration - MIN_CLIP_SECONDS) {
     return clips; // Too close to an edge — nothing meaningful to split.
+  }
+
+  if (isCompoundClip(clip)) {
+    return splitCompoundAtLocalTime(clips, index, clip, localTime);
   }
 
   let first: Clip;
@@ -128,7 +159,7 @@ export function duplicateClips(clips: Clip[], ids: ReadonlySet<string>): Clip[] 
   for (const clip of clips) {
     next.push(clip);
     if (ids.has(clip.id)) {
-      next.push({ ...clip, id: generateClipId(), originClipId: clip.id, autoBuilt: undefined });
+      next.push({ ...cloneClipTree(clip), originClipId: clip.id, autoBuilt: undefined });
     }
   }
   return next;
@@ -152,14 +183,78 @@ export function applyCropToClips(
 }
 
 /**
+ * Splits a compound at playback `localTime`, producing two compounds that keep
+ * the original wrapper speed/reverse/crop.
+ */
+function splitCompoundAtLocalTime(
+  clips: Clip[],
+  index: number,
+  compound: Clip,
+  localTime: number
+): Clip[] {
+  const children = compound.children;
+  if (!children?.length) return clips;
+
+  const innerTime = compoundLocalToStoredInnerTime(compound, localTime);
+  const splitChildren = splitAtTimelineTime(children, innerTime);
+
+  let cursor = 0;
+  let splitIndex = -1;
+  for (let i = 0; i <= splitChildren.length; i++) {
+    if (Math.abs(cursor - innerTime) < 1e-3) {
+      splitIndex = i;
+      break;
+    }
+    if (i < splitChildren.length) {
+      cursor += getClipDuration(splitChildren[i]);
+    }
+  }
+  if (splitIndex <= 0 || splitIndex >= splitChildren.length) return clips;
+
+  let firstChildren = splitChildren.slice(0, splitIndex);
+  let secondChildren = splitChildren.slice(splitIndex);
+  if (compound.reversed) {
+    const tmp = firstChildren;
+    firstChildren = secondChildren;
+    secondChildren = tmp;
+  }
+
+  const wrap = (kids: Clip[]): Clip => ({
+    ...compound,
+    id: generateClipId(),
+    children: kids,
+    originClipId: undefined,
+    autoBuilt: undefined,
+  });
+
+  const next = clips.slice();
+  next.splice(index, 1, wrap(firstChildren), wrap(secondChildren));
+  return next;
+}
+
+/**
  * Splits at `timelineTime` (if needed) and inserts a new freeze clip at that boundary,
- * capturing the source frame that was showing at that instant.
+ * capturing the source frame that was showing at that instant. Freezes inside a
+ * compound are inserted into the nested timeline.
  */
 export function insertFreezeClip(
   clips: Clip[],
   timelineTime: number,
   durationSeconds: number
 ): Clip[] {
+  const pos = findClipAtTime(clips, timelineTime);
+  if (!pos) return clips;
+
+  if (isCompoundClip(pos.clip)) {
+    const speed = pos.clip.speed > 0 ? pos.clip.speed : 1;
+    const innerTime = compoundLocalToStoredInnerTime(pos.clip, pos.localTime);
+    const innerDuration = durationSeconds * speed;
+    const newChildren = insertFreezeClip(pos.clip.children!, innerTime, innerDuration);
+    const next = clips.slice();
+    next[pos.index] = { ...pos.clip, children: newChildren };
+    return next;
+  }
+
   const sourceTime = getSourceTimeAtTimelineTime(clips, timelineTime);
   if (sourceTime === null) return clips;
 

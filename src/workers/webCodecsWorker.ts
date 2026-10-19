@@ -1,11 +1,8 @@
 /**
  * WebCodecs Video Processing Worker
  *
- * Demuxes with web-demuxer (mini WASM) and decodes via VideoDecoder
- * (prefer-hardware). Streams extracted JPEG/PNG frames to the main thread.
- *
- * Contract matches VideoWorkerRequest / VideoWorkerResponse for probe + extract.
- * Trim remains on the FFmpeg videoWorker.
+ * Demuxes with web-demuxer and decodes via VideoDecoder (prefer-hardware).
+ * Edit-tab export encodes with VideoEncoder when available; trim stays on FFmpeg.
  */
 
 /// <reference lib="webworker" />
@@ -15,12 +12,18 @@ import type {
   VideoWorkerResponse,
   ExtractionProgress,
 } from '../types/video';
-import { isWebCodecsSupported } from '../utils/webCodecs/support';
+import { isVideoEncoderSupported, isWebCodecsSupported } from '../utils/webCodecs/support';
 import { WebCodecsExtractionSession } from '../utils/webCodecs/extractFrames';
+import {
+  buildEditedVideoFileName,
+  HardwareExportCancelledError,
+  HardwareTimelineExportSession,
+} from '../utils/webCodecs/hardwareExport';
 
 const ctx: DedicatedWorkerGlobalScope = self as unknown as DedicatedWorkerGlobalScope;
 
 let activeSession: WebCodecsExtractionSession | null = null;
+let hardwareExport: HardwareTimelineExportSession | null = null;
 let isCancelled = false;
 
 function sendProgress(id: string, progress: ExtractionProgress): void {
@@ -35,6 +38,11 @@ async function disposeActiveSession(): Promise<void> {
   if (activeSession) {
     const session = activeSession;
     activeSession = null;
+    await session.dispose();
+  }
+  if (hardwareExport) {
+    const session = hardwareExport;
+    hardwareExport = null;
     await session.dispose();
   }
 }
@@ -153,13 +161,75 @@ async function extractFrames(
   }
 }
 
+async function exportTimelineHardware(
+  id: string,
+  videoData: ArrayBuffer,
+  fileName: string,
+  clips: NonNullable<VideoWorkerRequest['exportTimelineOptions']>['clips']
+): Promise<void> {
+  isCancelled = false;
+  const session = new HardwareTimelineExportSession();
+  hardwareExport = session;
+
+  try {
+    const data = await session.export(videoData, fileName, clips, {
+      onProgress: (progress) => {
+        ctx.postMessage({
+          id,
+          type: 'progress',
+          timelineProgress: progress,
+        } as VideoWorkerResponse);
+      },
+      isCancelled: () => isCancelled,
+    });
+
+    if (isCancelled) {
+      ctx.postMessage({ id, type: 'cancelled' } as VideoWorkerResponse);
+      return;
+    }
+
+    const copy = data.slice();
+    ctx.postMessage(
+      {
+        id,
+        type: 'exportTimelineComplete',
+        exportedTimeline: {
+          data: copy,
+          mimeType: 'video/mp4',
+          fileName: buildEditedVideoFileName(fileName),
+        },
+        timelineProgress: {
+          phase: 'complete',
+          currentClip: clips.length,
+          totalClips: clips.length,
+          percent: 100,
+          message: 'Export complete',
+        },
+      } as VideoWorkerResponse,
+      [copy.buffer]
+    );
+  } catch (error) {
+    if (error instanceof HardwareExportCancelledError || isCancelled) {
+      ctx.postMessage({ id, type: 'cancelled' } as VideoWorkerResponse);
+      return;
+    }
+    sendError(
+      id,
+      `Hardware export failed: ${error instanceof Error ? error.message : String(error)}`
+    );
+  } finally {
+    await disposeActiveSession();
+  }
+}
+
 ctx.onmessage = async (event: MessageEvent<VideoWorkerRequest>) => {
-  const { id, type, videoData, fileName, options } = event.data;
+  const { id, type, videoData, fileName, options, exportTimelineOptions } = event.data;
 
   try {
     if (type === 'cancel') {
       isCancelled = true;
       activeSession?.cancel();
+      hardwareExport?.cancel();
       return;
     }
 
@@ -180,6 +250,12 @@ ctx.onmessage = async (event: MessageEvent<VideoWorkerRequest>) => {
       await probeVideo(id, videoData, fileName);
     } else if (type === 'extract' && videoData && fileName && options) {
       await extractFrames(id, videoData, fileName, options);
+    } else if (type === 'exportTimeline' && videoData && fileName && exportTimelineOptions) {
+      if (!isVideoEncoderSupported()) {
+        sendError(id, 'WebCodecs VideoEncoder is not available in this browser');
+        return;
+      }
+      await exportTimelineHardware(id, videoData, fileName, exportTimelineOptions.clips);
     } else {
       sendError(id, `Invalid request: missing required parameters for ${type}`);
     }

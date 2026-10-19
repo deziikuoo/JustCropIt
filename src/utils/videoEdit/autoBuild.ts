@@ -1,16 +1,15 @@
 /**
  * Auto Build — detects "regular clip immediately followed by a duplicated,
  * reversed copy of itself" (a boomerang pair) and extends each such pair,
- * independently, into a repeating forward/reverse loop lasting 5s+ before
- * capping it off with one more forward-only copy.
+ * independently, into a repeating forward/reverse loop lasting 5s+.
  *
- * See the plan for the full write-up. Implemented as a single left-to-right
- * pass so multiple chained pairs are each handled independently and in order,
- * with no index-shifting bugs from mutating the array while scanning it.
+ * Implemented as a single left-to-right pass so multiple chained pairs are
+ * each handled independently and in order, with no index-shifting bugs from
+ * mutating the array while scanning it.
  */
 import type { Clip } from '../../types/videoEdit';
 import { AUTO_BUILD_MIN_EXTRA_SECONDS, getClipDuration } from '../../types/videoEdit';
-import { generateClipId } from './clipMath';
+import { cloneClipTree } from './clipMath';
 
 /** True when `candidate` is a reversed duplicate of `original` (same lineage, flipped). */
 function isReverseDuplicateOf(candidate: Clip, original: Clip): boolean {
@@ -21,9 +20,9 @@ function isReverseDuplicateOf(candidate: Clip, original: Clip): boolean {
   );
 }
 
-/** Fresh copy used for the repeated/capping clips — tagged so re-running Auto Build skips them. */
+/** Fresh copy used for the repeated clips — tagged so re-running Auto Build skips them. */
 function cloneForAutoBuild(clip: Clip): Clip {
-  return { ...clip, id: generateClipId(), autoBuilt: true };
+  return { ...cloneClipTree(clip), autoBuilt: true };
 }
 
 export function autoBuildClips(clips: Clip[]): Clip[] {
@@ -61,9 +60,6 @@ export function autoBuildClips(clips: Clip[]): Clip[] {
           addedDuration += pairDuration;
         }
       }
-
-      // Cap the loop with a single forward-only copy of the regular clip.
-      result.push(cloneForAutoBuild(clipA));
     }
 
     i += 2; // Continue scanning right after the original pair.

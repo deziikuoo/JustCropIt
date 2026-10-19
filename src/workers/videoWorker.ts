@@ -26,6 +26,12 @@ import type {
   TimelineRenderProgressWire,
 } from '../types/video';
 import type { ClipRenderSpec } from '../types/videoEdit';
+import {
+  clipIsPassthrough,
+  fingerprintFileToken,
+  planUniqueRenders,
+  uniqueClipsShareOutputSize,
+} from '../utils/videoEdit/clipRenderFingerprint';
 
 const FFMPEG_CORE_VERSION = '0.12.6';
 
@@ -156,6 +162,22 @@ async function ensureSourceWritten(fileName: string, videoBytes: Uint8Array): Pr
   return inputName;
 }
 
+/** Drop the WASM instance after an out-of-memory export so the next job can load a fresh core. */
+async function resetFFmpeg(): Promise<void> {
+  clearSourceCache();
+  if (ffmpeg) {
+    try {
+      ffmpeg.terminate();
+    } catch (e) {
+      console.warn('[FFmpeg] Terminate warning:', e);
+    }
+    ffmpeg = null;
+    isLoaded = false;
+  }
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  await loadFFmpeg();
+}
+
 function getMimeFromExt(ext: string): string {
   const map: Record<string, string> = {
     mp4: 'video/mp4',
@@ -253,7 +275,9 @@ async function trimVideoExport(
 
       await deleteFileIfExists(outputName);
       // Stream copy failed (cut point likely isn't on a keyframe) — fall back to a
-      // lossless re-encode rather than the old lossy `mpeg4 -q:v 2` path.
+      // visually lossless re-encode. (Not crf 0: lossless x264 uses the
+      // High 4:4:4 profile most hardware decoders can't play, and its huge
+      // output can exceed WASM memory.)
       const reencodeArgs = [
         '-ss', trimStart.toFixed(3),
         '-i', inputName,
@@ -262,8 +286,9 @@ async function trimVideoExport(
         '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
         '-pix_fmt', 'yuv420p',
         '-c:v', 'libx264',
+        '-profile:v', 'high',
         '-preset', 'ultrafast',
-        '-crf', '0',
+        '-crf', '12',
         '-an',
         '-y', outputName,
       ];
@@ -351,18 +376,119 @@ function buildClipVideoFilters(clip: ClipRenderSpec): string {
 
 /**
  * Encode quality per use case:
- * - 'lossless': the actual downloadable export. `-crf 0` is x264's mathematically
- *   lossless mode (no quality loss vs. the filtered/cropped source frames) —
- *   this replaces the old `mpeg4 -q:v 2` path, which was a lossy, dated codec.
+ * - 'lossless': the actual downloadable export. Visually lossless `-crf 12`
+ *   in the standard High profile. (True `-crf 0` lossless was tried and
+ *   reverted: x264 lossless always signals the High 4:4:4 Predictive profile,
+ *   which mobile/hardware decoders can't play — videos rendered black — and
+ *   its enormous bitstreams blew past the FFmpeg WASM memory limit,
+ *   crashing exports with "memory access out of bounds".)
  * - 'preview': the ephemeral in-app reversed-clip preview render only. Never
  *   downloaded/kept, so it favors fast encode over quality.
  */
 type EncodeQuality = 'lossless' | 'preview';
 
+function cropFilter(crop: NonNullable<ClipRenderSpec['crop']>): string {
+  return `crop=${Math.max(2, Math.round(crop.width))}:${Math.max(2, Math.round(crop.height))}:${Math.max(0, Math.round(crop.x))}:${Math.max(0, Math.round(crop.y))}`;
+}
+
+function buildClipFilterChain(clip: ClipRenderSpec, outLabel: string): string {
+  const filters: string[] = [];
+
+  if (clip.freeze) {
+    const t = Math.max(0, clip.freeze.sourceTime);
+    filters.push(`trim=start=${t}:end=${(t + 0.04).toFixed(4)}`);
+    filters.push('setpts=PTS-STARTPTS');
+    if (clip.crop) filters.push(cropFilter(clip.crop));
+    filters.push('loop=loop=-1:size=1:start=0');
+    filters.push(`trim=duration=${Math.max(0.05, clip.freeze.durationSeconds).toFixed(3)}`);
+    filters.push('setpts=PTS-STARTPTS');
+    filters.push('fps=30');
+  } else {
+    filters.push(`trim=start=${clip.sourceStart}:end=${clip.sourceEnd}`);
+    filters.push('setpts=PTS-STARTPTS');
+    if (clip.crop) filters.push(cropFilter(clip.crop));
+    const speed = clip.speed && clip.speed > 0 ? clip.speed : 1;
+    if (speed !== 1) {
+      filters.push(`setpts=${(1 / speed).toFixed(6)}*PTS`);
+    }
+    if (clip.reversed) {
+      filters.push('reverse');
+    }
+  }
+
+  filters.push('scale=trunc(iw/2)*2:trunc(ih/2)*2');
+  filters.push('format=yuv420p');
+  return `[0:v]${filters.join(',')}[${outLabel}]`;
+}
+
+function buildTimelineFilterComplex(clips: ClipRenderSpec[]): string {
+  if (clips.length === 1) {
+    return buildClipFilterChain(clips[0], 'outv');
+  }
+  const chains: string[] = [];
+  const labels: string[] = [];
+  for (let i = 0; i < clips.length; i++) {
+    const label = `v${i}`;
+    labels.push(`[${label}]`);
+    chains.push(buildClipFilterChain(clips[i], label));
+  }
+  chains.push(`${labels.join('')}concat=n=${clips.length}:v=1:a=0[outv]`);
+  return chains.join(';');
+}
+
+/** Stream-copy a trim-only clip — no decode/encode. */
+async function copyClipToFile(
+  inputName: string,
+  outputName: string,
+  clip: ClipRenderSpec
+): Promise<void> {
+  if (!ffmpeg) throw new Error('FFmpeg not loaded');
+  const duration = Math.max(0, clip.sourceEnd - clip.sourceStart);
+  await deleteFileIfExists(outputName);
+  await ffmpeg.exec([
+    '-ss', clip.sourceStart.toFixed(3),
+    '-t', duration.toFixed(3),
+    '-i', inputName,
+    '-c:v', 'copy',
+    '-an',
+    '-avoid_negative_ts', 'make_zero',
+    '-y', outputName,
+  ]);
+}
+
+async function concatClipFiles(clipFileNames: string[], outputName: string): Promise<void> {
+  if (!ffmpeg) throw new Error('FFmpeg not loaded');
+  if (clipFileNames.length === 1) {
+    const data = await ffmpeg.readFile(clipFileNames[0]);
+    await ffmpeg.writeFile(outputName, data as Uint8Array);
+    return;
+  }
+  const concatListText = clipFileNames.map((name) => `file '${name}'`).join('\n');
+  await ffmpeg.writeFile('export_concat_list.txt', new TextEncoder().encode(concatListText));
+  await deleteFileIfExists(outputName);
+  await ffmpeg.exec([
+    '-f', 'concat',
+    '-safe', '0',
+    '-i', 'export_concat_list.txt',
+    '-c', 'copy',
+    '-y', outputName,
+  ]);
+  await deleteFileIfExists('export_concat_list.txt');
+}
+
 function getClipEncodeArgs(quality: EncodeQuality): string[] {
   if (quality === 'lossless') {
-    // ultrafast + crf 0 is still lossless; veryfast was much slower for unique-clip export.
-    return ['-pix_fmt', 'yuv420p', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '0', '-an'];
+    // ultrafast keeps unique-clip export fast. crf 12 + High stays playable;
+    // crf 0 forces High 4:4:4, which hardware decoders render black and which
+    // can exhaust the FFmpeg WASM heap.
+    return [
+      '-pix_fmt', 'yuv420p',
+      '-c:v', 'libx264',
+      '-profile:v', 'high',
+      '-preset', 'ultrafast',
+      '-crf', '12',
+      '-an',
+    ];
   }
   return ['-pix_fmt', 'yuv420p', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '20', '-an'];
 }
@@ -414,10 +540,16 @@ async function renderClipToFile(
   }
 
   const duration = Math.max(0, clip.sourceEnd - clip.sourceStart);
+  // CRITICAL: `-t` must come BEFORE `-i` (input option) so it limits how much
+  // of the source is read. As an output option (after `-i`) it only trims the
+  // final output, which breaks reversed clips: `reverse` would buffer from
+  // sourceStart to the END of the file, flip it, and `-t` would then keep the
+  // reversed *end of the video* instead of the selected scene. Input-side -t
+  // also fixes slow-motion clips being truncated to the source duration.
   const args = [
     '-ss', clip.sourceStart.toFixed(3),
-    '-i', inputName,
     '-t', duration.toFixed(3),
+    '-i', inputName,
     '-vf', buildClipVideoFilters(clip),
     ...encodeArgs,
     '-y', outputName,
@@ -504,7 +636,25 @@ async function renderClipRequest(
   }
 }
 
-/** Renders every clip losslessly, then stream-copies them together into one final video. */
+async function encodeTimelineFilterGraph(
+  inputName: string,
+  outputName: string,
+  clips: ClipRenderSpec[]
+): Promise<void> {
+  if (!ffmpeg) throw new Error('FFmpeg not loaded');
+  const filter = buildTimelineFilterComplex(clips);
+  await deleteFileIfExists(outputName);
+  await ffmpeg.exec([
+    '-i', inputName,
+    '-filter_complex', filter,
+    '-map', '[outv]',
+    ...getClipEncodeArgs('lossless'),
+    '-movflags', '+faststart',
+    '-y', outputName,
+  ]);
+}
+
+/** Renders unique recipes once, then concatenates them in timeline order. */
 async function exportTimelineRequest(
   id: string,
   videoData: ArrayBuffer,
@@ -518,58 +668,123 @@ async function exportTimelineRequest(
     return;
   }
 
+  const outputName = 'export_output.mp4';
   const videoBytes = asUint8(videoData);
-  const clipFileNames: string[] = [];
+  const uniqueFileNames: string[] = [];
 
   try {
     sendTimelineProgress(id, {
-      phase: 'loading', currentClip: 0, totalClips: clips.length, percent: 0,
-      message: 'Preparing FFmpeg...',
+      phase: 'loading', currentClip: 0, totalClips: clips.length, percent: 5,
+      message: isLoaded ? 'Preparing export...' : 'Loading FFmpeg (first time only)...',
     });
     await loadFFmpeg();
     const inputName = await ensureSourceWritten(fileName, videoBytes);
-
-    for (let i = 0; i < clips.length; i++) {
-      if (isCancelled) {
-        ctx.postMessage({ id, type: 'cancelled' } as VideoWorkerResponse);
-        return;
-      }
-      const clipFileName = `export_clip_${i}.mp4`;
-      sendTimelineProgress(id, {
-        phase: 'rendering',
-        currentClip: i + 1,
-        totalClips: clips.length,
-        percent: Math.round(((i + 0.5) / clips.length) * 80),
-        message: `Rendering clip ${i + 1} of ${clips.length}...`,
-      });
-      await renderClipToFile(inputName, clipFileName, clips[i], 'lossless');
-      clipFileNames.push(clipFileName);
-    }
 
     if (isCancelled) {
       ctx.postMessage({ id, type: 'cancelled' } as VideoWorkerResponse);
       return;
     }
 
-    sendTimelineProgress(id, {
-      phase: 'concatenating', currentClip: clips.length, totalClips: clips.length, percent: 85,
-      message: 'Joining clips...',
-    });
+    const plan = planUniqueRenders(clips);
+    const uniqueClips = plan.uniqueKeys.map((key) => plan.clipByKey.get(key)!);
+    const allPassthrough = uniqueClips.every(clipIsPassthrough);
+    const canStitchUnique =
+      uniqueClipsShareOutputSize(uniqueClips) &&
+      (allPassthrough || uniqueClips.length < clips.length || uniqueClips.length === 1);
 
-    const concatListText = clipFileNames.map((name) => `file '${name}'`).join('\n');
-    await ffmpeg!.writeFile('export_concat_list.txt', new TextEncoder().encode(concatListText));
+    let usedUniqueStitch = false;
 
-    const outputName = 'export_output.mp4';
-    await deleteFileIfExists(outputName);
-    // Every intermediate clip was just encoded with identical lossless x264 params,
-    // so the join itself can stream-copy — no second re-encode / generation loss.
-    await ffmpeg!.exec([
-      '-f', 'concat',
-      '-safe', '0',
-      '-i', 'export_concat_list.txt',
-      '-c', 'copy',
-      '-y', outputName,
-    ]);
+    if (canStitchUnique) {
+      try {
+        sendTimelineProgress(id, {
+          phase: 'rendering',
+          currentClip: 1,
+          totalClips: plan.uniqueKeys.length,
+          percent: 20,
+          message: allPassthrough
+            ? `Copying ${plan.uniqueKeys.length} unique clip${plan.uniqueKeys.length === 1 ? '' : 's'}...`
+            : `Encoding ${plan.uniqueKeys.length} unique clip${plan.uniqueKeys.length === 1 ? '' : 's'}...`,
+        });
+
+        const fileByKey = new Map<string, string>();
+        // If any unique recipe needs a re-encode, encode them all with the same
+        // x264 settings so concat -c copy stays codec-compatible (copy+reverse
+        // would mix the source codec with libx264 and fail).
+        const encodeAll = !allPassthrough;
+
+        for (let i = 0; i < plan.uniqueKeys.length; i++) {
+          if (isCancelled) {
+            ctx.postMessage({ id, type: 'cancelled' } as VideoWorkerResponse);
+            return;
+          }
+          const key = plan.uniqueKeys[i];
+          const clip = plan.clipByKey.get(key)!;
+          const uniqueName = `unique_${fingerprintFileToken(key)}.mp4`;
+          sendTimelineProgress(id, {
+            phase: 'rendering',
+            currentClip: i + 1,
+            totalClips: plan.uniqueKeys.length,
+            percent: 20 + Math.round(((i + 0.5) / plan.uniqueKeys.length) * 55),
+            message: encodeAll
+              ? `Encoding unique clip ${i + 1} of ${plan.uniqueKeys.length}...`
+              : `Copying unique clip ${i + 1} of ${plan.uniqueKeys.length}...`,
+          });
+          if (encodeAll) {
+            await renderClipToFile(inputName, uniqueName, clip, 'lossless');
+          } else {
+            await copyClipToFile(inputName, uniqueName, clip);
+          }
+          fileByKey.set(key, uniqueName);
+          uniqueFileNames.push(uniqueName);
+        }
+
+        const orderedFiles = plan.keyByIndex.map((key) => fileByKey.get(key)!);
+        sendTimelineProgress(id, {
+          phase: 'concatenating',
+          currentClip: clips.length,
+          totalClips: clips.length,
+          percent: 85,
+          message: orderedFiles.length === 1 ? 'Finishing...' : 'Joining timeline...',
+        });
+        await concatClipFiles(orderedFiles, outputName);
+        usedUniqueStitch = true;
+      } catch (stitchErr) {
+        console.warn('[FFmpeg] Unique-clip stitch failed, falling back to filter graph:', stitchErr);
+        for (const name of uniqueFileNames) await deleteFileIfExists(name);
+        uniqueFileNames.length = 0;
+      }
+    }
+
+    if (!usedUniqueStitch) {
+      sendTimelineProgress(id, {
+        phase: 'rendering', currentClip: 1, totalClips: clips.length, percent: 30,
+        message: 'Encoding timeline...',
+      });
+      try {
+        await encodeTimelineFilterGraph(inputName, outputName, clips);
+      } catch (graphErr) {
+        console.warn('[FFmpeg] Single-pass encode failed, falling back to per-clip:', graphErr);
+        const clipFileNames: string[] = [];
+        for (let i = 0; i < clips.length; i++) {
+          if (isCancelled) {
+            ctx.postMessage({ id, type: 'cancelled' } as VideoWorkerResponse);
+            return;
+          }
+          const clipFileName = `export_clip_${i}.mp4`;
+          sendTimelineProgress(id, {
+            phase: 'rendering',
+            currentClip: i + 1,
+            totalClips: clips.length,
+            percent: Math.round(((i + 0.5) / clips.length) * 80),
+            message: `Rendering clip ${i + 1} of ${clips.length}...`,
+          });
+          await renderClipToFile(inputName, clipFileName, clips[i], 'lossless');
+          clipFileNames.push(clipFileName);
+        }
+        uniqueFileNames.push(...clipFileNames);
+        await concatClipFiles(clipFileNames, outputName);
+      }
+    }
 
     if (isCancelled) {
       ctx.postMessage({ id, type: 'cancelled' } as VideoWorkerResponse);
@@ -584,7 +799,7 @@ async function exportTimelineRequest(
     const data = await ffmpeg!.readFile(outputName);
     const safeCopy = (data as Uint8Array).slice();
 
-    for (const name of clipFileNames) await deleteFileIfExists(name);
+    for (const name of uniqueFileNames) await deleteFileIfExists(name);
     await deleteFileIfExists('export_concat_list.txt');
     await deleteFileIfExists(outputName);
 
@@ -607,9 +822,18 @@ async function exportTimelineRequest(
       },
     } as VideoWorkerResponse);
   } catch (error) {
-    for (const name of clipFileNames) await deleteFileIfExists(name);
+    for (const name of uniqueFileNames) await deleteFileIfExists(name);
     await deleteFileIfExists('export_concat_list.txt');
-    sendError(id, `Failed to export timeline: ${error instanceof Error ? error.message : String(error)}. FFmpeg output: ${getRecentLogs()}`);
+    await deleteFileIfExists(outputName);
+    const message = error instanceof Error ? error.message : String(error);
+    if (/memory|out of bounds/i.test(message)) {
+      try {
+        await resetFFmpeg();
+      } catch {
+        // ignore — next export will try to load a fresh core
+      }
+    }
+    sendError(id, `Failed to export timeline: ${message}. FFmpeg output: ${getRecentLogs()}`);
   }
 }
 
@@ -950,7 +1174,7 @@ async function extractFrames(
       message: 'Preparing FFmpeg...',
     });
 
-    await resetFFmpeg();
+    await loadFFmpeg();
     await writeInputVideo(inputName, videoBytes);
 
     for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
@@ -966,7 +1190,7 @@ async function extractFrames(
         });
 
         await delay(DELAY_BETWEEN_BATCHES_MS);
-        await resetFFmpeg();
+        await loadFFmpeg();
         await writeInputVideo(inputName, videoBytes);
       }
 
@@ -1085,7 +1309,7 @@ ctx.onmessage = async (event: MessageEvent<VideoWorkerRequest>) => {
       return;
     }
 
-    if (type === 'preload') {
+    if (type === 'preload' || type === 'warmup') {
       await loadFFmpeg();
       ctx.postMessage({ id, type: 'complete' } as VideoWorkerResponse);
       return;

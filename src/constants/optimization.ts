@@ -66,6 +66,37 @@ export const WEBCODECS_TIMESTAMP_TOLERANCE_US = 25_000;
 export const WEBCODECS_MAX_DECODE_QUEUE = 12;
 
 /**
+ * Reverse export buffers decoded frames, then encodes them backwards.
+ * Keep this small on phones so a 1080p strip doesn't OOM the tab.
+ */
+export const HARDWARE_EXPORT_REVERSE_CHUNK_FRAMES = 16;
+export const HARDWARE_EXPORT_REVERSE_CHUNK_FRAMES_LOW_MEMORY = 8;
+
+export function getHardwareExportReverseChunkFrames(): number {
+  const memory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 4;
+  return memory <= 4
+    ? HARDWARE_EXPORT_REVERSE_CHUNK_FRAMES_LOW_MEMORY
+    : HARDWARE_EXPORT_REVERSE_CHUNK_FRAMES;
+}
+
+/** Edit-tab reverse preview: decode a downscaled frame strip instead of FFmpeg reverse. */
+export const REVERSE_PREVIEW_FPS = 16;
+export const REVERSE_PREVIEW_MAX_EDGE_PX = 640;
+export const REVERSE_PREVIEW_MAX_FRAMES = 192;
+export const REVERSE_PREVIEW_JPEG_QUALITY = 0.72;
+/** How many unique source-range strips to keep as ImageBitmaps. */
+export const REVERSE_PREVIEW_CACHE_MAX = 8;
+
+/** Edit-tab timeline thumbnails: target pixel width per keyframe thumbnail in filmstrip. */
+export const TIMELINE_THUMB_TARGET_WIDTH_PX = 80;
+/** Minimum clip pixel width to show more than one thumbnail. */
+export const TIMELINE_THUMB_MIN_CLIP_WIDTH_FOR_FILMSTRIP = 120;
+/** Longest decoded edge — same idea as THUMBNAIL_MAX_EDGE_PX, sized for ~80px tiles. */
+export const TIMELINE_THUMB_MAX_EDGE_PX = 160;
+/** Cap filmstrip density so a long zoomed clip doesn't decode dozens of frames. */
+export const TIMELINE_THUMB_MAX_PER_CLIP = 12;
+
+/**
  * Edit-tab timeline export: parallel FFmpeg render pool.
  * Each pooled worker loads its own full FFmpeg WASM core + a full copy of the
  * source video, so — unlike the image worker pool — this must stay small

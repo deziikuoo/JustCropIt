@@ -399,7 +399,7 @@ import {
   getStorageStatus,
   updatePhotoMetadata,
 } from "./utils/photoStorage";
-import { cleanupExpiredVideoSession } from "./utils/videoSessionStorage";
+import { cleanupExpiredVideoSession, cleanupExpiredVideoEditSession } from "./utils/videoSessionStorage";
 import { imageWorkerPool } from "./utils/imageWorkerPool";
 import {
   FlipCommand,
@@ -2801,6 +2801,7 @@ onMounted(async () => {
     // Video session has its own 24h timer (independent of photo expiresAt)
     try {
       await cleanupExpiredVideoSession();
+      await cleanupExpiredVideoEditSession();
     } catch (error) {
       console.error("Video session cleanup error:", error);
     }
@@ -2837,6 +2838,23 @@ onMounted(async () => {
         }
       } catch (error) {
         console.error("Video session cleanup error:", error);
+      }
+
+      try {
+        const editCleared = await cleanupExpiredVideoEditSession();
+        if (editCleared) {
+          window.dispatchEvent(
+            new CustomEvent("justcropit:video-edit-session-expired")
+          );
+          showAlert(
+            "info",
+            "Edit Session Expired",
+            "Your saved Edit-tab timeline expired after 24 hours and was cleared. Photos were not affected.",
+            5000
+          );
+        }
+      } catch (error) {
+        console.error("Edit session cleanup error:", error);
       }
     }, 60 * 60 * 1000); // 1 hour
 

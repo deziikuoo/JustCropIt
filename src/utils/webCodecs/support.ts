@@ -12,6 +12,11 @@ export function isWebCodecsSupported(): boolean {
   );
 }
 
+/** Native H.264 encode (MediaCodec / VideoToolbox) — used for Edit-tab export. */
+export function isVideoEncoderSupported(): boolean {
+  return typeof VideoEncoder !== 'undefined' && typeof VideoEncoder.isConfigSupported === 'function';
+}
+
 export async function isVideoDecoderConfigSupported(
   config: VideoDecoderConfig
 ): Promise<boolean> {

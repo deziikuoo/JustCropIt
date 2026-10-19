@@ -20,12 +20,22 @@ export class FrameCapture {
   async capture(
     frame: VideoFrame,
     outputFormat: 'png' | 'jpeg',
-    quality: number
+    quality: number,
+    maxEdgePx?: number
   ): Promise<{ data: Uint8Array; mimeType: string }> {
-    const width = frame.displayWidth || frame.codedWidth;
-    const height = frame.displayHeight || frame.codedHeight;
+    let width = frame.displayWidth || frame.codedWidth;
+    let height = frame.displayHeight || frame.codedHeight;
     if (width <= 0 || height <= 0) {
       throw new Error(`Invalid frame dimensions: ${width}x${height}`);
+    }
+
+    if (maxEdgePx && maxEdgePx > 0) {
+      const longest = Math.max(width, height);
+      if (longest > maxEdgePx) {
+        const scale = maxEdgePx / longest;
+        width = Math.max(1, Math.round(width * scale));
+        height = Math.max(1, Math.round(height * scale));
+      }
     }
 
     const ctx = this.ensureCanvas(width, height);
