@@ -23,34 +23,47 @@ export class DecoderSession {
   async configure(
     baseConfig: VideoDecoderConfig,
     onFrame: DecodedFrameHandler,
-    options?: { optimizeForLatency?: boolean }
+    options?: {
+      optimizeForLatency?: boolean;
+      hardwareAcceleration?: HardwareAcceleration;
+      allowFallback?: boolean;
+    }
   ): Promise<VideoDecoderConfig> {
     const optimizeForLatency = options?.optimizeForLatency ?? true;
-    const config: VideoDecoderConfig = {
+    const preferred = options?.hardwareAcceleration ?? WEBCODECS_HARDWARE_ACCELERATION;
+    const allowFallback = options?.allowFallback ?? true;
+    const fallback: HardwareAcceleration =
+      preferred === 'prefer-software' ? 'prefer-hardware' : 'prefer-software';
+
+    const preferredConfig: VideoDecoderConfig = {
       ...baseConfig,
-      hardwareAcceleration: WEBCODECS_HARDWARE_ACCELERATION,
+      hardwareAcceleration: preferred,
       optimizeForLatency,
     };
-
-    let supported = await isVideoDecoderConfigSupported(config);
-    if (!supported) {
-      // Retry without hardware preference
-      const softwareConfig: VideoDecoderConfig = {
-        ...baseConfig,
-        hardwareAcceleration: 'prefer-software',
-        optimizeForLatency,
-      };
-      supported = await isVideoDecoderConfigSupported(softwareConfig);
-      if (!supported) {
-        const codec = baseConfig.codec || 'unknown';
-        throw new Error(
-          `This browser cannot decode codec "${codec}". Try re-encoding to H.264 MP4 or VP9 WebM.`
-        );
-      }
-      return this.openDecoder(softwareConfig, onFrame);
+    if (await isVideoDecoderConfigSupported(preferredConfig)) {
+      return this.openDecoder(preferredConfig, onFrame);
     }
 
-    return this.openDecoder(config, onFrame);
+    if (!allowFallback) {
+      const codec = baseConfig.codec || 'unknown';
+      throw new Error(
+        `This browser cannot decode codec "${codec}" with ${preferred}.`
+      );
+    }
+
+    const fallbackConfig: VideoDecoderConfig = {
+      ...baseConfig,
+      hardwareAcceleration: fallback,
+      optimizeForLatency,
+    };
+    if (await isVideoDecoderConfigSupported(fallbackConfig)) {
+      return this.openDecoder(fallbackConfig, onFrame);
+    }
+
+    const codec = baseConfig.codec || 'unknown';
+    throw new Error(
+      `This browser cannot decode codec "${codec}". Try re-encoding to H.264 MP4 or VP9 WebM.`
+    );
   }
 
   private openDecoder(

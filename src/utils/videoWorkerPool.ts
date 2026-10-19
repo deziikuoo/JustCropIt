@@ -18,8 +18,11 @@ import type {
 import type { ClipRenderSpec } from '../types/videoEdit';
 import { isVideoEncoderSupported, isWebCodecsSupported } from './webCodecs/support';
 import { getFfmpegWorkerPoolSize } from '../constants/optimization';
-import { planUniqueRenders } from './videoEdit/clipRenderFingerprint';
-import { shouldTryHardwareTimelineExport } from './webCodecs/hardwareExportGate';
+import { clipIsPassthrough, planUniqueRenders } from './videoEdit/clipRenderFingerprint';
+import {
+  prefersMainThreadHardwareExport,
+  shouldTryHardwareTimelineExport,
+} from './webCodecs/hardwareExportGate';
 
 type ProgressCallback = (progress: ExtractionProgress) => void;
 type FrameCallback = (frame: { index: number; timestamp: number; blob: Blob }) => void;
@@ -55,6 +58,8 @@ class VideoWorkerPool {
   /** Ephemeral — only spun up for the duration of a parallel export, then torn down. */
   private ffmpegPoolWorkers: Worker[] = [];
   private webCodecsQueue: Promise<void> = Promise.resolve();
+  /** Phone/tablet export runs on the main thread; cancel() reaches that session here. */
+  private mainThreadExportCancel: (() => void) | null = null;
 
   /** WebCodecs path needs Worker + VideoDecoder + OffscreenCanvas. */
   isSupported(): boolean {
@@ -447,16 +452,35 @@ class VideoWorkerPool {
       throw new Error('Video processing is not supported in this browser');
     }
 
-    if (shouldTryHardwareTimelineExport(clips) && this.isSupported() && isVideoEncoderSupported()) {
+    if (shouldTryHardwareTimelineExport(clips) && isVideoEncoderSupported()) {
+      // A worker VideoEncoder on Android/iOS never drains, and the FFmpeg
+      // fallback then sits on "Encoding unique clip" until the tab is killed.
+      const useMainThread = prefersMainThreadHardwareExport() || !this.isSupported();
       try {
-        return await this.enqueueWebCodecs(() =>
-          this.exportTimelineHardware(videoFile, clips, onTimelineProgress)
-        );
+        if (useMainThread) {
+          return await this.enqueueWebCodecs(() =>
+            this.exportTimelineHardwareMain(videoFile, clips, onTimelineProgress)
+          );
+        }
+        if (this.isSupported()) {
+          return await this.enqueueWebCodecs(() =>
+            this.exportTimelineHardware(videoFile, clips, onTimelineProgress)
+          );
+        }
       } catch (err) {
         if (err instanceof Error && err.message === 'Export cancelled') {
           throw err;
         }
         console.warn('[VideoWorkerPool] Hardware export failed, falling back to FFmpeg:', err);
+        if (useMainThread) throw err;
+      }
+    } else if (prefersMainThreadHardwareExport() && !isVideoEncoderSupported()) {
+      const needsEncode = planUniqueRenders(clips).uniqueKeys.some((key) => {
+        const clip = planUniqueRenders(clips).clipByKey.get(key);
+        return !!clip && !clipIsPassthrough(clip);
+      });
+      if (needsEncode) {
+        throw new Error('This phone browser cannot encode video. Try the latest Chrome or Safari.');
       }
     }
 
@@ -528,6 +552,44 @@ class VideoWorkerPool {
 
       this.webCodecsWorker!.postMessage(request, [videoData]);
     });
+  }
+
+  /**
+   * Same hardware encode as the worker path, but on the window thread.
+   * Mobile browsers only drain VideoEncoder there.
+   */
+  private async exportTimelineHardwareMain(
+    videoFile: File,
+    clips: ClipRenderSpec[],
+    onTimelineProgress?: TimelineProgressCallback
+  ): Promise<{ blob: Blob; fileName: string }> {
+    const {
+      HardwareTimelineExportSession,
+      HardwareExportCancelledError,
+      buildEditedVideoFileName,
+    } = await import('./webCodecs/hardwareExport');
+
+    const session = new HardwareTimelineExportSession();
+    this.mainThreadExportCancel = () => session.cancel();
+    try {
+      const videoData = await videoFile.arrayBuffer();
+      const data = await session.export(videoData, videoFile.name, clips, {
+        onProgress: (progress) => onTimelineProgress?.(progress),
+        isCancelled: () => false,
+      });
+      return {
+        blob: new Blob([data], { type: 'video/mp4' }),
+        fileName: buildEditedVideoFileName(videoFile.name),
+      };
+    } catch (err) {
+      if (err instanceof HardwareExportCancelledError) {
+        throw new Error('Export cancelled');
+      }
+      throw err;
+    } finally {
+      this.mainThreadExportCancel = null;
+      await session.dispose();
+    }
   }
 
   /** Renders every clip on a single FFmpeg worker, one at a time, then concatenates. */
@@ -775,6 +837,7 @@ class VideoWorkerPool {
    * Cancel the current extraction / trim
    */
   cancel(): void {
+    this.mainThreadExportCancel?.();
     for (const [id, pending] of this.pendingRequests) {
       const request: VideoWorkerRequest = {
         id,

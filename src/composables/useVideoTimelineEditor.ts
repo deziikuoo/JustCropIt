@@ -433,7 +433,14 @@ export function useVideoTimelineEditor() {
       const { blob, fileName } = await exportTimelineToVideo(videoFile.value, clips.value, (p) => {
         exportProgress.value = p;
       });
-      downloadRenderedVideo(blob, fileName);
+      exportProgress.value = {
+        phase: 'complete',
+        currentClip: leaves.length,
+        totalClips: leaves.length,
+        percent: 100,
+        message: 'Export complete',
+      };
+      await downloadRenderedVideo(blob, fileName);
     } catch (err) {
       error.value = `Export failed: ${err instanceof Error ? err.message : String(err)}`;
     } finally {

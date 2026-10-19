@@ -38,8 +38,13 @@ export type HardwareExportCallbacks = {
   isCancelled: () => boolean;
 };
 
+const ENCODER_STALL_MS = 45_000;
+
 export class HardwareTimelineExportSession {
   private cancelled = false;
+  /** True once the first frame has been handed to VideoEncoder. */
+  private encoderLive = false;
+  private activeDecoder: DecoderSession | null = null;
   private demuxer = new DemuxerSession();
   private canvas: OffscreenCanvas | null = null;
   private ctx: OffscreenCanvasRenderingContext2D | null = null;
@@ -48,6 +53,7 @@ export class HardwareTimelineExportSession {
 
   cancel(): void {
     this.cancelled = true;
+    this.activeDecoder?.close();
   }
 
   async export(
@@ -57,6 +63,9 @@ export class HardwareTimelineExportSession {
     callbacks: HardwareExportCallbacks
   ): Promise<Uint8Array> {
     this.cancelled = false;
+    this.encoderLive = false;
+    this.outWidth = 0;
+    this.outHeight = 0;
     if (clips.length === 0) {
       throw new Error('No clips to export');
     }
@@ -129,7 +138,16 @@ export class HardwareTimelineExportSession {
           fps,
           source,
           encoderTs,
-          callbacks
+          callbacks,
+          (fraction) => {
+            callbacks.onProgress({
+              phase: 'rendering',
+              currentClip: i + 1,
+              totalClips: plan.uniqueKeys.length,
+              percent: 15 + Math.round(((i + fraction) / plan.uniqueKeys.length) * 65),
+              message: `Encoding unique clip ${i + 1} of ${plan.uniqueKeys.length} (${Math.round(fraction * 100)}%)...`,
+            });
+          }
         );
         packetRanges.push({ key, startTs, endTs: encoderTs });
       }
@@ -156,7 +174,8 @@ export class HardwareTimelineExportSession {
   }
 
   async dispose(): Promise<void> {
-    this.cancelled = true;
+    this.cancel();
+    this.encoderLive = false;
     this.demuxer.destroy();
     this.canvas = null;
     this.ctx = null;
@@ -238,15 +257,52 @@ export class HardwareTimelineExportSession {
     fps: number,
     source: VideoSampleSource,
     timeOffset: number,
-    callbacks: HardwareExportCallbacks
+    callbacks: HardwareExportCallbacks,
+    onFraction: (fraction: number) => void
   ): Promise<number> {
     if (clip.freeze) {
-      return this.encodeFreeze(decoderConfig, clip, fps, source, timeOffset, callbacks);
+      return this.encodeFreeze(decoderConfig, clip, fps, source, timeOffset, callbacks, onFraction);
     }
     if (clip.reversed) {
-      return this.encodeReversed(decoderConfig, clip, fps, source, timeOffset, callbacks);
+      return this.encodeReversed(decoderConfig, clip, fps, source, timeOffset, callbacks, onFraction);
     }
-    return this.encodeForward(decoderConfig, clip, fps, source, timeOffset, callbacks);
+    return this.encodeForward(decoderConfig, clip, fps, source, timeOffset, callbacks, onFraction);
+  }
+
+  /**
+   * Phones share one hardware codec between VideoDecoder and VideoEncoder.
+   * Waiting on the encoder inside the decoder output callback never returns
+   * there, so each window is fully decoded (and the decoder closed) first.
+   */
+  private async addSample(source: VideoSampleSource, sample: VideoSample): Promise<void> {
+    this.encoderLive = true;
+    await this.withStallTimeout(source.add(sample), 'Hardware encoder stalled');
+  }
+
+  private async withStallTimeout<T>(work: Promise<T>, message: string): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Swallow a late rejection so a timeout does not surface as an unhandled promise.
+    const settled = work.then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, error })
+    );
+    try {
+      const result = await Promise.race([
+        settled,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            this.activeDecoder?.close();
+            reject(new Error(message));
+          }, ENCODER_STALL_MS);
+        }),
+      ]);
+      if (!result.ok) {
+        throw result.error instanceof Error ? result.error : new Error(String(result.error));
+      }
+      return result.value;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
   }
 
   private async encodeForward(
@@ -255,31 +311,65 @@ export class HardwareTimelineExportSession {
     fps: number,
     source: VideoSampleSource,
     timeOffset: number,
-    callbacks: HardwareExportCallbacks
+    callbacks: HardwareExportCallbacks,
+    onFraction: (fraction: number) => void
   ): Promise<number> {
     const speed = clip.speed > 0 ? clip.speed : 1;
+    const windows = timeWindows(clip.sourceStart, clip.sourceEnd, fps);
     let encoded = 0;
     let lastEnd = timeOffset;
-    await this.decodeRange(
-      decoderConfig,
-      clip.sourceStart,
-      clip.sourceEnd,
-      callbacks,
-      async (frame) => {
-        const srcTs = frame.timestamp / US_PER_SECOND;
-        const duration = frameDurationSeconds(frame, fps) / speed;
-        const timestamp = timeOffset + Math.max(0, srcTs - clip.sourceStart) / speed;
-        const sample = this.blitToSample(frame, clip, timestamp, duration);
-        if (encoded === 0) sample.setEncodeOptions({ keyFrame: true });
-        encoded += 1;
-        lastEnd = timestamp + duration;
-        try {
-          await source.add(sample);
-        } finally {
-          sample.close();
+
+    for (let w = 0; w < windows.length; w++) {
+      this.throwIfCancelled(callbacks);
+      onFraction(windows.length <= 1 ? 0.5 : (w + 0.15) / windows.length);
+      const window = windows[w];
+      const held: { bitmap: ImageBitmap; timestamp: number; duration: number }[] = [];
+      try {
+        await this.withStallTimeout(
+          this.decodeRange(decoderConfig, window.start, window.end, callbacks, async (frame) => {
+            const srcTs = frame.timestamp / US_PER_SECOND;
+            const duration = frameDurationSeconds(frame, fps) / speed;
+            const timestamp = timeOffset + Math.max(0, srcTs - clip.sourceStart) / speed;
+            this.drawFrame(frame, clip);
+            held.push({
+              bitmap: await createImageBitmap(this.canvas!),
+              timestamp,
+              duration,
+            });
+          }),
+          'Hardware decoder stalled'
+        );
+        onFraction(windows.length <= 1 ? 0.85 : (w + 0.85) / windows.length);
+
+        for (const item of held) {
+          this.throwIfCancelled(callbacks);
+          const sample = new VideoSample(item.bitmap, {
+            timestamp: item.timestamp,
+            duration: item.duration,
+          });
+          if (encoded === 0) sample.setEncodeOptions({ keyFrame: true });
+          encoded += 1;
+          lastEnd = item.timestamp + item.duration;
+          try {
+            await this.addSample(source, sample);
+          } finally {
+            sample.close();
+            item.bitmap.close();
+          }
+        }
+        held.length = 0;
+      } finally {
+        for (const item of held) {
+          try {
+            item.bitmap.close();
+          } catch {
+            // already closed
+          }
         }
       }
-    );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
     if (encoded === 0) {
       throw new Error('No frames decoded for clip');
     }
@@ -292,25 +382,31 @@ export class HardwareTimelineExportSession {
     fps: number,
     source: VideoSampleSource,
     timeOffset: number,
-    callbacks: HardwareExportCallbacks
+    callbacks: HardwareExportCallbacks,
+    onFraction: (fraction: number) => void
   ): Promise<number> {
     const speed = clip.speed > 0 ? clip.speed : 1;
     const windows = reverseWindows(clip.sourceStart, clip.sourceEnd, fps);
     let outTs = timeOffset;
     let encoded = 0;
 
-    for (const window of windows) {
+    for (let w = 0; w < windows.length; w++) {
       this.throwIfCancelled(callbacks);
+      onFraction(windows.length <= 1 ? 0.5 : (w + 0.15) / windows.length);
+      const window = windows[w];
       const bitmaps: { bitmap: ImageBitmap; duration: number }[] = [];
       try {
-        await this.decodeRange(decoderConfig, window.start, window.end, callbacks, async (frame) => {
+        await this.withStallTimeout(
+          this.decodeRange(decoderConfig, window.start, window.end, callbacks, async (frame) => {
           const duration = frameDurationSeconds(frame, fps);
           this.drawFrame(frame, clip);
           bitmaps.push({
             bitmap: await createImageBitmap(this.canvas!),
             duration,
           });
-        });
+        }),
+          'Hardware decoder stalled'
+        );
 
         for (let i = bitmaps.length - 1; i >= 0; i--) {
           this.throwIfCancelled(callbacks);
@@ -321,7 +417,7 @@ export class HardwareTimelineExportSession {
           encoded += 1;
           outTs += scaled;
           try {
-            await source.add(sample);
+            await this.addSample(source, sample);
           } finally {
             sample.close();
             held.bitmap.close();
@@ -351,7 +447,8 @@ export class HardwareTimelineExportSession {
     fps: number,
     source: VideoSampleSource,
     timeOffset: number,
-    callbacks: HardwareExportCallbacks
+    callbacks: HardwareExportCallbacks,
+    onFraction: (fraction: number) => void
   ): Promise<number> {
     const freeze = clip.freeze!;
     const target = Math.max(0, freeze.sourceTime);
@@ -359,14 +456,19 @@ export class HardwareTimelineExportSession {
     const windowEnd = target + 0.25;
     const holder: { frame: VideoFrame | null; dist: number } = { frame: null, dist: Infinity };
 
-    await this.decodeRange(decoderConfig, windowStart, windowEnd, callbacks, async (frame) => {
+    onFraction(0.2);
+    await this.withStallTimeout(
+      this.decodeRange(decoderConfig, windowStart, windowEnd, callbacks, async (frame) => {
       const dist = Math.abs(frame.timestamp / US_PER_SECOND - target);
       if (dist < holder.dist) {
         holder.frame?.close();
         holder.frame = frame.clone();
         holder.dist = dist;
       }
-    });
+    }),
+      'Hardware decoder stalled'
+    );
+    onFraction(0.5);
 
     if (!holder.frame) {
       throw new Error('Could not decode freeze frame');
@@ -382,7 +484,7 @@ export class HardwareTimelineExportSession {
         const sample = this.blitToSample(still, clip, timeOffset + i * frameDur, frameDur);
         if (i === 0) sample.setEncodeOptions({ keyFrame: true });
         try {
-          await source.add(sample);
+          await this.addSample(source, sample);
         } finally {
           sample.close();
         }
@@ -390,6 +492,7 @@ export class HardwareTimelineExportSession {
     } finally {
       still.close();
     }
+    onFraction(1);
     return timeOffset + count * frameDur;
   }
 
@@ -401,6 +504,7 @@ export class HardwareTimelineExportSession {
     onFrame: (frame: VideoFrame) => Promise<void>
   ): Promise<void> {
     const decoder = new DecoderSession();
+    this.activeDecoder = decoder;
     let streamReader: ReadableStreamDefaultReader<EncodedVideoChunk> | null = null;
     try {
       await decoder.configure(
@@ -412,7 +516,12 @@ export class HardwareTimelineExportSession {
           if (ts >= endSeconds - RANGE_EPS) return;
           await onFrame(frame);
         },
-        { optimizeForLatency: false }
+        {
+          optimizeForLatency: false,
+          // Once VideoEncoder holds the hardware codec, decode in software so
+          // the phone is not asked to run both at once.
+          hardwareAcceleration: this.encoderLive ? 'prefer-software' : 'prefer-hardware',
+        }
       );
 
       const stream = this.demuxer.readVideoChunks(Math.max(0, startSeconds), Math.max(startSeconds, endSeconds));
@@ -439,6 +548,7 @@ export class HardwareTimelineExportSession {
         }
       }
       decoder.close();
+      if (this.activeDecoder === decoder) this.activeDecoder = null;
     }
   }
 }
@@ -488,7 +598,7 @@ async function assertCanEncodeAvc(width: number, height: number): Promise<void> 
   throw new Error('This browser cannot encode H.264 with WebCodecs');
 }
 
-function reverseWindows(
+function timeWindows(
   start: number,
   end: number,
   fps: number
@@ -501,8 +611,15 @@ function reverseWindows(
   for (let t = start; t < end - RANGE_EPS; t += chunk) {
     windows.push({ start: t, end: Math.min(end, t + chunk) });
   }
-  windows.reverse();
   return windows;
+}
+
+function reverseWindows(
+  start: number,
+  end: number,
+  fps: number
+): { start: number; end: number }[] {
+  return timeWindows(start, end, fps).reverse();
 }
 
 function splitPacketsByRange(
