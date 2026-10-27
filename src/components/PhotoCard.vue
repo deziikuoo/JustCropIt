@@ -3,6 +3,7 @@
     ref="cardWrapperRef"
     class="photo-card-wrapper"
     :class="{ 'is-actions-open': actionsOpen }"
+    @mouseleave="closeActionsOnHoverLeave"
     :style="{
       width: '100%',
       height: '100%',
@@ -195,6 +196,15 @@ const toggleActions = () => {
   flipMenu.value = rect.right > window.innerWidth - 24 && rect.left > 120;
 };
 
+/** Hover reveals the tab only. Leaving it closes the bar on pointer devices. */
+const closeActionsOnHoverLeave = (event: MouseEvent) => {
+  if (!window.matchMedia("(hover: hover)").matches) return;
+  const next = event.relatedTarget;
+  if (next instanceof Node && cardWrapperRef.value?.contains(next)) return;
+  actionsOpen.value = false;
+  flipMenu.value = false;
+};
+
 defineEmits<{
   (e: 'flip', direction: 'horizontal' | 'vertical'): void;
   (e: 'crop'): void;
@@ -285,12 +295,10 @@ defineEmits<{
   }
 
   .photo-card-wrapper:hover .photo-checkbox,
-  .photo-card-wrapper:hover .action-dropdown {
+  .photo-card-wrapper:hover .action-dropdown,
+  .photo-card-wrapper.is-actions-open .action-dropdown {
     opacity: 1;
     pointer-events: auto;
-  }
-
-  .photo-card-wrapper:hover .action-dropdown {
     transform: translateY(0);
   }
 
@@ -562,7 +570,7 @@ defineEmits<{
 }
 
 .action-dropdown__menu {
-  display: flex;
+  display: none;
   flex-wrap: nowrap;
   align-items: stretch;
   gap: 3px;
@@ -605,6 +613,20 @@ defineEmits<{
   background: var(--danger-color);
   border-color: var(--danger-color);
   color: #fff;
+}
+
+.photo-card-wrapper.is-actions-open {
+  z-index: 6;
+}
+
+.photo-card-wrapper.is-actions-open .action-dropdown {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.photo-card-wrapper.is-actions-open .action-dropdown__menu {
+  display: flex;
 }
 
 @media (max-width: 1023px) {
