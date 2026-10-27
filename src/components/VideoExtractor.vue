@@ -1033,10 +1033,8 @@ async function handleDeleteSelectedFrames() {
   }
   revokeFramePreviewUrls(indices);
   removeFramesByIndices(indices);
-  clearFrameSelection();
-  if (extractedFrames.value.length === 0) {
-    exitSelectMode();
-  }
+  // Leave select mode so First 100 / 300 / 500 and the other library actions return.
+  exitSelectMode();
 }
 
 async function handleDeletePreviewFrame() {

@@ -415,12 +415,12 @@ defineEmits<{
 
 @media (max-width: 599px) {
   .photo-checkbox {
-    width: 48px;
-    height: 48px;
-    min-width: 48px;
-    min-height: 48px;
-    top: 8px;
-    right: 8px;
+    width: 26px;
+    height: 26px;
+    min-width: 26px;
+    min-height: 26px;
+    top: 6px;
+    right: 6px;
   }
 }
 

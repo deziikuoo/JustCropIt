@@ -465,7 +465,7 @@ import { useGridImageDisplay } from "../composables/useGridImageDisplay";
 import { useBatchedGridMount } from "../composables/useBatchedGridMount";
 import { useGridEntranceAnimation } from "../composables/useGridEntranceAnimation";
 import { useGridIdlePrefetch } from "../composables/useGridIdlePrefetch";
-import { useThrottleFn } from "@vueuse/core";
+import { useResizeObserver, useThrottleFn } from "@vueuse/core";
 import { useLayoutMode } from "../composables/useLayoutMode";
 import { LAYOUT_WIDE_MIN_PX } from "../constants/layout";
 import { thumbhashToDataUrl } from "../utils/thumbhashDecode";
@@ -1437,27 +1437,45 @@ watch(
 const gridRef = ref<HTMLElement>();
 
 const gap = computed(() => {
-  if (isPhone.value) return 12;
+  if (isPhone.value) return 8;
   if (!isWide.value) return 16;
   return 24;
 });
 
 const rowGap = computed(() => {
-  if (isPhone.value) return 48;
+  if (isPhone.value) return 12;
   if (!isWide.value) return 52;
   return 56;
 });
 
+const gridContentWidth = ref(0);
+useResizeObserver(gridRef, (entries) => {
+  const width = entries[0]?.contentRect.width ?? 0;
+  if (width > 0) gridContentWidth.value = width;
+});
+
+/**
+ * Phone cells keep the desktop XS–XL ratios, scaled so XL fits two columns
+ * in the current gallery width. Smaller steps then wrap to more columns.
+ */
+function phoneCellSize(presetSize: number, available: number, gapSize: number): number {
+  const xl = photoSizes[photoSizes.length - 1].minSize;
+  const twoColumn = Math.max(64, Math.floor((available - gapSize) / 2));
+  const scaled = Math.round(presetSize * (twoColumn / xl));
+  return Math.max(64, Math.min(scaled, twoColumn));
+}
+
 const itemMinWidth = computed(() => {
   const presetSize = photoSizes[selectedPhotoSize.value].minSize;
+  if (!isPhone.value) return presetSize;
 
-  if (isPhone.value) {
-    const containerWidth = typeof window !== 'undefined' ? window.innerWidth - 16 : 300;
-    const maxCell = containerWidth - 12;
-    return Math.max(140, Math.min(presetSize, maxCell));
-  }
-
-  return presetSize;
+  const available =
+    gridContentWidth.value > 0
+      ? gridContentWidth.value
+      : typeof window !== "undefined"
+        ? Math.max(240, window.innerWidth - 32)
+        : 288;
+  return phoneCellSize(presetSize, available, gap.value);
 });
 
 const virtualScrollEnabled = computed(() =>
@@ -2135,6 +2153,12 @@ const handlePhotoCardClick = (index: number, event: Event) => {
 @media (max-width: 1023px) {
   .photo-grid-layout {
     flex-direction: column;
+    align-items: stretch;
+  }
+
+  .photo-grid-main {
+    width: 100%;
+    align-self: stretch;
   }
 
   .batch-edit-spacer {

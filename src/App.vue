@@ -214,6 +214,8 @@
       </div>
     </div>
 
+    <LibraryScrollJump v-if="appMode === 'photos'" />
+
     <button
       v-show="!showFeedbackPanel"
       type="button"
@@ -358,6 +360,7 @@ import ShimmerBackground from "./components/ShimmerBackground.vue";
 import VideoExtractor from "./components/VideoExtractor.vue";
 import VideoEditor from "./components/VideoEditor.vue";
 import FeedbackPanel from "./components/FeedbackPanel.vue";
+import LibraryScrollJump from "./components/LibraryScrollJump.vue";
 import {
   getExportStripChunkSize,
 } from "./constants/optimization";
